@@ -369,6 +369,18 @@
       overflow-x: auto;
       color: var(--accent);
     }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      .input-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
@@ -386,19 +398,42 @@
       </h2>
       
       <div class="config-group">
-        <label for="scriptUrl">Google Apps Script URL</label>
+        <label for="apiKey">Google Sheets API Key</label>
         <input 
-          type="url" 
-          id="scriptUrl" 
-          placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
+          type="text" 
+          id="apiKey" 
+          placeholder="AIzaSy..."
         >
-        <p class="hint">Paste the web app URL from your Google Apps Script deployment</p>
+        <p class="hint">Your API key from Google Cloud Console</p>
+      </div>
+
+      <div class="input-grid">
+        <div class="config-group">
+          <label for="spreadsheetId">Spreadsheet ID</label>
+          <input 
+            type="text" 
+            id="spreadsheetId" 
+            placeholder="1a2B3c4D5e6F7g8H9i0J"
+          >
+          <p class="hint">From the URL of your Google Sheet</p>
+        </div>
+        
+        <div class="config-group">
+          <label for="sheetName">Sheet Name</label>
+          <input 
+            type="text" 
+            id="sheetName" 
+            placeholder="Sheet1"
+            value="Sheet1"
+          >
+          <p class="hint">Tab name at bottom of your spreadsheet</p>
+        </div>
       </div>
       
       <div class="config-group">
         <label>Current Status</label>
         <div id="configStatus" class="code-block">
-          Not configured - please enter your Script URL above
+          Not configured - please enter your credentials above
         </div>
       </div>
     </div>
@@ -443,29 +478,45 @@
 
   <script>
     let uploadedData = null;
-    let scriptUrl = localStorage.getItem('scriptUrl') || '';
+    let config = {
+      apiKey: localStorage.getItem('apiKey') || '',
+      spreadsheetId: localStorage.getItem('spreadsheetId') || '',
+      sheetName: localStorage.getItem('sheetName') || 'Sheet1'
+    };
     
-    // Load saved script URL
-    if (scriptUrl) {
-      document.getElementById('scriptUrl').value = scriptUrl;
-      updateConfigStatus(true);
-    }
+    // Load saved config
+    if (config.apiKey) document.getElementById('apiKey').value = config.apiKey;
+    if (config.spreadsheetId) document.getElementById('spreadsheetId').value = config.spreadsheetId;
+    if (config.sheetName) document.getElementById('sheetName').value = config.sheetName;
+    updateConfigStatus();
     
-    // Save script URL on change
-    document.getElementById('scriptUrl').addEventListener('input', (e) => {
-      scriptUrl = e.target.value.trim();
-      localStorage.setItem('scriptUrl', scriptUrl);
-      updateConfigStatus(!!scriptUrl);
+    // Save config on change
+    ['apiKey', 'spreadsheetId', 'sheetName'].forEach(field => {
+      document.getElementById(field).addEventListener('input', (e) => {
+        config[field] = e.target.value.trim();
+        localStorage.setItem(field, config[field]);
+        updateConfigStatus();
+      });
     });
     
-    function updateConfigStatus(isConfigured) {
+    function updateConfigStatus() {
       const status = document.getElementById('configStatus');
+      const isConfigured = config.apiKey && config.spreadsheetId && config.sheetName;
+      
       if (isConfigured) {
         status.textContent = '✓ Configured and ready';
         status.style.color = 'var(--success)';
       } else {
-        status.textContent = 'Not configured - please enter your Script URL above';
+        const missing = [];
+        if (!config.apiKey) missing.push('API Key');
+        if (!config.spreadsheetId) missing.push('Spreadsheet ID');
+        if (!config.sheetName) missing.push('Sheet Name');
+        status.textContent = `Missing: ${missing.join(', ')}`;
         status.style.color = 'var(--text-secondary)';
+      }
+      
+      if (uploadedData) {
+        processBtn.disabled = !isConfigured;
       }
     }
     
@@ -556,7 +607,8 @@
           // Show preview
           displayPreview(uploadedData.slice(0, 5));
           
-          processBtn.disabled = !scriptUrl;
+          const isConfigured = config.apiKey && config.spreadsheetId && config.sheetName;
+          processBtn.disabled = !isConfigured;
           hideStatus();
           
         } catch (error) {
@@ -594,45 +646,120 @@
       container.style.display = 'block';
     }
     
-    // Process and upload
+    // Process and upload using Google Sheets API
     processBtn.addEventListener('click', async () => {
-      if (!uploadedData || !scriptUrl) return;
+      if (!uploadedData || !config.apiKey || !config.spreadsheetId) return;
       
       processBtn.disabled = true;
       processBtn.innerHTML = 'Processing<span class="loading"></span>';
       hideStatus();
       
       try {
-        // Prepare products data
-        const products = uploadedData.map(row => ({
-          sku: row.sku,
-          name: row.name,
-          brand: row.brand,
-          fulfillment: row.fulfillment,
-          cost: row.cost
-        }));
+        // Step 1: Get existing data from the sheet
+        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${config.sheetName}?key=${config.apiKey}`;
+        const getResponse = await fetch(getUrl);
         
-        // Send to Google Apps Script
-        const response = await fetch(scriptUrl, {
-          method: 'POST',
-          body: JSON.stringify({ products }),
-          headers: {
-            'Content-Type': 'application/json'
+        if (!getResponse.ok) {
+          const error = await getResponse.json();
+          throw new Error(error.error?.message || 'Failed to read spreadsheet');
+        }
+        
+        const existingSheet = await getResponse.json();
+        const existingRows = existingSheet.values || [];
+        
+        if (existingRows.length === 0) {
+          throw new Error('Spreadsheet appears empty. Make sure headers are in the first row.');
+        }
+        
+        // Get headers (first row)
+        const headers = existingRows[0].map(h => h.toLowerCase());
+        const skuIndex = headers.indexOf('sku');
+        
+        if (skuIndex === -1) {
+          throw new Error('SKU column not found in spreadsheet headers');
+        }
+        
+        // Create a map of existing SKUs to row indices
+        const skuToRowIndex = {};
+        for (let i = 1; i < existingRows.length; i++) {
+          const sku = existingRows[i][skuIndex];
+          if (sku) {
+            skuToRowIndex[sku] = i;
+          }
+        }
+        
+        // Step 2: Process uploaded data
+        let addedCount = 0;
+        let updatedCount = 0;
+        const updates = [];
+        const newRows = [];
+        
+        uploadedData.forEach(product => {
+          const sku = product.sku;
+          const rowData = [
+            product.sku,
+            product.name,
+            product.brand,
+            product.fulfillment,
+            product.cost
+          ];
+          
+          if (skuToRowIndex[sku] !== undefined) {
+            // SKU exists - prepare update
+            const rowIndex = skuToRowIndex[sku];
+            updates.push({
+              range: `${config.sheetName}!A${rowIndex + 1}:E${rowIndex + 1}`,
+              values: [rowData]
+            });
+            updatedCount++;
+          } else {
+            // SKU doesn't exist - prepare to append
+            newRows.push(rowData);
+            addedCount++;
           }
         });
         
-        const result = await response.json();
-        
-        if (result.success) {
-          showStatus('success', 
-            `✓ Success! Added ${result.added} new products, updated ${result.updated} existing products (${result.total} total processed)`
-          );
-        } else {
-          showStatus('error', `Error: ${result.error}`);
+        // Step 3: Execute updates
+        if (updates.length > 0) {
+          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values:batchUpdate?key=${config.apiKey}`;
+          const updateResponse = await fetch(updateUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              valueInputOption: 'RAW',
+              data: updates
+            })
+          });
+          
+          if (!updateResponse.ok) {
+            const error = await updateResponse.json();
+            throw new Error(error.error?.message || 'Failed to update rows');
+          }
         }
         
+        // Step 4: Append new rows
+        if (newRows.length > 0) {
+          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${config.sheetName}:append?valueInputOption=RAW&key=${config.apiKey}`;
+          const appendResponse = await fetch(appendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              values: newRows
+            })
+          });
+          
+          if (!appendResponse.ok) {
+            const error = await appendResponse.json();
+            throw new Error(error.error?.message || 'Failed to append new rows');
+          }
+        }
+        
+        showStatus('success', 
+          `✓ Success! Added ${addedCount} new products, updated ${updatedCount} existing products (${uploadedData.length} total processed)`
+        );
+        
       } catch (error) {
-        showStatus('error', `Failed to upload: ${error.message}`);
+        showStatus('error', `Error: ${error.message}`);
       } finally {
         processBtn.disabled = false;
         processBtn.textContent = 'Process & Upload';
