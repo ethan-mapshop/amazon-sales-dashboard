@@ -21,7 +21,6 @@
       --border: #3a4556;
       --success: #06d6a0;
       --error: #ef476f;
-      --warning: #ffbe0b;
     }
     
     * {
@@ -53,7 +52,6 @@
       font-size: 2.75rem;
       font-weight: 700;
       margin-bottom: 0.5rem;
-      color: var(--text-primary);
       letter-spacing: -0.03em;
     }
     
@@ -73,14 +71,12 @@
       border-radius: 12px;
       padding: 2rem;
       margin-bottom: 2rem;
-      transition: all 0.2s ease;
     }
     
     .section-title {
       font-size: 1.125rem;
       font-weight: 600;
       margin-bottom: 1.5rem;
-      color: var(--text-primary);
       text-transform: uppercase;
       letter-spacing: 0.05em;
       display: flex;
@@ -139,6 +135,7 @@
       gap: 0.5rem;
       margin-bottom: 2rem;
       border-bottom: 2px solid var(--border);
+      overflow-x: auto;
     }
     
     .tab {
@@ -148,13 +145,14 @@
       border-bottom: 2px solid transparent;
       color: var(--text-secondary);
       font-family: 'Work Sans', sans-serif;
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s ease;
       margin-bottom: -2px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      white-space: nowrap;
     }
     
     .tab:hover {
@@ -433,15 +431,22 @@
       color: var(--text-secondary);
     }
 
-    .input-row {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 1rem;
-    }
-
     @media (max-width: 768px) {
-      .input-row {
-        grid-template-columns: 1fr;
+      body {
+        padding: 1rem;
+      }
+      
+      h1 {
+        font-size: 2rem;
+      }
+      
+      .tabs {
+        flex-wrap: wrap;
+      }
+      
+      .tab {
+        font-size: 0.8rem;
+        padding: 0.75rem 1rem;
       }
     }
   </style>
@@ -450,7 +455,7 @@
   <div class="container">
     <header>
       <h1><span class="highlight">Amazon</span> Sales Dashboard</h1>
-      <p class="subtitle">Data Upload & Management</p>
+      <p class="subtitle">Unified Data Upload & Management</p>
     </header>
 
     <!-- Configuration Card -->
@@ -467,44 +472,14 @@
         <p class="hint">Your OAuth2 Client ID from Google Cloud Console</p>
       </div>
 
-      <div class="input-row">
-        <div class="config-group">
-          <label for="productSpreadsheetId">Product Database Spreadsheet ID</label>
-          <input 
-            type="text" 
-            id="productSpreadsheetId" 
-            placeholder="1a2B3c4D5e6F7g8H9i0J"
-          >
-        </div>
-        
-        <div class="config-group">
-          <label for="productSheetName">Sheet Name</label>
-          <input 
-            type="text" 
-            id="productSheetName" 
-            value="Sheet1"
-          >
-        </div>
-      </div>
-
-      <div class="input-row">
-        <div class="config-group">
-          <label for="transactionSpreadsheetId">Transactions Spreadsheet ID</label>
-          <input 
-            type="text" 
-            id="transactionSpreadsheetId" 
-            placeholder="1a2B3c4D5e6F7g8H9i0J"
-          >
-        </div>
-        
-        <div class="config-group">
-          <label for="transactionSheetName">Sheet Name</label>
-          <input 
-            type="text" 
-            id="transactionSheetName" 
-            value="Sheet1"
-          >
-        </div>
+      <div class="config-group">
+        <label for="spreadsheetId">Data Spreadsheet ID</label>
+        <input 
+          type="text" 
+          id="spreadsheetId" 
+          placeholder="1a2B3c4D5e6F7g8H9i0J"
+        >
+        <p class="hint">Single spreadsheet ID - all data stored in different tabs</p>
       </div>
 
       <div class="config-group">
@@ -526,35 +501,26 @@
       <div class="tabs">
         <button class="tab active" data-tab="products">Products</button>
         <button class="tab" data-tab="transactions">Transactions</button>
+        <button class="tab" data-tab="shipping">Shipping Costs</button>
+        <button class="tab" data-tab="productads">Product Ads</button>
+        <button class="tab" data-tab="brandads">Brand Ads</button>
       </div>
 
       <!-- Products Tab -->
       <div class="tab-content active" id="products-content">
-        <div class="upload-zone disabled" data-type="products">
+        <div class="upload-zone disabled" data-type="products" data-sheet="Products">
           <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
           <div class="upload-icon">📦</div>
           <div class="upload-text">Upload Product Database</div>
-          <div class="upload-hint">Sign in to enable upload • .xlsx, .xls, or .csv</div>
+          <div class="upload-hint">Sign in to enable • Updates existing SKUs, adds new ones</div>
         </div>
         
-        <div class="file-info" data-type="products">
-          <div class="file-name"></div>
-          <div class="file-stats">
-            <span class="file-size"></span>
-            <span class="row-count"></span>
-          </div>
-        </div>
-        
-        <div class="preview-table" data-type="products" style="display: none;">
-          <h3 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Preview (first 5 rows)</h3>
-          <table class="preview-table-el"></table>
-        </div>
+        <div class="file-info" data-type="products"></div>
+        <div class="preview-table" data-type="products" style="display: none;"></div>
         
         <div class="button-group">
           <button class="btn btn-secondary clear-btn" data-type="products" style="display: none;">Clear</button>
-          <button class="btn btn-primary process-btn" data-type="products" disabled>
-            Process & Upload
-          </button>
+          <button class="btn btn-primary process-btn" data-type="products" disabled>Process & Upload</button>
         </div>
         
         <div class="status-message" data-type="products"></div>
@@ -562,69 +528,147 @@
 
       <!-- Transactions Tab -->
       <div class="tab-content" id="transactions-content">
-        <div class="upload-zone disabled" data-type="transactions">
+        <div class="upload-zone disabled" data-type="transactions" data-sheet="Transactions">
           <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
           <div class="upload-icon">💰</div>
           <div class="upload-text">Upload Transaction Report</div>
-          <div class="upload-hint">Sign in to enable upload • Amazon transaction CSV/XLSX</div>
+          <div class="upload-hint">Sign in to enable • Skips first 7 rows, prevents duplicates</div>
         </div>
         
-        <div class="file-info" data-type="transactions">
-          <div class="file-name"></div>
-          <div class="file-stats">
-            <span class="file-size"></span>
-            <span class="row-count"></span>
-          </div>
-        </div>
-        
-        <div class="preview-table" data-type="transactions" style="display: none;">
-          <h3 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Preview (first 5 rows)</h3>
-          <table class="preview-table-el"></table>
-        </div>
+        <div class="file-info" data-type="transactions"></div>
+        <div class="preview-table" data-type="transactions" style="display: none;"></div>
         
         <div class="button-group">
           <button class="btn btn-secondary clear-btn" data-type="transactions" style="display: none;">Clear</button>
-          <button class="btn btn-primary process-btn" data-type="transactions" disabled>
-            Process & Upload
-          </button>
+          <button class="btn btn-primary process-btn" data-type="transactions" disabled>Process & Upload</button>
         </div>
         
         <div class="status-message" data-type="transactions"></div>
+      </div>
+
+      <!-- Shipping Costs Tab -->
+      <div class="tab-content" id="shipping-content">
+        <div class="upload-zone disabled" data-type="shipping" data-sheet="ShippingCosts">
+          <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+          <div class="upload-icon">📮</div>
+          <div class="upload-text">Upload Shipping Costs Report</div>
+          <div class="upload-hint">Sign in to enable • Prevents duplicate Order # entries</div>
+        </div>
+        
+        <div class="file-info" data-type="shipping"></div>
+        <div class="preview-table" data-type="shipping" style="display: none;"></div>
+        
+        <div class="button-group">
+          <button class="btn btn-secondary clear-btn" data-type="shipping" style="display: none;">Clear</button>
+          <button class="btn btn-primary process-btn" data-type="shipping" disabled>Process & Upload</button>
+        </div>
+        
+        <div class="status-message" data-type="shipping"></div>
+      </div>
+
+      <!-- Product Ad Spend Tab -->
+      <div class="tab-content" id="productads-content">
+        <div class="upload-zone disabled" data-type="productads" data-sheet="ProductAdSpend">
+          <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+          <div class="upload-icon">📊</div>
+          <div class="upload-text">Upload Product Ad Spend Report</div>
+          <div class="upload-hint">Sign in to enable • Appends all new data</div>
+        </div>
+        
+        <div class="file-info" data-type="productads"></div>
+        <div class="preview-table" data-type="productads" style="display: none;"></div>
+        
+        <div class="button-group">
+          <button class="btn btn-secondary clear-btn" data-type="productads" style="display: none;">Clear</button>
+          <button class="btn btn-primary process-btn" data-type="productads" disabled>Process & Upload</button>
+        </div>
+        
+        <div class="status-message" data-type="productads"></div>
+      </div>
+
+      <!-- Brand Ad Spend Tab -->
+      <div class="tab-content" id="brandads-content">
+        <div class="upload-zone disabled" data-type="brandads" data-sheet="BrandAdSpend">
+          <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+          <div class="upload-icon">🎯</div>
+          <div class="upload-text">Upload Brand Ad Spend Report</div>
+          <div class="upload-hint">Sign in to enable • Appends all new data</div>
+        </div>
+        
+        <div class="file-info" data-type="brandads"></div>
+        <div class="preview-table" data-type="brandads" style="display: none;"></div>
+        
+        <div class="button-group">
+          <button class="btn btn-secondary clear-btn" data-type="brandads" style="display: none;">Clear</button>
+          <button class="btn btn-primary process-btn" data-type="brandads" disabled>Process & Upload</button>
+        </div>
+        
+        <div class="status-message" data-type="brandads"></div>
       </div>
     </div>
   </div>
 
   <script>
-    let uploadedData = { products: null, transactions: null };
+    const SHEET_CONFIGS = {
+      products: {
+        sheetName: 'Products',
+        uniqueKey: 'sku',
+        requiredColumns: ['sku', 'name', 'brand', 'fulfillment', 'cost'],
+        skipRows: 0,
+        allowUpdates: true
+      },
+      transactions: {
+        sheetName: 'Transactions',
+        uniqueKey: 'order id',
+        requiredColumns: ['order id'],
+        skipRows: 7,
+        allowUpdates: false
+      },
+      shipping: {
+        sheetName: 'ShippingCosts',
+        uniqueKey: 'order #',
+        requiredColumns: ['order #'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      productads: {
+        sheetName: 'ProductAdSpend',
+        uniqueKey: null,
+        requiredColumns: ['campaign name'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      brandads: {
+        sheetName: 'BrandAdSpend',
+        uniqueKey: null,
+        requiredColumns: ['campaign name'],
+        skipRows: 0,
+        allowUpdates: false
+      }
+    };
+
+    let uploadedData = {};
     let accessToken = null;
     let tokenClient = null;
     
     let config = {
       clientId: localStorage.getItem('clientId') || '',
-      productSpreadsheetId: localStorage.getItem('productSpreadsheetId') || '',
-      productSheetName: localStorage.getItem('productSheetName') || 'Sheet1',
-      transactionSpreadsheetId: localStorage.getItem('transactionSpreadsheetId') || '',
-      transactionSheetName: localStorage.getItem('transactionSheetName') || 'Sheet1'
+      spreadsheetId: localStorage.getItem('spreadsheetId') || ''
     };
     
     // Load saved config
-    Object.keys(config).forEach(key => {
-      const el = document.getElementById(key);
-      if (el && config[key]) el.value = config[key];
-    });
+    if (config.clientId) document.getElementById('clientId').value = config.clientId;
+    if (config.spreadsheetId) document.getElementById('spreadsheetId').value = config.spreadsheetId;
     
     updateAuthUI();
     
     // Save config on change
-    Object.keys(config).forEach(key => {
-      const el = document.getElementById(key);
-      if (el) {
-        el.addEventListener('input', (e) => {
-          config[key] = e.target.value.trim();
-          localStorage.setItem(key, config[key]);
-          updateAuthUI();
-        });
-      }
+    ['clientId', 'spreadsheetId'].forEach(key => {
+      document.getElementById(key).addEventListener('input', (e) => {
+        config[key] = e.target.value.trim();
+        localStorage.setItem(key, config[key]);
+        updateAuthUI();
+      });
     });
     
     // Tab switching
@@ -640,7 +684,7 @@
       });
     });
     
-    // Initialize Google Auth
+    // Google Auth
     function initializeGoogleAuth() {
       if (!config.clientId) return;
       
@@ -665,8 +709,7 @@
     });
     
     function updateAuthUI() {
-      const isConfigured = config.clientId;
-      if (isConfigured && !tokenClient) initializeGoogleAuth();
+      if (config.clientId && !tokenClient) initializeGoogleAuth();
     }
     
     document.getElementById('signInBtn').addEventListener('click', () => {
@@ -690,7 +733,7 @@
     function displayUserInfo(userInfo) {
       document.getElementById('authSection').innerHTML = `
         <div class="auth-info">
-          <img src="${userInfo.picture}" alt="User avatar" class="user-avatar">
+          <img src="${userInfo.picture}" alt="Avatar" class="user-avatar">
           <div class="user-details">
             <div class="user-name">${userInfo.name}</div>
             <div class="user-email">${userInfo.email}</div>
@@ -717,7 +760,6 @@
     function enableUpload() {
       document.querySelectorAll('.upload-zone').forEach(zone => {
         zone.classList.remove('disabled');
-        zone.querySelector('.upload-hint').textContent = zone.querySelector('.upload-hint').textContent.replace('Sign in to enable upload • ', '');
       });
     }
     
@@ -765,7 +807,10 @@
         const fileInput = document.querySelector(`.upload-zone[data-type="${type}"] .file-input`);
         fileInput.value = '';
         
-        document.querySelector(`.file-info[data-type="${type}"]`).classList.remove('active');
+        const fileInfo = document.querySelector(`.file-info[data-type="${type}"]`);
+        fileInfo.classList.remove('active');
+        fileInfo.innerHTML = '';
+        
         document.querySelector(`.preview-table[data-type="${type}"]`).style.display = 'none';
         document.querySelector(`.process-btn[data-type="${type}"]`).disabled = true;
         btn.style.display = 'none';
@@ -775,6 +820,7 @@
     
     function handleFile(file, type) {
       const reader = new FileReader();
+      const sheetConfig = SHEET_CONFIGS[type];
       
       reader.onload = (e) => {
         try {
@@ -784,10 +830,9 @@
           
           let jsonData;
           
-          if (type === 'transactions') {
-            // Skip first 7 rows, read from row 8
+          if (sheetConfig.skipRows > 0) {
             const range = XLSX.utils.decode_range(firstSheet['!ref']);
-            range.s.r = 7; // Start at row 8 (0-indexed, so 7)
+            range.s.r = sheetConfig.skipRows;
             const newRange = XLSX.utils.encode_range(range);
             jsonData = XLSX.utils.sheet_to_json(firstSheet, { range: newRange });
           } else {
@@ -795,24 +840,22 @@
           }
           
           if (jsonData.length === 0) {
-            showStatus(type, 'error', 'The file appears to be empty or has no data.');
+            showStatus(type, 'error', 'The file appears to be empty');
             return;
           }
           
-          // Validate required columns
-          const requiredCols = type === 'products' 
-            ? ['sku', 'name', 'brand', 'fulfillment', 'cost']
-            : ['order id']; // For transactions, just check order id exists
-          
+          // Validate columns
           const fileCols = Object.keys(jsonData[0]).map(k => k.toLowerCase().trim());
-          const missingCols = requiredCols.filter(col => !fileCols.some(fc => fc.includes(col.toLowerCase())));
+          const missingCols = sheetConfig.requiredColumns.filter(col => 
+            !fileCols.some(fc => fc.includes(col.toLowerCase()))
+          );
           
           if (missingCols.length > 0) {
-            showStatus(type, 'error', `Missing required columns: ${missingCols.join(', ')}`);
+            showStatus(type, 'error', `Missing columns: ${missingCols.join(', ')}`);
             return;
           }
           
-          // Normalize column names
+          // Normalize
           uploadedData[type] = jsonData.map(row => {
             const normalized = {};
             Object.keys(row).forEach(key => {
@@ -821,23 +864,27 @@
             return normalized;
           });
           
-          // Display file info
+          // Display info
           const fileInfo = document.querySelector(`.file-info[data-type="${type}"]`);
-          fileInfo.querySelector('.file-name').textContent = file.name;
-          fileInfo.querySelector('.file-size').textContent = `Size: ${formatBytes(file.size)}`;
-          fileInfo.querySelector('.row-count').textContent = `Rows: ${uploadedData[type].length}`;
+          fileInfo.innerHTML = `
+            <div class="file-name">${file.name}</div>
+            <div class="file-stats">
+              <span>Size: ${formatBytes(file.size)}</span>
+              <span>Rows: ${uploadedData[type].length}</span>
+            </div>
+          `;
           fileInfo.classList.add('active');
           
           document.querySelector(`.clear-btn[data-type="${type}"]`).style.display = 'inline-block';
           
-          // Show preview
+          // Preview
           displayPreview(uploadedData[type].slice(0, 5), type);
           
           document.querySelector(`.process-btn[data-type="${type}"]`).disabled = !accessToken;
           hideStatus(type);
           
         } catch (error) {
-          showStatus(type, 'error', `Error reading file: ${error.message}`);
+          showStatus(type, 'error', `Error: ${error.message}`);
         }
       };
       
@@ -846,30 +893,28 @@
     
     function displayPreview(rows, type) {
       const container = document.querySelector(`.preview-table[data-type="${type}"]`);
-      const table = container.querySelector('.preview-table-el');
       
       if (rows.length === 0) return;
       
-      const headers = Object.keys(rows[0]).slice(0, 10); // Show first 10 columns
+      const headers = Object.keys(rows[0]).slice(0, 10);
       
-      let html = '<thead><tr>';
-      headers.forEach(header => {
-        html += `<th>${header}</th>`;
-      });
+      let html = '<h3 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase;">Preview (first 5 rows, 10 columns)</h3>';
+      html += '<table><thead><tr>';
+      headers.forEach(h => html += `<th>${h}</th>`);
       html += '</tr></thead><tbody>';
       
       rows.forEach(row => {
         html += '<tr>';
-        headers.forEach(header => {
-          const value = row[header] || '';
-          const displayValue = String(value).length > 30 ? String(value).substring(0, 30) + '...' : value;
-          html += `<td>${displayValue}</td>`;
+        headers.forEach(h => {
+          const val = String(row[h] || '');
+          const display = val.length > 30 ? val.substring(0, 30) + '...' : val;
+          html += `<td>${display}</td>`;
         });
         html += '</tr>';
       });
       
-      html += '</tbody>';
-      table.innerHTML = html;
+      html += '</tbody></table>';
+      container.innerHTML = html;
       container.style.display = 'block';
     }
     
@@ -877,27 +922,24 @@
     document.querySelectorAll('.process-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const type = btn.dataset.type;
-        
-        if (type === 'products') {
-          await processProducts();
-        } else if (type === 'transactions') {
-          await processTransactions();
-        }
+        await processUpload(type);
       });
     });
     
-    async function processProducts() {
-      const data = uploadedData.products;
-      if (!data || !accessToken || !config.productSpreadsheetId) return;
+    async function processUpload(type) {
+      const data = uploadedData[type];
+      const sheetConfig = SHEET_CONFIGS[type];
       
-      const btn = document.querySelector('.process-btn[data-type="products"]');
+      if (!data || !accessToken || !config.spreadsheetId) return;
+      
+      const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
       btn.innerHTML = 'Processing<span class="loading"></span>';
-      hideStatus('products');
+      hideStatus(type);
       
       try {
-        const spreadsheetId = config.productSpreadsheetId;
-        const sheetName = config.productSheetName;
+        const spreadsheetId = config.spreadsheetId;
+        const sheetName = sheetConfig.sheetName;
         
         // Get existing data
         const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}`;
@@ -905,70 +947,108 @@
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
-        if (!getResponse.ok) throw new Error('Failed to read product spreadsheet');
+        if (!getResponse.ok) throw new Error(`Failed to read ${sheetName} sheet`);
         
         const existingSheet = await getResponse.json();
         const existingRows = existingSheet.values || [];
         
-        if (existingRows.length === 0) throw new Error('Product spreadsheet appears empty');
+        if (existingRows.length === 0) throw new Error(`${sheetName} sheet appears empty`);
         
-        const headers = existingRows[0].map(h => h.toLowerCase());
-        const skuIndex = headers.indexOf('sku');
-        
-        if (skuIndex === -1) throw new Error('SKU column not found');
-        
-        // Map existing SKUs
-        const skuToRowIndex = {};
-        for (let i = 1; i < existingRows.length; i++) {
-          const sku = existingRows[i][skuIndex];
-          if (sku) skuToRowIndex[sku] = i;
-        }
+        const headers = existingRows[0].map(h => h.toLowerCase().trim());
         
         let addedCount = 0;
         let updatedCount = 0;
-        const updates = [];
-        const newRows = [];
+        let skippedCount = 0;
         
-        data.forEach(product => {
-          const rowData = [
-            product.sku,
-            product.name,
-            product.brand,
-            product.fulfillment,
-            product.cost
-          ];
+        if (sheetConfig.allowUpdates && sheetConfig.uniqueKey) {
+          // Products: update or add
+          const keyIndex = headers.indexOf(sheetConfig.uniqueKey);
+          if (keyIndex === -1) throw new Error(`${sheetConfig.uniqueKey} column not found`);
           
-          if (skuToRowIndex[product.sku] !== undefined) {
-            const rowIndex = skuToRowIndex[product.sku];
-            updates.push({
-              range: `${sheetName}!A${rowIndex + 1}:E${rowIndex + 1}`,
-              values: [rowData]
-            });
-            updatedCount++;
-          } else {
-            newRows.push(rowData);
-            addedCount++;
+          const keyToRowIndex = {};
+          for (let i = 1; i < existingRows.length; i++) {
+            const key = existingRows[i][keyIndex];
+            if (key) keyToRowIndex[key] = i;
           }
-        });
-        
-        // Update existing
-        if (updates.length > 0) {
-          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
-          await fetch(updateUrl, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              valueInputOption: 'RAW',
-              data: updates
-            })
+          
+          const updates = [];
+          const newRows = [];
+          
+          data.forEach(item => {
+            const key = item[sheetConfig.uniqueKey];
+            const rowData = headers.map(h => item[h] || '');
+            
+            if (keyToRowIndex[key] !== undefined) {
+              const rowIndex = keyToRowIndex[key];
+              updates.push({
+                range: `${sheetName}!A${rowIndex + 1}:${String.fromCharCode(65 + headers.length - 1)}${rowIndex + 1}`,
+                values: [rowData]
+              });
+              updatedCount++;
+            } else {
+              newRows.push(rowData);
+              addedCount++;
+            }
           });
-        }
-        
-        // Append new
-        if (newRows.length > 0) {
+          
+          if (updates.length > 0) {
+            const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
+            await fetch(updateUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                valueInputOption: 'RAW',
+                data: updates
+              })
+            });
+          }
+          
+          if (newRows.length > 0) {
+            const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+            await fetch(appendUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ values: newRows })
+            });
+          }
+          
+          showStatus(type, 'success', 
+            `✓ Success! Added ${addedCount}, updated ${updatedCount} (${data.length} total)`
+          );
+          
+        } else if (sheetConfig.uniqueKey) {
+          // Transactions/Shipping: check duplicates, append new
+          const keyIndex = headers.findIndex(h => h.includes(sheetConfig.uniqueKey));
+          if (keyIndex === -1) throw new Error(`${sheetConfig.uniqueKey} column not found`);
+          
+          const existingKeys = new Set();
+          for (let i = 1; i < existingRows.length; i++) {
+            const key = existingRows[i][keyIndex];
+            if (key) existingKeys.add(key);
+          }
+          
+          const newData = data.filter(item => {
+            const key = item[sheetConfig.uniqueKey];
+            if (existingKeys.has(key)) {
+              skippedCount++;
+              return false;
+            }
+            return true;
+          });
+          
+          if (newData.length === 0) {
+            showStatus(type, 'error', `All ${data.length} items already exist`);
+            return;
+          }
+          
+          const newRows = newData.map(item => headers.map(h => item[h] || ''));
+          
           const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
           await fetch(appendUrl, {
             method: 'POST',
@@ -978,100 +1058,32 @@
             },
             body: JSON.stringify({ values: newRows })
           });
+          
+          const msg = skippedCount > 0
+            ? `✓ Success! Added ${newData.length} (skipped ${skippedCount} duplicates)`
+            : `✓ Success! Added ${newData.length} items`;
+          
+          showStatus(type, 'success', msg);
+          
+        } else {
+          // Ad spend: just append everything
+          const newRows = data.map(item => headers.map(h => item[h] || ''));
+          
+          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+          await fetch(appendUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: newRows })
+          });
+          
+          showStatus(type, 'success', `✓ Success! Added ${data.length} items`);
         }
-        
-        showStatus('products', 'success', 
-          `✓ Success! Added ${addedCount} new products, updated ${updatedCount} existing (${data.length} total)`
-        );
         
       } catch (error) {
-        showStatus('products', 'error', `Error: ${error.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Process & Upload';
-      }
-    }
-    
-    async function processTransactions() {
-      const data = uploadedData.transactions;
-      if (!data || !accessToken || !config.transactionSpreadsheetId) return;
-      
-      const btn = document.querySelector('.process-btn[data-type="transactions"]');
-      btn.disabled = true;
-      btn.innerHTML = 'Processing<span class="loading"></span>';
-      hideStatus('transactions');
-      
-      try {
-        const spreadsheetId = config.transactionSpreadsheetId;
-        const sheetName = config.transactionSheetName;
-        
-        // Get existing data to check for duplicate order IDs
-        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}`;
-        const getResponse = await fetch(getUrl, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        
-        if (!getResponse.ok) throw new Error('Failed to read transaction spreadsheet');
-        
-        const existingSheet = await getResponse.json();
-        const existingRows = existingSheet.values || [];
-        
-        if (existingRows.length === 0) throw new Error('Transaction spreadsheet appears empty');
-        
-        const headers = existingRows[0].map(h => h.toLowerCase().trim());
-        const orderIdIndex = headers.findIndex(h => h.includes('order id'));
-        
-        if (orderIdIndex === -1) throw new Error('Order ID column not found');
-        
-        // Build set of existing order IDs
-        const existingOrderIds = new Set();
-        for (let i = 1; i < existingRows.length; i++) {
-          const orderId = existingRows[i][orderIdIndex];
-          if (orderId) existingOrderIds.add(orderId);
-        }
-        
-        // Filter out duplicates
-        let skippedCount = 0;
-        const newTransactions = data.filter(row => {
-          const orderId = row['order id'];
-          if (existingOrderIds.has(orderId)) {
-            skippedCount++;
-            return false;
-          }
-          return true;
-        });
-        
-        if (newTransactions.length === 0) {
-          showStatus('transactions', 'error', 
-            `All ${data.length} transactions already exist in the spreadsheet`
-          );
-          return;
-        }
-        
-        // Prepare rows matching the header structure
-        const newRows = newTransactions.map(row => {
-          return headers.map(header => row[header] || '');
-        });
-        
-        // Append new transactions
-        const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
-        await fetch(appendUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ values: newRows })
-        });
-        
-        const message = skippedCount > 0
-          ? `✓ Success! Added ${newTransactions.length} new transactions (skipped ${skippedCount} duplicates)`
-          : `✓ Success! Added ${newTransactions.length} transactions`;
-        
-        showStatus('transactions', 'success', message);
-        
-      } catch (error) {
-        showStatus('transactions', 'error', `Error: ${error.message}`);
+        showStatus(type, 'error', `Error: ${error.message}`);
       } finally {
         btn.disabled = false;
         btn.textContent = 'Process & Upload';
@@ -1079,14 +1091,13 @@
     }
     
     function showStatus(type, statusType, message) {
-      const statusEl = document.querySelector(`.status-message[data-type="${type}"]`);
-      statusEl.className = `status-message status-${statusType} active`;
-      statusEl.textContent = message;
+      const el = document.querySelector(`.status-message[data-type="${type}"]`);
+      el.className = `status-message status-${statusType} active`;
+      el.textContent = message;
     }
     
     function hideStatus(type) {
-      const statusEl = document.querySelector(`.status-message[data-type="${type}"]`);
-      statusEl.classList.remove('active');
+      document.querySelector(`.status-message[data-type="${type}"]`).classList.remove('active');
     }
     
     function formatBytes(bytes) {
