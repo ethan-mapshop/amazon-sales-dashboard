@@ -2571,10 +2571,18 @@
         const filtered = transactions.filter(t => {
           const transDate = t[dateColumn];
           if (!transDate) return false;
+          
+          // Parse the transaction date and normalize to date-only (ignore time)
           const tDate = new Date(transDate);
-          const sDate = new Date(startDate);
-          const eDate = new Date(endDate);
-          return tDate >= sDate && tDate <= eDate;
+          if (isNaN(tDate.getTime())) return false; // Invalid date
+          
+          // Normalize all dates to midnight local time for comparison
+          const transDateOnly = new Date(tDate.getFullYear(), tDate.getMonth(), tDate.getDate());
+          const sDate = new Date(startDate + 'T00:00:00'); // Start of day
+          const eDate = new Date(endDate + 'T23:59:59');   // End of day
+          
+          return transDateOnly >= new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate()) && 
+                 transDateOnly <= new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
         });
         
         // Calculate financial statement with product costs, ad spend, and shipping costs
