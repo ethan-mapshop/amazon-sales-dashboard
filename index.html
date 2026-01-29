@@ -2688,20 +2688,17 @@
         
         // FBM Selling Fees - Type starts with Order & fulfillment = Seller
         if (type.startsWith('order') && isFBM) {
-          if (sellingFees >= 0) {
-            statement.expenses['FBM Selling Fees'].debit += sellingFees;
-          } else {
-            statement.expenses['FBM Selling Fees'].credit += Math.abs(sellingFees);
+          const feeAmount = Math.abs(sellingFees);
+          if (feeAmount > 0) {
+            statement.expenses['FBM Selling Fees'].debit += feeAmount;
           }
         }
         
         // FBA Selling Fees - Type starts with Order & fulfillment = Amazon (selling fees + fba fees)
         if (type.startsWith('order') && isFBA) {
-          const totalFBAFees = sellingFees + fbaFees;
-          if (totalFBAFees >= 0) {
+          const totalFBAFees = Math.abs(sellingFees) + Math.abs(fbaFees);
+          if (totalFBAFees > 0) {
             statement.expenses['FBA Selling Fees'].debit += totalFBAFees;
-          } else {
-            statement.expenses['FBA Selling Fees'].credit += Math.abs(totalFBAFees);
           }
         }
         
