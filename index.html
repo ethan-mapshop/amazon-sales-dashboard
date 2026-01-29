@@ -2565,10 +2565,11 @@
         income: {
           'FBM Product Sales': { debit: 0, credit: 0 },
           'FBM Refunds': { debit: 0, credit: 0 },
+          'FBM Shipping Credits': { debit: 0, credit: 0 },
           'FBA Product Sales': { debit: 0, credit: 0 },
           'FBA Refunds': { debit: 0, credit: 0 },
-          'FBA Inventory Credit': { debit: 0, credit: 0 },
           'FBA Shipping Credits': { debit: 0, credit: 0 },
+          'FBA Inventory Credit': { debit: 0, credit: 0 },
           'Shipping Credit Refunds': { debit: 0, credit: 0 },
           'Promotional Rebates': { debit: 0, credit: 0 }
         },
@@ -2590,111 +2591,181 @@
       };
       
       transactions.forEach(t => {
-        const type = (t.type || '').toLowerCase();
-        const fulfillment = (t.fulfillment || '').toLowerCase();
+        const type = (t.type || '').toLowerCase().trim();
+        const fulfillment = (t.fulfillment || '').toLowerCase().trim();
         const sku = t.sku || '';
         const quantity = parseInt(t.quantity || 0);
-        const amount = parseFloat(t.total || 0);
+        
+        // Get column values
+        const productSales = parseFloat(t['product sales'] || 0);
+        const shippingCredits = parseFloat(t['shipping credits'] || 0);
+        const sellingFees = parseFloat(t['selling fees'] || 0);
+        const fbaFees = parseFloat(t['fba fees'] || 0);
+        
+        // Determine if FBM or FBA
+        const isFBM = fulfillment === 'seller';
+        const isFBA = fulfillment === 'amazon';
         
         // Calculate product costs (quantity * cost from Products sheet)
         if (sku && quantity && productCosts[sku]) {
           const productCost = quantity * productCosts[sku];
           
-          if (type.includes('order') && !type.includes('refund') && quantity > 0) {
-            if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+          if (type.startsWith('order') && quantity > 0) {
+            if (isFBM) {
               statement.expenses['FBM Product Costs'].debit += productCost;
-            } else {
+            } else if (isFBA) {
               statement.expenses['FBA Product Costs'].debit += productCost;
             }
           }
           
           // Handle refunds (credit back the cost)
-          if (type.includes('refund') && quantity < 0) {
-            if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+          if (type === 'refund' && quantity < 0) {
+            if (isFBM) {
               statement.expenses['FBM Product Costs'].credit += Math.abs(productCost);
-            } else {
+            } else if (isFBA) {
               statement.expenses['FBA Product Costs'].credit += Math.abs(productCost);
             }
           }
         }
         
-        // Map transaction types to statement categories
+        // INCOME
         
-        // Income
-        if (type.includes('order') && !type.includes('refund')) {
-          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
-            if (amount > 0) statement.income['FBM Product Sales'].credit += amount;
-            else statement.income['FBM Product Sales'].debit += Math.abs(amount);
+        // FBM Product Sales - Type starts with Order & fulfillment = Seller
+        if (type.startsWith('order') && isFBM) {
+          if (productSales >= 0) {
+            statement.income['FBM Product Sales'].credit += productSales;
           } else {
-            if (amount > 0) statement.income['FBA Product Sales'].credit += amount;
-            else statement.income['FBA Product Sales'].debit += Math.abs(amount);
+            statement.income['FBM Product Sales'].debit += Math.abs(productSales);
           }
         }
         
-        if (type.includes('refund')) {
-          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
-            if (amount > 0) statement.income['FBM Refunds'].credit += amount;
-            else statement.income['FBM Refunds'].debit += Math.abs(amount);
+        // FBM Refunds - Type = Refund & fulfillment = Seller
+        if (type === 'refund' && isFBM) {
+          if (productSales >= 0) {
+            statement.income['FBM Refunds'].credit += productSales;
           } else {
-            if (amount > 0) statement.income['FBA Refunds'].credit += amount;
-            else statement.income['FBA Refunds'].debit += Math.abs(amount);
+            statement.income['FBM Refunds'].debit += Math.abs(productSales);
           }
         }
+        
+        // FBM Shipping Credits - Type starts with Order & fulfillment = Seller
+        if (type.startsWith('order') && isFBM) {
+          if (shippingCredits >= 0) {
+            statement.income['FBM Shipping Credits'].credit += shippingCredits;
+          } else {
+            statement.income['FBM Shipping Credits'].debit += Math.abs(shippingCredits);
+          }
+        }
+        
+        // FBA Product Sales - Type starts with Order & fulfillment = Amazon
+        if (type.startsWith('order') && isFBA) {
+          if (productSales >= 0) {
+            statement.income['FBA Product Sales'].credit += productSales;
+          } else {
+            statement.income['FBA Product Sales'].debit += Math.abs(productSales);
+          }
+        }
+        
+        // FBA Refunds - Type = Refund & fulfillment = Amazon
+        if (type === 'refund' && isFBA) {
+          if (productSales >= 0) {
+            statement.income['FBA Refunds'].credit += productSales;
+          } else {
+            statement.income['FBA Refunds'].debit += Math.abs(productSales);
+          }
+        }
+        
+        // FBA Shipping Credits - Type starts with Order & fulfillment = Amazon
+        if (type.startsWith('order') && isFBA) {
+          if (shippingCredits >= 0) {
+            statement.income['FBA Shipping Credits'].credit += shippingCredits;
+          } else {
+            statement.income['FBA Shipping Credits'].debit += Math.abs(shippingCredits);
+          }
+        }
+        
+        // EXPENSES
+        
+        // FBM Selling Fees - Type starts with Order & fulfillment = Seller
+        if (type.startsWith('order') && isFBM) {
+          if (sellingFees >= 0) {
+            statement.expenses['FBM Selling Fees'].debit += sellingFees;
+          } else {
+            statement.expenses['FBM Selling Fees'].credit += Math.abs(sellingFees);
+          }
+        }
+        
+        // FBA Selling Fees - Type starts with Order & fulfillment = Amazon (selling fees + fba fees)
+        if (type.startsWith('order') && isFBA) {
+          const totalFBAFees = sellingFees + fbaFees;
+          if (totalFBAFees >= 0) {
+            statement.expenses['FBA Selling Fees'].debit += totalFBAFees;
+          } else {
+            statement.expenses['FBA Selling Fees'].credit += Math.abs(totalFBAFees);
+          }
+        }
+        
+        // Keep other categories that aren't specified yet (placeholder logic)
+        // These will be updated when you provide more information
         
         if (type.includes('inventory') && type.includes('credit')) {
+          const amount = parseFloat(t.total || 0);
           if (amount > 0) statement.income['FBA Inventory Credit'].credit += amount;
           else statement.income['FBA Inventory Credit'].debit += Math.abs(amount);
         }
         
-        if (type.includes('shipping') && !type.includes('fee')) {
-          if (amount > 0) statement.income['FBA Shipping Credits'].credit += amount;
-          else statement.income['FBA Shipping Credits'].debit += Math.abs(amount);
+        if (type.includes('shipping') && type.includes('refund')) {
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.income['Shipping Credit Refunds'].credit += amount;
+          else statement.income['Shipping Credit Refunds'].debit += Math.abs(amount);
         }
         
         if (type.includes('promotion') || type.includes('promotional')) {
+          const amount = parseFloat(t.total || 0);
           if (amount > 0) statement.income['Promotional Rebates'].credit += amount;
           else statement.income['Promotional Rebates'].debit += Math.abs(amount);
         }
         
-        // Expenses
-        if (type.includes('selling') && type.includes('fee')) {
-          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
-            if (amount > 0) statement.expenses['FBM Selling Fees'].credit += amount;
-            else statement.expenses['FBM Selling Fees'].debit += Math.abs(amount);
-          } else {
-            if (amount > 0) statement.expenses['FBA Selling Fees'].credit += amount;
-            else statement.expenses['FBA Selling Fees'].debit += Math.abs(amount);
-          }
+        if (type.includes('fee') && type.includes('refund')) {
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['Selling Fee Refunds'].credit += amount;
+          else statement.expenses['Selling Fee Refunds'].debit += Math.abs(amount);
         }
         
-        if (type.includes('fba') && type.includes('fee') && !type.includes('selling')) {
-          if (amount > 0) statement.expenses['FBA Transaction Fees'].credit += amount;
-          else statement.expenses['FBA Transaction Fees'].debit += Math.abs(amount);
+        if (type.includes('fba') && type.includes('transaction')) {
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['FBA Transaction Fees'].debit += amount;
+          else statement.expenses['FBA Transaction Fees'].credit += Math.abs(amount);
         }
         
         if (type.includes('inbound') || type.includes('inventory fee')) {
-          if (amount > 0) statement.expenses['FBA Inv & Inbound Fees'].credit += amount;
-          else statement.expenses['FBA Inv & Inbound Fees'].debit += Math.abs(amount);
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['FBA Inv & Inbound Fees'].debit += amount;
+          else statement.expenses['FBA Inv & Inbound Fees'].credit += Math.abs(amount);
         }
         
         if (type.includes('shipping') && type.includes('label')) {
-          if (amount > 0) statement.expenses['Shipping Label Purchase'].credit += amount;
-          else statement.expenses['Shipping Label Purchase'].debit += Math.abs(amount);
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['Shipping Label Purchase'].debit += amount;
+          else statement.expenses['Shipping Label Purchase'].credit += Math.abs(amount);
         }
         
         if (type.includes('admin') && type.includes('fee')) {
-          if (amount > 0) statement.expenses['Refund Admin Fees'].credit += amount;
-          else statement.expenses['Refund Admin Fees'].debit += Math.abs(amount);
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['Refund Admin Fees'].debit += amount;
+          else statement.expenses['Refund Admin Fees'].credit += Math.abs(amount);
         }
         
         if (type.includes('adjustment')) {
-          if (amount > 0) statement.expenses['Adjustments'].credit += amount;
-          else statement.expenses['Adjustments'].debit += Math.abs(amount);
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['Adjustments'].debit += amount;
+          else statement.expenses['Adjustments'].credit += Math.abs(amount);
         }
         
         if (type.includes('service') && type.includes('fee')) {
-          if (amount > 0) statement.expenses['Service Fees'].credit += amount;
-          else statement.expenses['Service Fees'].debit += Math.abs(amount);
+          const amount = parseFloat(t.total || 0);
+          if (amount > 0) statement.expenses['Service Fees'].debit += amount;
+          else statement.expenses['Service Fees'].credit += Math.abs(amount);
         }
       });
       
