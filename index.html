@@ -2428,7 +2428,7 @@
       
       try {
         // Load all required data in parallel
-        const [transactionsRes, productsRes, productAdsRes, brandAdsRes] = await Promise.all([
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes] = await Promise.all([
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }),
@@ -2439,6 +2439,9 @@
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }),
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
         ]);
@@ -2536,6 +2539,32 @@
           }
         }
         
+        // Parse shipping costs data
+        let totalShippingCosts = 0;
+        
+        if (shippingRes.ok) {
+          const shippingData = await shippingRes.json();
+          const shippingRows = shippingData.values || [];
+          if (shippingRows.length > 1) {
+            const shippingHeaders = shippingRows[0].map(h => h.toLowerCase().trim());
+            const shipDateIndex = shippingHeaders.findIndex(h => h.includes('ship date'));
+            const shippingCostIndex = shippingHeaders.indexOf('shipping cost');
+            
+            for (let i = 1; i < shippingRows.length; i++) {
+              const shipDate = new Date(shippingRows[i][shipDateIndex]);
+              const shippingCost = parseFloat(shippingRows[i][shippingCostIndex]) || 0;
+              
+              // Check if ship date is within report period
+              const reportStart = new Date(startDate);
+              const reportEnd = new Date(endDate);
+              
+              if (shipDate >= reportStart && shipDate <= reportEnd) {
+                totalShippingCosts += shippingCost;
+              }
+            }
+          }
+        }
+        
         // Filter transactions by date range
         const dateColumn = transactionsHeaders.find(h => h.includes('date')) || transactionsHeaders[0];
         
@@ -2548,8 +2577,8 @@
           return tDate >= sDate && tDate <= eDate;
         });
         
-        // Calculate financial statement with product costs and ad spend
-        const statement = calculateFinancialStatement(filtered, productCosts, totalAdSpend);
+        // Calculate financial statement with product costs, ad spend, and shipping costs
+        const statement = calculateFinancialStatement(filtered, productCosts, totalAdSpend, totalShippingCosts);
         
         // Render the report
         renderFinancialStatement(statement, startDate, endDate);
@@ -2560,7 +2589,7 @@
       }
     }
     
-    function calculateFinancialStatement(transactions, productCosts, totalAdSpend) {
+    function calculateFinancialStatement(transactions, productCosts, totalAdSpend, totalShippingCosts) {
       const statement = {
         income: {
           'FBM Product Sales': { debit: 0, credit: 0 },
@@ -2575,6 +2604,7 @@
         },
         expenses: {
           'FBM Product Costs': { debit: 0, credit: 0 },
+          'FBM Shipping Costs': { debit: 0, credit: 0 },
           'FBA Product Costs': { debit: 0, credit: 0 },
           'FBM Selling Fees': { debit: 0, credit: 0 },
           'FBA Selling Fees': { debit: 0, credit: 0 },
@@ -2765,6 +2795,11 @@
           else statement.expenses['Service Fees'].credit += Math.abs(amount);
         }
       });
+      
+      // Add shipping costs
+      if (totalShippingCosts > 0) {
+        statement.expenses['FBM Shipping Costs'].debit = totalShippingCosts;
+      }
       
       // Add ad spend
       if (totalAdSpend > 0) {
