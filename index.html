@@ -192,6 +192,7 @@
       margin-bottom: 2rem;
       border-bottom: 2px solid var(--border);
       overflow-x: auto;
+      overflow-y: hidden;
     }
     
     .tab {
@@ -970,26 +971,34 @@
     <!-- MAPPING PAGE -->
     <div id="mapping-page" class="page">
       <div class="card">
-        <div class="tabs">
+        <div class="tabs" style="overflow-x: visible;">
           <button class="tab active" data-mapping-tab="product">Product Campaign Mapping</button>
           <button class="tab" data-mapping-tab="brand">Brand Campaign Mapping</button>
+          <button class="btn btn-secondary" onclick="loadMappingData()" style="margin-left: auto; margin-bottom: -2px; padding: 0.5rem 1rem; font-size: 0.8rem;">
+            🔄 Refresh
+          </button>
         </div>
 
         <!-- Product Mapping Interface -->
         <div class="tab-content active" id="product-mapping">
-          <div class="stats-bar">
-            <div class="stat-item">
-              <span class="stat-label">Total Campaigns:</span>
-              <span class="stat-value" id="product-total-count">0</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div class="stats-bar" style="flex: 1; margin: 0;">
+              <div class="stat-item">
+                <span class="stat-label">Total Campaigns:</span>
+                <span class="stat-value" id="product-total-count">0</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">Mapped:</span>
+                <span class="stat-value" id="product-mapped-count">0</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">Unmapped:</span>
+                <span class="stat-value warning" id="product-unmapped-count">0</span>
+              </div>
             </div>
-            <div class="stat-item">
-              <span class="stat-label">Mapped:</span>
-              <span class="stat-value" id="product-mapped-count">0</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Unmapped:</span>
-              <span class="stat-value warning" id="product-unmapped-count">0</span>
-            </div>
+            <button class="btn btn-secondary" onclick="loadMappingData()" style="padding: 0.625rem 1.25rem; font-size: 0.875rem;">
+              🔄 Refresh
+            </button>
           </div>
 
           <div class="mapping-layout">
@@ -1023,19 +1032,24 @@
 
         <!-- Brand Mapping Interface -->
         <div class="tab-content" id="brand-mapping">
-          <div class="stats-bar">
-            <div class="stat-item">
-              <span class="stat-label">Total Campaigns:</span>
-              <span class="stat-value" id="brand-total-count">0</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div class="stats-bar" style="flex: 1; margin: 0;">
+              <div class="stat-item">
+                <span class="stat-label">Total Campaigns:</span>
+                <span class="stat-value" id="brand-total-count">0</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">Mapped:</span>
+                <span class="stat-value" id="brand-mapped-count">0</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">Unmapped:</span>
+                <span class="stat-value warning" id="brand-unmapped-count">0</span>
+              </div>
             </div>
-            <div class="stat-item">
-              <span class="stat-label">Mapped:</span>
-              <span class="stat-value" id="brand-mapped-count">0</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Unmapped:</span>
-              <span class="stat-value warning" id="brand-unmapped-count">0</span>
-            </div>
+            <button class="btn btn-secondary" onclick="loadMappingData()" style="padding: 0.625rem 1.25rem; font-size: 0.875rem;">
+              🔄 Refresh
+            </button>
           </div>
 
           <div class="mapping-layout">
@@ -1872,16 +1886,24 @@
       const container = document.getElementById('product-campaigns-list');
       const filter = currentFilter.product;
       
-      let filtered = campaigns.product;
+      // Get all unique campaigns from both ad spend and mappings
+      const allCampaigns = new Set([...campaigns.product, ...Object.keys(mappings.product)]);
+      let filtered = Array.from(allCampaigns).sort();
       
       if (searchTerm) {
         filtered = filtered.filter(c => c.toLowerCase().includes(searchTerm.toLowerCase()));
       }
       
       if (filter === 'mapped') {
-        filtered = filtered.filter(c => mappings.product[c]);
+        filtered = filtered.filter(c => {
+          const m = mappings.product[c];
+          return m && (m.brand || m.skus.length > 0);
+        });
       } else if (filter === 'unmapped') {
-        filtered = filtered.filter(c => !mappings.product[c]);
+        filtered = filtered.filter(c => {
+          const m = mappings.product[c];
+          return !m || (!m.brand && m.skus.length === 0);
+        });
       }
       
       if (filtered.length === 0) {
@@ -1910,7 +1932,9 @@
       const container = document.getElementById('brand-campaigns-list');
       const filter = currentFilter.brand;
       
-      let filtered = campaigns.brand;
+      // Get all unique campaigns from both ad spend and mappings
+      const allCampaigns = new Set([...campaigns.brand, ...Object.keys(mappings.brand)]);
+      let filtered = Array.from(allCampaigns).sort();
       
       if (searchTerm) {
         filtered = filtered.filter(c => c.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -2295,7 +2319,17 @@
     
     function updateStats(type) {
       const total = campaigns[type].length;
-      const mapped = Object.keys(mappings[type]).length;
+      
+      // Count how many campaigns from ad spend have mappings
+      const mapped = campaigns[type].filter(campaign => {
+        if (type === 'product') {
+          const m = mappings[type][campaign];
+          return m && (m.brand || m.skus.length > 0);
+        } else {
+          return mappings[type][campaign];
+        }
+      }).length;
+      
       const unmapped = total - mapped;
       
       document.getElementById(`${type}-total-count`).textContent = total;
