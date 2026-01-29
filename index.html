@@ -981,24 +981,19 @@
 
         <!-- Product Mapping Interface -->
         <div class="tab-content active" id="product-mapping">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-            <div class="stats-bar" style="flex: 1; margin: 0;">
-              <div class="stat-item">
-                <span class="stat-label">Total Campaigns:</span>
-                <span class="stat-value" id="product-total-count">0</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Mapped:</span>
-                <span class="stat-value" id="product-mapped-count">0</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Unmapped:</span>
-                <span class="stat-value warning" id="product-unmapped-count">0</span>
-              </div>
+          <div class="stats-bar">
+            <div class="stat-item">
+              <span class="stat-label">Total Campaigns:</span>
+              <span class="stat-value" id="product-total-count">0</span>
             </div>
-            <button class="btn btn-secondary" onclick="loadMappingData()" style="padding: 0.625rem 1.25rem; font-size: 0.875rem;">
-              🔄 Refresh
-            </button>
+            <div class="stat-item">
+              <span class="stat-label">Mapped:</span>
+              <span class="stat-value" id="product-mapped-count">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Unmapped:</span>
+              <span class="stat-value warning" id="product-unmapped-count">0</span>
+            </div>
           </div>
 
           <div class="mapping-layout">
@@ -1032,24 +1027,19 @@
 
         <!-- Brand Mapping Interface -->
         <div class="tab-content" id="brand-mapping">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-            <div class="stats-bar" style="flex: 1; margin: 0;">
-              <div class="stat-item">
-                <span class="stat-label">Total Campaigns:</span>
-                <span class="stat-value" id="brand-total-count">0</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Mapped:</span>
-                <span class="stat-value" id="brand-mapped-count">0</span>
-              </div>
-              <div class="stat-item">
-                <span class="stat-label">Unmapped:</span>
-                <span class="stat-value warning" id="brand-unmapped-count">0</span>
-              </div>
+          <div class="stats-bar">
+            <div class="stat-item">
+              <span class="stat-label">Total Campaigns:</span>
+              <span class="stat-value" id="brand-total-count">0</span>
             </div>
-            <button class="btn btn-secondary" onclick="loadMappingData()" style="padding: 0.625rem 1.25rem; font-size: 0.875rem;">
-              🔄 Refresh
-            </button>
+            <div class="stat-item">
+              <span class="stat-label">Mapped:</span>
+              <span class="stat-value" id="brand-mapped-count">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Unmapped:</span>
+              <span class="stat-value warning" id="brand-unmapped-count">0</span>
+            </div>
           </div>
 
           <div class="mapping-layout">
@@ -1684,6 +1674,12 @@
     async function loadMappingData() {
       console.log('Loading mapping data...');
       
+      // Show loading state
+      document.getElementById('product-campaigns-list').innerHTML = 
+        '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">Loading campaigns...</div>';
+      document.getElementById('brand-campaigns-list').innerHTML = 
+        '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">Loading campaigns...</div>';
+      
       try {
         // Load products, brands, campaigns, and mappings in parallel
         await Promise.all([
@@ -1698,7 +1694,9 @@
           products: products.length,
           brands: brands.length,
           productCampaigns: campaigns.product.length,
-          brandCampaigns: campaigns.brand.length
+          brandCampaigns: campaigns.brand.length,
+          productMappings: Object.keys(mappings.product).length,
+          brandMappings: Object.keys(mappings.brand).length
         });
         
         renderProductCampaigns();
