@@ -3,24 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sales Dashboard - Product Upload</title>
+  <title>Amazon Sales Dashboard</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
     
     :root {
-      --bg-primary: #0a0e27;
-      --bg-secondary: #141b3a;
-      --bg-card: #1a2347;
-      --accent: #00d4ff;
-      --accent-glow: rgba(0, 212, 255, 0.2);
-      --text-primary: #e8ecf7;
-      --text-secondary: #8b93b8;
-      --border: #2a3463;
-      --success: #00ff88;
-      --error: #ff3366;
-      --warning: #ffaa00;
+      --bg-primary: #0f1419;
+      --bg-secondary: #1a1f29;
+      --bg-card: #232936;
+      --accent-orange: #ff6b35;
+      --accent-blue: #004e89;
+      --accent-yellow: #ffc857;
+      --text-primary: #f7f7f2;
+      --text-secondary: #9ca3af;
+      --border: #3a4556;
+      --success: #06d6a0;
+      --error: #ef476f;
+      --warning: #ffbe0b;
     }
     
     * {
@@ -30,94 +31,73 @@
     }
     
     body {
-      font-family: 'Archivo', sans-serif;
+      font-family: 'Work Sans', sans-serif;
       background: var(--bg-primary);
       color: var(--text-primary);
       min-height: 100vh;
       padding: 2rem;
-      background-image: 
-        radial-gradient(circle at 20% 30%, rgba(0, 212, 255, 0.05) 0%, transparent 50%),
-        radial-gradient(circle at 80% 70%, rgba(0, 255, 136, 0.05) 0%, transparent 50%);
     }
     
     .container {
-      max-width: 900px;
+      max-width: 1200px;
       margin: 0 auto;
     }
     
     header {
       margin-bottom: 3rem;
       padding-bottom: 2rem;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 2px solid var(--accent-orange);
     }
     
     h1 {
-      font-size: 2.5rem;
+      font-size: 2.75rem;
       font-weight: 700;
       margin-bottom: 0.5rem;
-      background: linear-gradient(135deg, var(--accent), var(--success));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      letter-spacing: -0.02em;
+      color: var(--text-primary);
+      letter-spacing: -0.03em;
+    }
+    
+    h1 .highlight {
+      color: var(--accent-orange);
     }
     
     .subtitle {
       color: var(--text-secondary);
-      font-size: 1rem;
+      font-size: 1.05rem;
+      font-weight: 500;
     }
     
     .card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 2.5rem;
+      border-radius: 12px;
+      padding: 2rem;
       margin-bottom: 2rem;
-      position: relative;
-      overflow: hidden;
-      transition: all 0.3s ease;
-    }
-    
-    .card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-      background: linear-gradient(90deg, var(--accent), var(--success));
-      opacity: 0;
-      transition: opacity 0.3s ease;
-    }
-    
-    .card:hover::before {
-      opacity: 1;
+      transition: all 0.2s ease;
     }
     
     .section-title {
-      font-size: 1.25rem;
+      font-size: 1.125rem;
       font-weight: 600;
       margin-bottom: 1.5rem;
+      color: var(--text-primary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.75rem;
     }
     
-    .section-number {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      background: var(--accent);
-      color: var(--bg-primary);
-      border-radius: 50%;
-      font-weight: 700;
-      font-size: 0.875rem;
+    .section-title::before {
+      content: '';
+      width: 4px;
+      height: 20px;
+      background: var(--accent-orange);
+      border-radius: 2px;
     }
     
     .config-group {
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
     }
     
     label {
@@ -125,58 +105,99 @@
       margin-bottom: 0.5rem;
       color: var(--text-secondary);
       font-size: 0.875rem;
+      font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      font-weight: 600;
     }
     
     input[type="text"] {
       width: 100%;
-      padding: 0.875rem 1rem;
+      padding: 0.75rem 1rem;
       background: var(--bg-secondary);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
       color: var(--text-primary);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'IBM Plex Mono', monospace;
       font-size: 0.875rem;
       transition: all 0.2s ease;
     }
     
     input:focus {
       outline: none;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-glow);
+      border-color: var(--accent-orange);
+      box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
     }
     
     .hint {
-      margin-top: 0.5rem;
+      margin-top: 0.375rem;
       font-size: 0.8rem;
       color: var(--text-secondary);
-      font-style: italic;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+      border-bottom: 2px solid var(--border);
+    }
+    
+    .tab {
+      padding: 0.875rem 1.5rem;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-secondary);
+      font-family: 'Work Sans', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: -2px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .tab:hover {
+      color: var(--text-primary);
+    }
+    
+    .tab.active {
+      color: var(--accent-orange);
+      border-bottom-color: var(--accent-orange);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     
     .upload-zone {
       border: 2px dashed var(--border);
-      border-radius: 12px;
+      border-radius: 8px;
       padding: 3rem 2rem;
       text-align: center;
       cursor: pointer;
       transition: all 0.3s ease;
       background: var(--bg-secondary);
-      position: relative;
     }
     
-    .upload-zone:hover,
-    .upload-zone.drag-over {
-      border-color: var(--accent);
-      background: rgba(0, 212, 255, 0.05);
-      transform: translateY(-2px);
+    .upload-zone:hover:not(.disabled) {
+      border-color: var(--accent-orange);
+      background: rgba(255, 107, 53, 0.05);
     }
     
     .upload-zone.disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       cursor: not-allowed;
-      pointer-events: none;
     }
     
     .upload-zone input[type="file"] {
@@ -184,9 +205,8 @@
     }
     
     .upload-icon {
-      font-size: 3rem;
+      font-size: 2.5rem;
       margin-bottom: 1rem;
-      opacity: 0.5;
     }
     
     .upload-text {
@@ -204,7 +224,7 @@
       display: none;
       background: var(--bg-secondary);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
       padding: 1rem;
       margin-top: 1rem;
     }
@@ -215,21 +235,16 @@
     }
     
     @keyframes slideIn {
-      from {
-        opacity: 0;
-        transform: translateY(-10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     
     .file-name {
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'IBM Plex Mono', monospace;
       font-size: 0.875rem;
-      color: var(--accent);
+      color: var(--accent-yellow);
       margin-bottom: 0.5rem;
+      font-weight: 600;
     }
     
     .file-stats {
@@ -240,28 +255,27 @@
     }
     
     .btn {
-      padding: 0.875rem 2rem;
+      padding: 0.75rem 1.5rem;
       border: none;
-      border-radius: 8px;
+      border-radius: 6px;
       font-weight: 600;
-      font-size: 1rem;
+      font-size: 0.95rem;
       cursor: pointer;
       transition: all 0.2s ease;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      position: relative;
-      overflow: hidden;
+      font-family: 'Work Sans', sans-serif;
     }
     
     .btn-primary {
-      background: linear-gradient(135deg, var(--accent), #0099cc);
-      color: var(--bg-primary);
-      box-shadow: 0 4px 12px var(--accent-glow);
+      background: var(--accent-orange);
+      color: white;
     }
     
     .btn-primary:hover:not(:disabled) {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px var(--accent-glow);
+      background: #ff5722;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
     }
     
     .btn-primary:disabled {
@@ -273,12 +287,10 @@
       background: var(--bg-secondary);
       color: var(--text-primary);
       border: 1px solid var(--border);
-      margin-right: 1rem;
     }
     
     .btn-secondary:hover {
-      background: var(--bg-card);
-      border-color: var(--accent);
+      background: var(--bg-primary);
     }
 
     .btn-google {
@@ -287,66 +299,58 @@
       display: inline-flex;
       align-items: center;
       gap: 0.75rem;
-      padding: 0.875rem 1.5rem;
-      font-size: 0.95rem;
     }
 
     .btn-google:hover {
       background: #f8f8f8;
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(255, 255, 255, 0.2);
+      transform: translateY(-1px);
     }
 
-    .btn-google img {
-      width: 20px;
-      height: 20px;
+    .btn-google svg {
+      width: 18px;
+      height: 18px;
     }
     
     .button-group {
       display: flex;
       gap: 1rem;
-      margin-top: 2rem;
+      margin-top: 1.5rem;
     }
     
     .status-message {
       margin-top: 1.5rem;
-      padding: 1rem 1.25rem;
-      border-radius: 8px;
-      font-size: 0.925rem;
+      padding: 1rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
       display: none;
-      animation: slideIn 0.3s ease;
+      font-weight: 500;
     }
     
     .status-message.active {
       display: block;
+      animation: slideIn 0.3s ease;
     }
     
     .status-success {
-      background: rgba(0, 255, 136, 0.1);
+      background: rgba(6, 214, 160, 0.1);
       border: 1px solid var(--success);
       color: var(--success);
     }
     
     .status-error {
-      background: rgba(255, 51, 102, 0.1);
+      background: rgba(239, 71, 111, 0.1);
       border: 1px solid var(--error);
       color: var(--error);
-    }
-    
-    .status-warning {
-      background: rgba(255, 170, 0, 0.1);
-      border: 1px solid var(--warning);
-      color: var(--warning);
     }
     
     .loading {
       display: inline-block;
       width: 14px;
       height: 14px;
-      border: 2px solid var(--bg-primary);
+      border: 2px solid white;
       border-top-color: transparent;
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      animation: spin 0.6s linear infinite;
       margin-left: 0.5rem;
       vertical-align: middle;
     }
@@ -358,55 +362,41 @@
     .preview-table {
       margin-top: 1.5rem;
       overflow-x: auto;
+      background: var(--bg-secondary);
+      border-radius: 6px;
+      padding: 1rem;
     }
     
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.875rem;
+      font-size: 0.8rem;
     }
     
     th, td {
-      padding: 0.75rem;
+      padding: 0.625rem;
       text-align: left;
       border-bottom: 1px solid var(--border);
     }
     
     th {
-      background: var(--bg-secondary);
+      background: var(--bg-primary);
       color: var(--text-secondary);
       font-weight: 600;
       text-transform: uppercase;
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       letter-spacing: 0.05em;
     }
     
     td {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-    }
-    
-    .code-block {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1rem;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      overflow-x: auto;
-      color: var(--accent);
-    }
-
-    .input-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.75rem;
     }
 
     .auth-section {
       background: var(--bg-secondary);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
       padding: 1.5rem;
       text-align: center;
     }
@@ -418,14 +408,14 @@
       padding: 1rem;
       background: var(--bg-secondary);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
     }
 
     .user-avatar {
       width: 48px;
       height: 48px;
       border-radius: 50%;
-      border: 2px solid var(--accent);
+      border: 2px solid var(--accent-orange);
     }
 
     .user-details {
@@ -443,8 +433,14 @@
       color: var(--text-secondary);
     }
 
+    .input-row {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1rem;
+    }
+
     @media (max-width: 768px) {
-      .input-grid {
+      .input-row {
         grid-template-columns: 1fr;
       }
     }
@@ -453,16 +449,13 @@
 <body>
   <div class="container">
     <header>
-      <h1>Sales Dashboard</h1>
-      <p class="subtitle">Product Database Management</p>
+      <h1><span class="highlight">Amazon</span> Sales Dashboard</h1>
+      <p class="subtitle">Data Upload & Management</p>
     </header>
 
-    <!-- Step 1: Configuration & Authentication -->
+    <!-- Configuration Card -->
     <div class="card">
-      <h2 class="section-title">
-        <span class="section-number">1</span>
-        Configuration & Sign In
-      </h2>
+      <h2 class="section-title">Configuration & Authentication</h2>
       
       <div class="config-group">
         <label for="clientId">OAuth2 Client ID</label>
@@ -474,26 +467,43 @@
         <p class="hint">Your OAuth2 Client ID from Google Cloud Console</p>
       </div>
 
-      <div class="input-grid">
+      <div class="input-row">
         <div class="config-group">
-          <label for="spreadsheetId">Spreadsheet ID</label>
+          <label for="productSpreadsheetId">Product Database Spreadsheet ID</label>
           <input 
             type="text" 
-            id="spreadsheetId" 
+            id="productSpreadsheetId" 
             placeholder="1a2B3c4D5e6F7g8H9i0J"
           >
-          <p class="hint">From the URL of your Google Sheet</p>
         </div>
         
         <div class="config-group">
-          <label for="sheetName">Sheet Name</label>
+          <label for="productSheetName">Sheet Name</label>
           <input 
             type="text" 
-            id="sheetName" 
-            placeholder="Sheet1"
+            id="productSheetName" 
             value="Sheet1"
           >
-          <p class="hint">Tab name at bottom of your spreadsheet</p>
+        </div>
+      </div>
+
+      <div class="input-row">
+        <div class="config-group">
+          <label for="transactionSpreadsheetId">Transactions Spreadsheet ID</label>
+          <input 
+            type="text" 
+            id="transactionSpreadsheetId" 
+            placeholder="1a2B3c4D5e6F7g8H9i0J"
+          >
+        </div>
+        
+        <div class="config-group">
+          <label for="transactionSheetName">Sheet Name</label>
+          <input 
+            type="text" 
+            id="transactionSheetName" 
+            value="Sheet1"
+          >
         </div>
       </div>
 
@@ -501,9 +511,9 @@
         <label>Authentication Status</label>
         <div id="authSection">
           <div class="auth-section">
-            <p style="margin-bottom: 1rem; color: var(--text-secondary);">Sign in with your Google account to access the spreadsheet</p>
+            <p style="margin-bottom: 1rem; color: var(--text-secondary);">Sign in with your Google account to access spreadsheets</p>
             <button class="btn btn-google" id="signInBtn" style="display: none;">
-              <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
               Sign in with Google
             </button>
           </div>
@@ -511,71 +521,126 @@
       </div>
     </div>
 
-    <!-- Step 2: Upload File -->
+    <!-- Upload Card with Tabs -->
     <div class="card">
-      <h2 class="section-title">
-        <span class="section-number">2</span>
-        Upload Product Spreadsheet
-      </h2>
-      
-      <div class="upload-zone disabled" id="uploadZone">
-        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
-        <div class="upload-icon">📊</div>
-        <div class="upload-text">Sign in first to enable upload</div>
-        <div class="upload-hint">Accepts .xlsx, .xls, or .csv files</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="products">Products</button>
+        <button class="tab" data-tab="transactions">Transactions</button>
       </div>
-      
-      <div class="file-info" id="fileInfo">
-        <div class="file-name" id="fileName"></div>
-        <div class="file-stats">
-          <span id="fileSize"></span>
-          <span id="rowCount"></span>
+
+      <!-- Products Tab -->
+      <div class="tab-content active" id="products-content">
+        <div class="upload-zone disabled" data-type="products">
+          <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+          <div class="upload-icon">📦</div>
+          <div class="upload-text">Upload Product Database</div>
+          <div class="upload-hint">Sign in to enable upload • .xlsx, .xls, or .csv</div>
         </div>
+        
+        <div class="file-info" data-type="products">
+          <div class="file-name"></div>
+          <div class="file-stats">
+            <span class="file-size"></span>
+            <span class="row-count"></span>
+          </div>
+        </div>
+        
+        <div class="preview-table" data-type="products" style="display: none;">
+          <h3 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Preview (first 5 rows)</h3>
+          <table class="preview-table-el"></table>
+        </div>
+        
+        <div class="button-group">
+          <button class="btn btn-secondary clear-btn" data-type="products" style="display: none;">Clear</button>
+          <button class="btn btn-primary process-btn" data-type="products" disabled>
+            Process & Upload
+          </button>
+        </div>
+        
+        <div class="status-message" data-type="products"></div>
       </div>
-      
-      <div class="preview-table" id="previewContainer" style="display: none;">
-        <h3 style="margin-bottom: 1rem; font-size: 1rem; color: var(--text-secondary);">Preview (first 5 rows)</h3>
-        <table id="previewTable"></table>
+
+      <!-- Transactions Tab -->
+      <div class="tab-content" id="transactions-content">
+        <div class="upload-zone disabled" data-type="transactions">
+          <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+          <div class="upload-icon">💰</div>
+          <div class="upload-text">Upload Transaction Report</div>
+          <div class="upload-hint">Sign in to enable upload • Amazon transaction CSV/XLSX</div>
+        </div>
+        
+        <div class="file-info" data-type="transactions">
+          <div class="file-name"></div>
+          <div class="file-stats">
+            <span class="file-size"></span>
+            <span class="row-count"></span>
+          </div>
+        </div>
+        
+        <div class="preview-table" data-type="transactions" style="display: none;">
+          <h3 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Preview (first 5 rows)</h3>
+          <table class="preview-table-el"></table>
+        </div>
+        
+        <div class="button-group">
+          <button class="btn btn-secondary clear-btn" data-type="transactions" style="display: none;">Clear</button>
+          <button class="btn btn-primary process-btn" data-type="transactions" disabled>
+            Process & Upload
+          </button>
+        </div>
+        
+        <div class="status-message" data-type="transactions"></div>
       </div>
-      
-      <div class="button-group">
-        <button class="btn btn-secondary" id="clearBtn" style="display: none;">Clear</button>
-        <button class="btn btn-primary" id="processBtn" disabled>
-          Process & Upload
-        </button>
-      </div>
-      
-      <div class="status-message" id="statusMessage"></div>
     </div>
   </div>
 
   <script>
-    let uploadedData = null;
+    let uploadedData = { products: null, transactions: null };
     let accessToken = null;
     let tokenClient = null;
     
     let config = {
       clientId: localStorage.getItem('clientId') || '',
-      spreadsheetId: localStorage.getItem('spreadsheetId') || '',
-      sheetName: localStorage.getItem('sheetName') || 'Sheet1'
+      productSpreadsheetId: localStorage.getItem('productSpreadsheetId') || '',
+      productSheetName: localStorage.getItem('productSheetName') || 'Sheet1',
+      transactionSpreadsheetId: localStorage.getItem('transactionSpreadsheetId') || '',
+      transactionSheetName: localStorage.getItem('transactionSheetName') || 'Sheet1'
     };
     
     // Load saved config
-    if (config.clientId) document.getElementById('clientId').value = config.clientId;
-    if (config.spreadsheetId) document.getElementById('spreadsheetId').value = config.spreadsheetId;
-    if (config.sheetName) document.getElementById('sheetName').value = config.sheetName;
+    Object.keys(config).forEach(key => {
+      const el = document.getElementById(key);
+      if (el && config[key]) el.value = config[key];
+    });
+    
     updateAuthUI();
     
     // Save config on change
-    ['clientId', 'spreadsheetId', 'sheetName'].forEach(field => {
-      document.getElementById(field).addEventListener('input', (e) => {
-        config[field] = e.target.value.trim();
-        localStorage.setItem(field, config[field]);
-        updateAuthUI();
+    Object.keys(config).forEach(key => {
+      const el = document.getElementById(key);
+      if (el) {
+        el.addEventListener('input', (e) => {
+          config[key] = e.target.value.trim();
+          localStorage.setItem(key, config[key]);
+          updateAuthUI();
+        });
+      }
+    });
+    
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const tabName = tab.dataset.tab;
+        
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        tab.classList.add('active');
+        document.getElementById(`${tabName}-content`).classList.add('active');
       });
     });
     
-    // Initialize Google Identity Services
+    // Initialize Google Auth
     function initializeGoogleAuth() {
       if (!config.clientId) return;
       
@@ -595,33 +660,23 @@
       document.getElementById('signInBtn').style.display = 'inline-flex';
     }
     
-    // Check if we have a valid token from a previous session
     window.addEventListener('load', () => {
-      if (config.clientId) {
-        initializeGoogleAuth();
-      }
+      if (config.clientId) initializeGoogleAuth();
     });
     
     function updateAuthUI() {
-      const isConfigured = config.clientId && config.spreadsheetId && config.sheetName;
-      
-      if (isConfigured && !tokenClient) {
-        initializeGoogleAuth();
-      }
+      const isConfigured = config.clientId;
+      if (isConfigured && !tokenClient) initializeGoogleAuth();
     }
     
     document.getElementById('signInBtn').addEventListener('click', () => {
-      if (tokenClient) {
-        tokenClient.requestAccessToken();
-      }
+      if (tokenClient) tokenClient.requestAccessToken();
     });
     
     async function getUserInfo() {
       try {
         const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
+          headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
         const userInfo = await response.json();
@@ -633,8 +688,7 @@
     }
     
     function displayUserInfo(userInfo) {
-      const authSection = document.getElementById('authSection');
-      authSection.innerHTML = `
+      document.getElementById('authSection').innerHTML = `
         <div class="auth-info">
           <img src="${userInfo.picture}" alt="User avatar" class="user-avatar">
           <div class="user-details">
@@ -652,73 +706,74 @@
     }
     
     function showAuthError(message) {
-      const authSection = document.getElementById('authSection');
-      authSection.innerHTML = `
+      document.getElementById('authSection').innerHTML = `
         <div class="auth-section">
           <p style="color: var(--error); margin-bottom: 1rem;">${message}</p>
-          <button class="btn btn-google" id="signInBtn" onclick="document.getElementById('signInBtn').click()">
-            Try Again
-          </button>
+          <button class="btn btn-google" id="signInBtn">Try Again</button>
         </div>
       `;
     }
     
     function enableUpload() {
-      const uploadZone = document.getElementById('uploadZone');
-      uploadZone.classList.remove('disabled');
-      uploadZone.querySelector('.upload-text').textContent = 'Click to browse or drag & drop';
-      uploadZone.querySelector('.upload-hint').textContent = 'Accepts .xlsx, .xls, or .csv files';
+      document.querySelectorAll('.upload-zone').forEach(zone => {
+        zone.classList.remove('disabled');
+        zone.querySelector('.upload-hint').textContent = zone.querySelector('.upload-hint').textContent.replace('Sign in to enable upload • ', '');
+      });
     }
     
     // File upload handling
-    const uploadZone = document.getElementById('uploadZone');
-    const fileInput = document.getElementById('fileInput');
-    const fileInfo = document.getElementById('fileInfo');
-    const processBtn = document.getElementById('processBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    
-    uploadZone.addEventListener('click', () => {
-      if (!accessToken) return;
-      fileInput.click();
+    document.querySelectorAll('.upload-zone').forEach(zone => {
+      const type = zone.dataset.type;
+      const fileInput = zone.querySelector('.file-input');
+      
+      zone.addEventListener('click', () => {
+        if (!accessToken) return;
+        fileInput.click();
+      });
+      
+      zone.addEventListener('dragover', (e) => {
+        if (!accessToken) return;
+        e.preventDefault();
+        zone.style.borderColor = 'var(--accent-orange)';
+      });
+      
+      zone.addEventListener('dragleave', () => {
+        zone.style.borderColor = '';
+      });
+      
+      zone.addEventListener('drop', (e) => {
+        if (!accessToken) return;
+        e.preventDefault();
+        zone.style.borderColor = '';
+        if (e.dataTransfer.files.length > 0) {
+          handleFile(e.dataTransfer.files[0], type);
+        }
+      });
+      
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+          handleFile(e.target.files[0], type);
+        }
+      });
     });
     
-    uploadZone.addEventListener('dragover', (e) => {
-      if (!accessToken) return;
-      e.preventDefault();
-      uploadZone.classList.add('drag-over');
+    document.querySelectorAll('.clear-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.type;
+        uploadedData[type] = null;
+        
+        const fileInput = document.querySelector(`.upload-zone[data-type="${type}"] .file-input`);
+        fileInput.value = '';
+        
+        document.querySelector(`.file-info[data-type="${type}"]`).classList.remove('active');
+        document.querySelector(`.preview-table[data-type="${type}"]`).style.display = 'none';
+        document.querySelector(`.process-btn[data-type="${type}"]`).disabled = true;
+        btn.style.display = 'none';
+        hideStatus(type);
+      });
     });
     
-    uploadZone.addEventListener('dragleave', () => {
-      uploadZone.classList.remove('drag-over');
-    });
-    
-    uploadZone.addEventListener('drop', (e) => {
-      if (!accessToken) return;
-      e.preventDefault();
-      uploadZone.classList.remove('drag-over');
-      const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        handleFile(files[0]);
-      }
-    });
-    
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        handleFile(e.target.files[0]);
-      }
-    });
-    
-    clearBtn.addEventListener('click', () => {
-      uploadedData = null;
-      fileInput.value = '';
-      fileInfo.classList.remove('active');
-      document.getElementById('previewContainer').style.display = 'none';
-      processBtn.disabled = true;
-      clearBtn.style.display = 'none';
-      hideStatus();
-    });
-    
-    function handleFile(file) {
+    function handleFile(file, type) {
       const reader = new FileReader();
       
       reader.onload = (e) => {
@@ -726,60 +781,76 @@
           const data = new Uint8Array(e.target.result);
           const workbook = XLSX.read(data, { type: 'array' });
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-          const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+          
+          let jsonData;
+          
+          if (type === 'transactions') {
+            // Skip first 7 rows, read from row 8
+            const range = XLSX.utils.decode_range(firstSheet['!ref']);
+            range.s.r = 7; // Start at row 8 (0-indexed, so 7)
+            const newRange = XLSX.utils.encode_range(range);
+            jsonData = XLSX.utils.sheet_to_json(firstSheet, { range: newRange });
+          } else {
+            jsonData = XLSX.utils.sheet_to_json(firstSheet);
+          }
           
           if (jsonData.length === 0) {
-            showStatus('error', 'The file appears to be empty or has no data.');
+            showStatus(type, 'error', 'The file appears to be empty or has no data.');
             return;
           }
           
           // Validate required columns
-          const requiredCols = ['sku', 'name', 'brand', 'fulfillment', 'cost'];
-          const fileCols = Object.keys(jsonData[0]).map(k => k.toLowerCase());
-          const missingCols = requiredCols.filter(col => !fileCols.includes(col));
+          const requiredCols = type === 'products' 
+            ? ['sku', 'name', 'brand', 'fulfillment', 'cost']
+            : ['order id']; // For transactions, just check order id exists
+          
+          const fileCols = Object.keys(jsonData[0]).map(k => k.toLowerCase().trim());
+          const missingCols = requiredCols.filter(col => !fileCols.some(fc => fc.includes(col.toLowerCase())));
           
           if (missingCols.length > 0) {
-            showStatus('error', `Missing required columns: ${missingCols.join(', ')}`);
+            showStatus(type, 'error', `Missing required columns: ${missingCols.join(', ')}`);
             return;
           }
           
-          // Normalize column names to lowercase
-          uploadedData = jsonData.map(row => {
+          // Normalize column names
+          uploadedData[type] = jsonData.map(row => {
             const normalized = {};
             Object.keys(row).forEach(key => {
-              normalized[key.toLowerCase()] = row[key];
+              normalized[key.toLowerCase().trim()] = row[key];
             });
             return normalized;
           });
           
           // Display file info
-          document.getElementById('fileName').textContent = file.name;
-          document.getElementById('fileSize').textContent = `Size: ${formatBytes(file.size)}`;
-          document.getElementById('rowCount').textContent = `Rows: ${uploadedData.length}`;
+          const fileInfo = document.querySelector(`.file-info[data-type="${type}"]`);
+          fileInfo.querySelector('.file-name').textContent = file.name;
+          fileInfo.querySelector('.file-size').textContent = `Size: ${formatBytes(file.size)}`;
+          fileInfo.querySelector('.row-count').textContent = `Rows: ${uploadedData[type].length}`;
           fileInfo.classList.add('active');
-          clearBtn.style.display = 'inline-block';
+          
+          document.querySelector(`.clear-btn[data-type="${type}"]`).style.display = 'inline-block';
           
           // Show preview
-          displayPreview(uploadedData.slice(0, 5));
+          displayPreview(uploadedData[type].slice(0, 5), type);
           
-          processBtn.disabled = !accessToken;
-          hideStatus();
+          document.querySelector(`.process-btn[data-type="${type}"]`).disabled = !accessToken;
+          hideStatus(type);
           
         } catch (error) {
-          showStatus('error', `Error reading file: ${error.message}`);
+          showStatus(type, 'error', `Error reading file: ${error.message}`);
         }
       };
       
       reader.readAsArrayBuffer(file);
     }
     
-    function displayPreview(rows) {
-      const container = document.getElementById('previewContainer');
-      const table = document.getElementById('previewTable');
+    function displayPreview(rows, type) {
+      const container = document.querySelector(`.preview-table[data-type="${type}"]`);
+      const table = container.querySelector('.preview-table-el');
       
       if (rows.length === 0) return;
       
-      const headers = ['sku', 'name', 'brand', 'fulfillment', 'cost'];
+      const headers = Object.keys(rows[0]).slice(0, 10); // Show first 10 columns
       
       let html = '<thead><tr>';
       headers.forEach(header => {
@@ -790,7 +861,9 @@
       rows.forEach(row => {
         html += '<tr>';
         headers.forEach(header => {
-          html += `<td>${row[header] || ''}</td>`;
+          const value = row[header] || '';
+          const displayValue = String(value).length > 30 ? String(value).substring(0, 30) + '...' : value;
+          html += `<td>${displayValue}</td>`;
         });
         html += '</tr>';
       });
@@ -800,60 +873,63 @@
       container.style.display = 'block';
     }
     
-    // Process and upload using Google Sheets API with OAuth2
-    processBtn.addEventListener('click', async () => {
-      if (!uploadedData || !accessToken || !config.spreadsheetId) return;
+    // Process buttons
+    document.querySelectorAll('.process-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const type = btn.dataset.type;
+        
+        if (type === 'products') {
+          await processProducts();
+        } else if (type === 'transactions') {
+          await processTransactions();
+        }
+      });
+    });
+    
+    async function processProducts() {
+      const data = uploadedData.products;
+      if (!data || !accessToken || !config.productSpreadsheetId) return;
       
-      processBtn.disabled = true;
-      processBtn.innerHTML = 'Processing<span class="loading"></span>';
-      hideStatus();
+      const btn = document.querySelector('.process-btn[data-type="products"]');
+      btn.disabled = true;
+      btn.innerHTML = 'Processing<span class="loading"></span>';
+      hideStatus('products');
       
       try {
-        // Step 1: Get existing data from the sheet
-        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${config.sheetName}`;
+        const spreadsheetId = config.productSpreadsheetId;
+        const sheetName = config.productSheetName;
+        
+        // Get existing data
+        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}`;
         const getResponse = await fetch(getUrl, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
+          headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
-        if (!getResponse.ok) {
-          const error = await getResponse.json();
-          throw new Error(error.error?.message || 'Failed to read spreadsheet');
-        }
+        if (!getResponse.ok) throw new Error('Failed to read product spreadsheet');
         
         const existingSheet = await getResponse.json();
         const existingRows = existingSheet.values || [];
         
-        if (existingRows.length === 0) {
-          throw new Error('Spreadsheet appears empty. Make sure headers are in the first row.');
-        }
+        if (existingRows.length === 0) throw new Error('Product spreadsheet appears empty');
         
-        // Get headers (first row)
         const headers = existingRows[0].map(h => h.toLowerCase());
         const skuIndex = headers.indexOf('sku');
         
-        if (skuIndex === -1) {
-          throw new Error('SKU column not found in spreadsheet headers');
-        }
+        if (skuIndex === -1) throw new Error('SKU column not found');
         
-        // Create a map of existing SKUs to row indices
+        // Map existing SKUs
         const skuToRowIndex = {};
         for (let i = 1; i < existingRows.length; i++) {
           const sku = existingRows[i][skuIndex];
-          if (sku) {
-            skuToRowIndex[sku] = i;
-          }
+          if (sku) skuToRowIndex[sku] = i;
         }
         
-        // Step 2: Process uploaded data
         let addedCount = 0;
         let updatedCount = 0;
         const updates = [];
         const newRows = [];
         
-        uploadedData.forEach(product => {
-          const sku = product.sku;
+        data.forEach(product => {
           const rowData = [
             product.sku,
             product.name,
@@ -862,25 +938,23 @@
             product.cost
           ];
           
-          if (skuToRowIndex[sku] !== undefined) {
-            // SKU exists - prepare update
-            const rowIndex = skuToRowIndex[sku];
+          if (skuToRowIndex[product.sku] !== undefined) {
+            const rowIndex = skuToRowIndex[product.sku];
             updates.push({
-              range: `${config.sheetName}!A${rowIndex + 1}:E${rowIndex + 1}`,
+              range: `${sheetName}!A${rowIndex + 1}:E${rowIndex + 1}`,
               values: [rowData]
             });
             updatedCount++;
           } else {
-            // SKU doesn't exist - prepare to append
             newRows.push(rowData);
             addedCount++;
           }
         });
         
-        // Step 3: Execute updates
+        // Update existing
         if (updates.length > 0) {
-          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values:batchUpdate`;
-          const updateResponse = await fetch(updateUrl, {
+          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
+          await fetch(updateUrl, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${accessToken}`,
@@ -891,58 +965,127 @@
               data: updates
             })
           });
-          
-          if (!updateResponse.ok) {
-            const error = await updateResponse.json();
-            throw new Error(error.error?.message || 'Failed to update rows');
-          }
         }
         
-        // Step 4: Append new rows
+        // Append new
         if (newRows.length > 0) {
-          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/${config.sheetName}:append?valueInputOption=RAW`;
-          const appendResponse = await fetch(appendUrl, {
+          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+          await fetch(appendUrl, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${accessToken}`,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-              values: newRows
-            })
+            body: JSON.stringify({ values: newRows })
           });
-          
-          if (!appendResponse.ok) {
-            const error = await appendResponse.json();
-            throw new Error(error.error?.message || 'Failed to append new rows');
-          }
         }
         
-        showStatus('success', 
-          `✓ Success! Added ${addedCount} new products, updated ${updatedCount} existing products (${uploadedData.length} total processed)`
+        showStatus('products', 'success', 
+          `✓ Success! Added ${addedCount} new products, updated ${updatedCount} existing (${data.length} total)`
         );
         
       } catch (error) {
-        if (error.message.includes('401')) {
-          showStatus('error', 'Authentication expired. Please sign in again.');
-          signOut();
-        } else {
-          showStatus('error', `Error: ${error.message}`);
-        }
+        showStatus('products', 'error', `Error: ${error.message}`);
       } finally {
-        processBtn.disabled = false;
-        processBtn.textContent = 'Process & Upload';
+        btn.disabled = false;
+        btn.textContent = 'Process & Upload';
       }
-    });
+    }
     
-    function showStatus(type, message) {
-      const statusEl = document.getElementById('statusMessage');
-      statusEl.className = `status-message status-${type} active`;
+    async function processTransactions() {
+      const data = uploadedData.transactions;
+      if (!data || !accessToken || !config.transactionSpreadsheetId) return;
+      
+      const btn = document.querySelector('.process-btn[data-type="transactions"]');
+      btn.disabled = true;
+      btn.innerHTML = 'Processing<span class="loading"></span>';
+      hideStatus('transactions');
+      
+      try {
+        const spreadsheetId = config.transactionSpreadsheetId;
+        const sheetName = config.transactionSheetName;
+        
+        // Get existing data to check for duplicate order IDs
+        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}`;
+        const getResponse = await fetch(getUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!getResponse.ok) throw new Error('Failed to read transaction spreadsheet');
+        
+        const existingSheet = await getResponse.json();
+        const existingRows = existingSheet.values || [];
+        
+        if (existingRows.length === 0) throw new Error('Transaction spreadsheet appears empty');
+        
+        const headers = existingRows[0].map(h => h.toLowerCase().trim());
+        const orderIdIndex = headers.findIndex(h => h.includes('order id'));
+        
+        if (orderIdIndex === -1) throw new Error('Order ID column not found');
+        
+        // Build set of existing order IDs
+        const existingOrderIds = new Set();
+        for (let i = 1; i < existingRows.length; i++) {
+          const orderId = existingRows[i][orderIdIndex];
+          if (orderId) existingOrderIds.add(orderId);
+        }
+        
+        // Filter out duplicates
+        let skippedCount = 0;
+        const newTransactions = data.filter(row => {
+          const orderId = row['order id'];
+          if (existingOrderIds.has(orderId)) {
+            skippedCount++;
+            return false;
+          }
+          return true;
+        });
+        
+        if (newTransactions.length === 0) {
+          showStatus('transactions', 'error', 
+            `All ${data.length} transactions already exist in the spreadsheet`
+          );
+          return;
+        }
+        
+        // Prepare rows matching the header structure
+        const newRows = newTransactions.map(row => {
+          return headers.map(header => row[header] || '');
+        });
+        
+        // Append new transactions
+        const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+        await fetch(appendUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ values: newRows })
+        });
+        
+        const message = skippedCount > 0
+          ? `✓ Success! Added ${newTransactions.length} new transactions (skipped ${skippedCount} duplicates)`
+          : `✓ Success! Added ${newTransactions.length} transactions`;
+        
+        showStatus('transactions', 'success', message);
+        
+      } catch (error) {
+        showStatus('transactions', 'error', `Error: ${error.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Process & Upload';
+      }
+    }
+    
+    function showStatus(type, statusType, message) {
+      const statusEl = document.querySelector(`.status-message[data-type="${type}"]`);
+      statusEl.className = `status-message status-${statusType} active`;
       statusEl.textContent = message;
     }
     
-    function hideStatus() {
-      const statusEl = document.getElementById('statusMessage');
+    function hideStatus(type) {
+      const statusEl = document.querySelector(`.status-message[data-type="${type}"]`);
       statusEl.classList.remove('active');
     }
     
