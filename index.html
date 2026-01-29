@@ -2330,6 +2330,8 @@
       
       const unmapped = total - mapped;
       
+      console.log(`Updating ${type} stats:`, { total, mapped, unmapped });
+      
       document.getElementById(`${type}-total-count`).textContent = total;
       document.getElementById(`${type}-mapped-count`).textContent = mapped;
       document.getElementById(`${type}-unmapped-count`).textContent = unmapped;
