@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sales Dashboard - Product Upload</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+    
+    :root {
+      --bg-primary: #0a0e27;
+      --bg-secondary: #141b3a;
+      --bg-card: #1a2347;
+      --accent: #00d4ff;
+      --accent-glow: rgba(0, 212, 255, 0.2);
+      --text-primary: #e8ecf7;
+      --text-secondary: #8b93b8;
+      --border: #2a3463;
+      --success: #00ff88;
+      --error: #ff3366;
+      --warning: #ffaa00;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Archivo', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      padding: 2rem;
+      background-image: 
+        radial-gradient(circle at 20% 30%, rgba(0, 212, 255, 0.05) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(0, 255, 136, 0.05) 0%, transparent 50%);
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    header {
+      margin-bottom: 3rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--accent), var(--success));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.02em;
+    }
+    
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 1rem;
+    }
+    
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2.5rem;
+      margin-bottom: 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+    
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    
+    .card:hover::before {
+      opacity: 1;
+    }
+    
+    .section-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .section-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border-radius: 50%;
+      font-weight: 700;
+      font-size: 0.875rem;
+    }
+    
+    .config-group {
+      margin-bottom: 2rem;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+    
+    input[type="text"],
+    input[type="url"] {
+      width: 100%;
+      padding: 0.875rem 1rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.875rem;
+      transition: all 0.2s ease;
+    }
+    
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    
+    .hint {
+      margin-top: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+    
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 3rem 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: var(--bg-secondary);
+      position: relative;
+    }
+    
+    .upload-zone:hover,
+    .upload-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(0, 212, 255, 0.05);
+      transform: translateY(-2px);
+    }
+    
+    .upload-zone input[type="file"] {
+      display: none;
+    }
+    
+    .upload-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+    
+    .upload-text {
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    
+    .upload-hint {
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+    
+    .file-info {
+      display: none;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1rem;
+    }
+    
+    .file-info.active {
+      display: block;
+      animation: slideIn 0.3s ease;
+    }
+    
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    .file-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.875rem;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+    
+    .file-stats {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+    
+    .btn {
+      padding: 0.875rem 2rem;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #0099cc);
+      color: var(--bg-primary);
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+    
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px var(--accent-glow);
+    }
+    
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .btn-secondary {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      margin-right: 1rem;
+    }
+    
+    .btn-secondary:hover {
+      background: var(--bg-card);
+      border-color: var(--accent);
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    
+    .status-message {
+      margin-top: 1.5rem;
+      padding: 1rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.925rem;
+      display: none;
+      animation: slideIn 0.3s ease;
+    }
+    
+    .status-message.active {
+      display: block;
+    }
+    
+    .status-success {
+      background: rgba(0, 255, 136, 0.1);
+      border: 1px solid var(--success);
+      color: var(--success);
+    }
+    
+    .status-error {
+      background: rgba(255, 51, 102, 0.1);
+      border: 1px solid var(--error);
+      color: var(--error);
+    }
+    
+    .status-warning {
+      background: rgba(255, 170, 0, 0.1);
+      border: 1px solid var(--warning);
+      color: var(--warning);
+    }
+    
+    .loading {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--bg-primary);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .preview-table {
+      margin-top: 1.5rem;
+      overflow-x: auto;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    
+    th, td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    th {
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+    }
+    
+    td {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+    }
+    
+    .code-block {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      overflow-x: auto;
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Sales Dashboard</h1>
+      <p class="subtitle">Product Database Management</p>
+    </header>
+
+    <!-- Step 1: Configuration -->
+    <div class="card">
+      <h2 class="section-title">
+        <span class="section-number">1</span>
+        Configuration
+      </h2>
+      
+      <div class="config-group">
+        <label for="scriptUrl">Google Apps Script URL</label>
+        <input 
+          type="url" 
+          id="scriptUrl" 
+          placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
+        >
+        <p class="hint">Paste the web app URL from your Google Apps Script deployment</p>
+      </div>
+      
+      <div class="config-group">
+        <label>Current Status</label>
+        <div id="configStatus" class="code-block">
+          Not configured - please enter your Script URL above
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Upload File -->
+    <div class="card">
+      <h2 class="section-title">
+        <span class="section-number">2</span>
+        Upload Product Spreadsheet
+      </h2>
+      
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+        <div class="upload-icon">📊</div>
+        <div class="upload-text">Click to browse or drag & drop</div>
+        <div class="upload-hint">Accepts .xlsx, .xls, or .csv files</div>
+      </div>
+      
+      <div class="file-info" id="fileInfo">
+        <div class="file-name" id="fileName"></div>
+        <div class="file-stats">
+          <span id="fileSize"></span>
+          <span id="rowCount"></span>
+        </div>
+      </div>
+      
+      <div class="preview-table" id="previewContainer" style="display: none;">
+        <h3 style="margin-bottom: 1rem; font-size: 1rem; color: var(--text-secondary);">Preview (first 5 rows)</h3>
+        <table id="previewTable"></table>
+      </div>
+      
+      <div class="button-group">
+        <button class="btn btn-secondary" id="clearBtn" style="display: none;">Clear</button>
+        <button class="btn btn-primary" id="processBtn" disabled>
+          Process & Upload
+        </button>
+      </div>
+      
+      <div class="status-message" id="statusMessage"></div>
+    </div>
+  </div>
+
+  <script>
+    let uploadedData = null;
+    let scriptUrl = localStorage.getItem('scriptUrl') || '';
+    
+    // Load saved script URL
+    if (scriptUrl) {
+      document.getElementById('scriptUrl').value = scriptUrl;
+      updateConfigStatus(true);
+    }
+    
+    // Save script URL on change
+    document.getElementById('scriptUrl').addEventListener('input', (e) => {
+      scriptUrl = e.target.value.trim();
+      localStorage.setItem('scriptUrl', scriptUrl);
+      updateConfigStatus(!!scriptUrl);
+    });
+    
+    function updateConfigStatus(isConfigured) {
+      const status = document.getElementById('configStatus');
+      if (isConfigured) {
+        status.textContent = '✓ Configured and ready';
+        status.style.color = 'var(--success)';
+      } else {
+        status.textContent = 'Not configured - please enter your Script URL above';
+        status.style.color = 'var(--text-secondary)';
+      }
+    }
+    
+    // File upload handling
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo');
+    const processBtn = document.getElementById('processBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    
+    uploadZone.addEventListener('click', () => fileInput.click());
+    
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('drag-over');
+    });
+    
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('drag-over');
+    });
+    
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('drag-over');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        handleFile(files[0]);
+      }
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+      }
+    });
+    
+    clearBtn.addEventListener('click', () => {
+      uploadedData = null;
+      fileInput.value = '';
+      fileInfo.classList.remove('active');
+      document.getElementById('previewContainer').style.display = 'none';
+      processBtn.disabled = true;
+      clearBtn.style.display = 'none';
+      hideStatus();
+    });
+    
+    function handleFile(file) {
+      const reader = new FileReader();
+      
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+          
+          if (jsonData.length === 0) {
+            showStatus('error', 'The file appears to be empty or has no data.');
+            return;
+          }
+          
+          // Validate required columns
+          const requiredCols = ['sku', 'name', 'brand', 'fulfillment', 'cost'];
+          const fileCols = Object.keys(jsonData[0]).map(k => k.toLowerCase());
+          const missingCols = requiredCols.filter(col => !fileCols.includes(col));
+          
+          if (missingCols.length > 0) {
+            showStatus('error', `Missing required columns: ${missingCols.join(', ')}`);
+            return;
+          }
+          
+          // Normalize column names to lowercase
+          uploadedData = jsonData.map(row => {
+            const normalized = {};
+            Object.keys(row).forEach(key => {
+              normalized[key.toLowerCase()] = row[key];
+            });
+            return normalized;
+          });
+          
+          // Display file info
+          document.getElementById('fileName').textContent = file.name;
+          document.getElementById('fileSize').textContent = `Size: ${formatBytes(file.size)}`;
+          document.getElementById('rowCount').textContent = `Rows: ${uploadedData.length}`;
+          fileInfo.classList.add('active');
+          clearBtn.style.display = 'inline-block';
+          
+          // Show preview
+          displayPreview(uploadedData.slice(0, 5));
+          
+          processBtn.disabled = !scriptUrl;
+          hideStatus();
+          
+        } catch (error) {
+          showStatus('error', `Error reading file: ${error.message}`);
+        }
+      };
+      
+      reader.readAsArrayBuffer(file);
+    }
+    
+    function displayPreview(rows) {
+      const container = document.getElementById('previewContainer');
+      const table = document.getElementById('previewTable');
+      
+      if (rows.length === 0) return;
+      
+      const headers = ['sku', 'name', 'brand', 'fulfillment', 'cost'];
+      
+      let html = '<thead><tr>';
+      headers.forEach(header => {
+        html += `<th>${header}</th>`;
+      });
+      html += '</tr></thead><tbody>';
+      
+      rows.forEach(row => {
+        html += '<tr>';
+        headers.forEach(header => {
+          html += `<td>${row[header] || ''}</td>`;
+        });
+        html += '</tr>';
+      });
+      
+      html += '</tbody>';
+      table.innerHTML = html;
+      container.style.display = 'block';
+    }
+    
+    // Process and upload
+    processBtn.addEventListener('click', async () => {
+      if (!uploadedData || !scriptUrl) return;
+      
+      processBtn.disabled = true;
+      processBtn.innerHTML = 'Processing<span class="loading"></span>';
+      hideStatus();
+      
+      try {
+        // Prepare products data
+        const products = uploadedData.map(row => ({
+          sku: row.sku,
+          name: row.name,
+          brand: row.brand,
+          fulfillment: row.fulfillment,
+          cost: row.cost
+        }));
+        
+        // Send to Google Apps Script
+        const response = await fetch(scriptUrl, {
+          method: 'POST',
+          body: JSON.stringify({ products }),
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          showStatus('success', 
+            `✓ Success! Added ${result.added} new products, updated ${result.updated} existing products (${result.total} total processed)`
+          );
+        } else {
+          showStatus('error', `Error: ${result.error}`);
+        }
+        
+      } catch (error) {
+        showStatus('error', `Failed to upload: ${error.message}`);
+      } finally {
+        processBtn.disabled = false;
+        processBtn.textContent = 'Process & Upload';
+      }
+    });
+    
+    function showStatus(type, message) {
+      const statusEl = document.getElementById('statusMessage');
+      statusEl.className = `status-message status-${type} active`;
+      statusEl.textContent = message;
+    }
+    
+    function hideStatus() {
+      const statusEl = document.getElementById('statusMessage');
+      statusEl.classList.remove('active');
+    }
+    
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+  </script>
+</body>
+</html>
