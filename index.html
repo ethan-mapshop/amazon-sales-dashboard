@@ -487,8 +487,6 @@
       display: grid;
       grid-template-columns: 400px 1fr;
       gap: 2rem;
-      height: calc(100vh - 300px);
-      min-height: 600px;
     }
     
     .campaign-list {
@@ -549,6 +547,7 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       background: var(--bg-secondary);
+      min-height: 500px;
     }
     
     .campaign-item {
@@ -2323,6 +2322,10 @@
       ]);
       
       const total = allCampaigns.size;
+      
+      console.log(`${type} - campaigns from ad spend:`, campaigns[type].length);
+      console.log(`${type} - campaigns from mappings:`, Object.keys(mappings[type]).length);
+      console.log(`${type} - total unique:`, total);
       
       // Count how many have valid mappings
       const mapped = Array.from(allCampaigns).filter(campaign => {
