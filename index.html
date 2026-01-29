@@ -463,23 +463,31 @@
       <h2 class="section-title">Configuration & Authentication</h2>
       
       <div class="config-group">
-        <label for="clientId">OAuth2 Client ID</label>
-        <input 
-          type="text" 
-          id="clientId" 
-          placeholder="123456789-abc123.apps.googleusercontent.com"
-        >
-        <p class="hint">Your OAuth2 Client ID from Google Cloud Console</p>
+        <label>Spreadsheet</label>
+        <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; color: var(--text-secondary);">
+          Data spreadsheet configured ✓
+        </div>
       </div>
 
       <div class="config-group">
-        <label for="spreadsheetId">Data Spreadsheet ID</label>
-        <input 
-          type="text" 
-          id="spreadsheetId" 
-          placeholder="1a2B3c4D5e6F7g8H9i0J"
-        >
-        <p class="hint">Single spreadsheet ID - all data stored in different tabs</p>
+        <label>OAuth Client ID</label>
+        <div id="clientIdDisplay" style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center;">
+          <span>Default client configured ✓</span>
+          <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
+        </div>
+        <div id="clientIdChange" style="display: none; margin-top: 0.75rem;">
+          <input 
+            type="text" 
+            id="customClientId" 
+            placeholder="Enter custom OAuth2 Client ID"
+            style="margin-bottom: 0.5rem;"
+          >
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="saveCustomClientId()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Save</button>
+            <button class="btn btn-secondary" onclick="resetClientId()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Reset to Default</button>
+            <button class="btn btn-secondary" onclick="cancelClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Cancel</button>
+          </div>
+        </div>
       </div>
 
       <div class="config-group">
@@ -651,25 +659,64 @@
     let accessToken = null;
     let tokenClient = null;
     
-    let config = {
-      clientId: localStorage.getItem('clientId') || '',
-      spreadsheetId: localStorage.getItem('spreadsheetId') || ''
-    };
+    // Hardcoded configuration
+    const SPREADSHEET_ID = '10EDxzRhOdmu2ldvYHpoVSI0iuJoucy7OZFjM8sfgs80';
+    const DEFAULT_CLIENT_ID = '617399879817-55qv09jv9h3qqkthr7ic6m3beiirvp8u.apps.googleusercontent.com';
     
-    // Load saved config
-    if (config.clientId) document.getElementById('clientId').value = config.clientId;
-    if (config.spreadsheetId) document.getElementById('spreadsheetId').value = config.spreadsheetId;
+    let config = {
+      clientId: localStorage.getItem('customClientId') || DEFAULT_CLIENT_ID,
+      spreadsheetId: SPREADSHEET_ID
+    };
     
     updateAuthUI();
     
-    // Save config on change
-    ['clientId', 'spreadsheetId'].forEach(key => {
-      document.getElementById(key).addEventListener('input', (e) => {
-        config[key] = e.target.value.trim();
-        localStorage.setItem(key, config[key]);
-        updateAuthUI();
-      });
-    });
+    // Client ID management functions
+    function showClientIdChange() {
+      document.getElementById('clientIdChange').style.display = 'block';
+      const customId = localStorage.getItem('customClientId');
+      if (customId && customId !== DEFAULT_CLIENT_ID) {
+        document.getElementById('customClientId').value = customId;
+      }
+    }
+    
+    function cancelClientIdChange() {
+      document.getElementById('clientIdChange').style.display = 'none';
+      document.getElementById('customClientId').value = '';
+    }
+    
+    function saveCustomClientId() {
+      const newClientId = document.getElementById('customClientId').value.trim();
+      if (!newClientId) {
+        alert('Please enter a valid Client ID');
+        return;
+      }
+      localStorage.setItem('customClientId', newClientId);
+      config.clientId = newClientId;
+      document.getElementById('clientIdDisplay').innerHTML = `
+        <span>Custom client configured ✓</span>
+        <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
+      `;
+      cancelClientIdChange();
+      // Reinitialize auth with new client ID
+      tokenClient = null;
+      initializeGoogleAuth();
+      alert('Client ID updated! Please sign in again.');
+    }
+    
+    function resetClientId() {
+      localStorage.removeItem('customClientId');
+      config.clientId = DEFAULT_CLIENT_ID;
+      document.getElementById('clientIdDisplay').innerHTML = `
+        <span>Default client configured ✓</span>
+        <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
+      `;
+      cancelClientIdChange();
+      // Reinitialize auth with default client ID
+      tokenClient = null;
+      initializeGoogleAuth();
+      alert('Reset to default Client ID! Please sign in again.');
+    }
+    
     
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
@@ -712,10 +759,6 @@
       if (config.clientId && !tokenClient) initializeGoogleAuth();
     }
     
-    document.getElementById('signInBtn').addEventListener('click', () => {
-      if (tokenClient) tokenClient.requestAccessToken();
-    });
-    
     async function getUserInfo() {
       try {
         const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -729,6 +772,16 @@
         showAuthError('Failed to get user info');
       }
     }
+    
+    // Set up sign in button click handler
+    document.addEventListener('DOMContentLoaded', () => {
+      const signInBtn = document.getElementById('signInBtn');
+      if (signInBtn) {
+        signInBtn.addEventListener('click', () => {
+          if (tokenClient) tokenClient.requestAccessToken();
+        });
+      }
+    });
     
     function displayUserInfo(userInfo) {
       document.getElementById('authSection').innerHTML = `
