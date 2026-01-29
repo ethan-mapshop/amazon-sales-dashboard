@@ -2316,10 +2316,16 @@
     }
     
     function updateStats(type) {
-      const total = campaigns[type].length;
+      // Get all unique campaigns from BOTH ad spend data and mappings
+      const allCampaigns = new Set([
+        ...campaigns[type],
+        ...Object.keys(mappings[type])
+      ]);
       
-      // Count how many campaigns from ad spend have mappings
-      const mapped = campaigns[type].filter(campaign => {
+      const total = allCampaigns.size;
+      
+      // Count how many have valid mappings
+      const mapped = Array.from(allCampaigns).filter(campaign => {
         if (type === 'product') {
           const m = mappings[type][campaign];
           return m && (m.brand || m.skus.length > 0);
