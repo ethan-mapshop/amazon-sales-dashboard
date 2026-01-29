@@ -2427,50 +2427,129 @@
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
-        // Load transactions data
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`;
-        const response = await fetch(url, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
+        // Load all required data in parallel
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
         
-        if (!response.ok) throw new Error('Failed to load transactions');
+        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
         
-        const data = await response.json();
-        const rows = data.values || [];
+        const transactionsData = await transactionsRes.json();
+        const transactionsRows = transactionsData.values || [];
         
-        if (rows.length <= 1) {
+        if (transactionsRows.length <= 1) {
           container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">No transaction data available</div>';
           return;
         }
         
-        // Parse headers and data
-        const headers = rows[0].map(h => h.toLowerCase().trim());
+        // Parse transactions
+        const transactionsHeaders = transactionsRows[0].map(h => h.toLowerCase().trim());
         const transactions = [];
         
-        for (let i = 1; i < rows.length; i++) {
+        for (let i = 1; i < transactionsRows.length; i++) {
           const transaction = {};
-          headers.forEach((header, index) => {
-            transaction[header] = rows[i][index] || '';
+          transactionsHeaders.forEach((header, index) => {
+            transaction[header] = transactionsRows[i][index] || '';
           });
           transactions.push(transaction);
         }
         
-        // Filter by date range (assuming there's a date column)
-        // We'll need to find the date column - it might be settlement date or similar
-        const dateColumn = headers.find(h => h.includes('date')) || headers[0];
+        // Parse products (for costs)
+        const productCosts = {};
+        if (productsRes.ok) {
+          const productsData = await productsRes.json();
+          const productsRows = productsData.values || [];
+          if (productsRows.length > 1) {
+            const productsHeaders = productsRows[0].map(h => h.toLowerCase().trim());
+            const skuIndex = productsHeaders.indexOf('sku');
+            const costIndex = productsHeaders.indexOf('cost');
+            
+            for (let i = 1; i < productsRows.length; i++) {
+              const sku = productsRows[i][skuIndex];
+              const cost = parseFloat(productsRows[i][costIndex]) || 0;
+              if (sku) productCosts[sku] = cost;
+            }
+          }
+        }
+        
+        // Parse ad spend data
+        let totalAdSpend = 0;
+        
+        if (productAdsRes.ok) {
+          const productAdsData = await productAdsRes.json();
+          const productAdsRows = productAdsData.values || [];
+          if (productAdsRows.length > 1) {
+            const adsHeaders = productAdsRows[0].map(h => h.toLowerCase().trim());
+            const startDateIndex = adsHeaders.findIndex(h => h.includes('start date'));
+            const endDateIndex = adsHeaders.findIndex(h => h.includes('end date'));
+            const spendIndex = adsHeaders.indexOf('spend');
+            
+            for (let i = 1; i < productAdsRows.length; i++) {
+              const adStartDate = new Date(productAdsRows[i][startDateIndex]);
+              const adEndDate = new Date(productAdsRows[i][endDateIndex]);
+              const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
+              
+              // Check if ad period overlaps with report period
+              const reportStart = new Date(startDate);
+              const reportEnd = new Date(endDate);
+              
+              if (adStartDate <= reportEnd && adEndDate >= reportStart) {
+                totalAdSpend += spend;
+              }
+            }
+          }
+        }
+        
+        if (brandAdsRes.ok) {
+          const brandAdsData = await brandAdsRes.json();
+          const brandAdsRows = brandAdsData.values || [];
+          if (brandAdsRows.length > 1) {
+            const adsHeaders = brandAdsRows[0].map(h => h.toLowerCase().trim());
+            const startDateIndex = adsHeaders.findIndex(h => h.includes('start date'));
+            const endDateIndex = adsHeaders.findIndex(h => h.includes('end date'));
+            const spendIndex = adsHeaders.indexOf('spend');
+            
+            for (let i = 1; i < brandAdsRows.length; i++) {
+              const adStartDate = new Date(brandAdsRows[i][startDateIndex]);
+              const adEndDate = new Date(brandAdsRows[i][endDateIndex]);
+              const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
+              
+              // Check if ad period overlaps with report period
+              const reportStart = new Date(startDate);
+              const reportEnd = new Date(endDate);
+              
+              if (adStartDate <= reportEnd && adEndDate >= reportStart) {
+                totalAdSpend += spend;
+              }
+            }
+          }
+        }
+        
+        // Filter transactions by date range
+        const dateColumn = transactionsHeaders.find(h => h.includes('date')) || transactionsHeaders[0];
         
         const filtered = transactions.filter(t => {
           const transDate = t[dateColumn];
           if (!transDate) return false;
-          // Parse date - format might vary
           const tDate = new Date(transDate);
           const sDate = new Date(startDate);
           const eDate = new Date(endDate);
           return tDate >= sDate && tDate <= eDate;
         });
         
-        // Calculate financial statement
-        const statement = calculateFinancialStatement(filtered);
+        // Calculate financial statement with product costs and ad spend
+        const statement = calculateFinancialStatement(filtered, productCosts, totalAdSpend);
         
         // Render the report
         renderFinancialStatement(statement, startDate, endDate);
@@ -2481,7 +2560,7 @@
       }
     }
     
-    function calculateFinancialStatement(transactions) {
+    function calculateFinancialStatement(transactions, productCosts, totalAdSpend) {
       const statement = {
         income: {
           'FBM Product Sales': { debit: 0, credit: 0 },
@@ -2494,6 +2573,8 @@
           'Promotional Rebates': { debit: 0, credit: 0 }
         },
         expenses: {
+          'FBM Product Costs': { debit: 0, credit: 0 },
+          'FBA Product Costs': { debit: 0, credit: 0 },
           'FBM Selling Fees': { debit: 0, credit: 0 },
           'FBA Selling Fees': { debit: 0, credit: 0 },
           'Selling Fee Refunds': { debit: 0, credit: 0 },
@@ -2503,7 +2584,152 @@
           'Shipping Label Purchase': { debit: 0, credit: 0 },
           'Refund Admin Fees': { debit: 0, credit: 0 },
           'Adjustments': { debit: 0, credit: 0 },
-          'Service Fees': { debit: 0, credit: 0 }
+          'Service Fees': { debit: 0, credit: 0 },
+          'Ad Spend': { debit: 0, credit: 0 }
+        }
+      };
+      
+      transactions.forEach(t => {
+        const type = (t.type || '').toLowerCase();
+        const fulfillment = (t.fulfillment || '').toLowerCase();
+        const sku = t.sku || '';
+        const quantity = parseInt(t.quantity || 0);
+        const amount = parseFloat(t.total || 0);
+        
+        // Calculate product costs (quantity * cost from Products sheet)
+        if (sku && quantity && productCosts[sku]) {
+          const productCost = quantity * productCosts[sku];
+          
+          if (type.includes('order') && !type.includes('refund') && quantity > 0) {
+            if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+              statement.expenses['FBM Product Costs'].debit += productCost;
+            } else {
+              statement.expenses['FBA Product Costs'].debit += productCost;
+            }
+          }
+          
+          // Handle refunds (credit back the cost)
+          if (type.includes('refund') && quantity < 0) {
+            if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+              statement.expenses['FBM Product Costs'].credit += Math.abs(productCost);
+            } else {
+              statement.expenses['FBA Product Costs'].credit += Math.abs(productCost);
+            }
+          }
+        }
+        
+        // Map transaction types to statement categories
+        
+        // Income
+        if (type.includes('order') && !type.includes('refund')) {
+          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+            if (amount > 0) statement.income['FBM Product Sales'].credit += amount;
+            else statement.income['FBM Product Sales'].debit += Math.abs(amount);
+          } else {
+            if (amount > 0) statement.income['FBA Product Sales'].credit += amount;
+            else statement.income['FBA Product Sales'].debit += Math.abs(amount);
+          }
+        }
+        
+        if (type.includes('refund')) {
+          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+            if (amount > 0) statement.income['FBM Refunds'].credit += amount;
+            else statement.income['FBM Refunds'].debit += Math.abs(amount);
+          } else {
+            if (amount > 0) statement.income['FBA Refunds'].credit += amount;
+            else statement.income['FBA Refunds'].debit += Math.abs(amount);
+          }
+        }
+        
+        if (type.includes('inventory') && type.includes('credit')) {
+          if (amount > 0) statement.income['FBA Inventory Credit'].credit += amount;
+          else statement.income['FBA Inventory Credit'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('shipping') && !type.includes('fee')) {
+          if (amount > 0) statement.income['FBA Shipping Credits'].credit += amount;
+          else statement.income['FBA Shipping Credits'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('promotion') || type.includes('promotional')) {
+          if (amount > 0) statement.income['Promotional Rebates'].credit += amount;
+          else statement.income['Promotional Rebates'].debit += Math.abs(amount);
+        }
+        
+        // Expenses
+        if (type.includes('selling') && type.includes('fee')) {
+          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+            if (amount > 0) statement.expenses['FBM Selling Fees'].credit += amount;
+            else statement.expenses['FBM Selling Fees'].debit += Math.abs(amount);
+          } else {
+            if (amount > 0) statement.expenses['FBA Selling Fees'].credit += amount;
+            else statement.expenses['FBA Selling Fees'].debit += Math.abs(amount);
+          }
+        }
+        
+        if (type.includes('fba') && type.includes('fee') && !type.includes('selling')) {
+          if (amount > 0) statement.expenses['FBA Transaction Fees'].credit += amount;
+          else statement.expenses['FBA Transaction Fees'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('inbound') || type.includes('inventory fee')) {
+          if (amount > 0) statement.expenses['FBA Inv & Inbound Fees'].credit += amount;
+          else statement.expenses['FBA Inv & Inbound Fees'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('shipping') && type.includes('label')) {
+          if (amount > 0) statement.expenses['Shipping Label Purchase'].credit += amount;
+          else statement.expenses['Shipping Label Purchase'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('admin') && type.includes('fee')) {
+          if (amount > 0) statement.expenses['Refund Admin Fees'].credit += amount;
+          else statement.expenses['Refund Admin Fees'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('adjustment')) {
+          if (amount > 0) statement.expenses['Adjustments'].credit += amount;
+          else statement.expenses['Adjustments'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('service') && type.includes('fee')) {
+          if (amount > 0) statement.expenses['Service Fees'].credit += amount;
+          else statement.expenses['Service Fees'].debit += Math.abs(amount);
+        }
+      });
+      
+      // Add ad spend
+      if (totalAdSpend > 0) {
+        statement.expenses['Ad Spend'].debit = totalAdSpend;
+      }
+      
+      return statement;
+    }
+      const statement = {
+        income: {
+          'FBM Product Sales': { debit: 0, credit: 0 },
+          'FBM Refunds': { debit: 0, credit: 0 },
+          'FBA Product Sales': { debit: 0, credit: 0 },
+          'FBA Refunds': { debit: 0, credit: 0 },
+          'FBA Inventory Credit': { debit: 0, credit: 0 },
+          'FBA Shipping Credits': { debit: 0, credit: 0 },
+          'Shipping Credit Refunds': { debit: 0, credit: 0 },
+          'Promotional Rebates': { debit: 0, credit: 0 }
+        },
+        expenses: {
+          'FBM Product Costs': { debit: 0, credit: 0 },
+          'FBA Product Costs': { debit: 0, credit: 0 },
+          'FBM Selling Fees': { debit: 0, credit: 0 },
+          'FBA Selling Fees': { debit: 0, credit: 0 },
+          'Selling Fee Refunds': { debit: 0, credit: 0 },
+          'FBA Transaction Fees': { debit: 0, credit: 0 },
+          'FBA Transaction Fee Refunds': { debit: 0, credit: 0 },
+          'FBA Inv & Inbound Fees': { debit: 0, credit: 0 },
+          'Shipping Label Purchase': { debit: 0, credit: 0 },
+          'Refund Admin Fees': { debit: 0, credit: 0 },
+          'Adjustments': { debit: 0, credit: 0 },
+          'Service Fees': { debit: 0, credit: 0 },
+          'Ad Spend': { debit: 0, credit: 0 }
         }
       };
       
