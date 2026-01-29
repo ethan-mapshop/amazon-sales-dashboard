@@ -794,6 +794,7 @@
         </div>
         <div class="nav-buttons">
           <button class="nav-btn active" onclick="showPage('upload')">Data Upload</button>
+          <button class="nav-btn" onclick="showPage('overview')">Overview</button>
           <button class="nav-btn" onclick="showPage('mapping')">Campaign Mapping</button>
         </div>
       </div>
@@ -963,6 +964,36 @@
             <button class="btn btn-primary process-btn" data-type="brandadmapping" disabled>Process & Upload</button>
           </div>
           <div class="status-message" data-type="brandadmapping"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OVERVIEW PAGE -->
+    <div id="overview-page" class="page">
+      <div class="card">
+        <h2 class="section-title">Financial Overview</h2>
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+          <div style="display: flex; gap: 1rem;">
+            <div>
+              <label style="display: inline-block; margin-right: 0.5rem;">Start Date:</label>
+              <input type="date" id="overview-start-date" style="width: 150px;">
+            </div>
+            <div>
+              <label style="display: inline-block; margin-right: 0.5rem;">End Date:</label>
+              <input type="date" id="overview-end-date" style="width: 150px;">
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="loadOverviewData()" style="padding: 0.625rem 1.5rem;">
+            Generate Report
+          </button>
+        </div>
+
+        <div id="overview-content">
+          <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+            <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+            <div style="font-size: 1.125rem;">Select a date range and click Generate Report</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1154,9 +1185,12 @@
       
       document.getElementById(`${pageName}-page`).classList.add('active');
       
-      // Update active button
+      // Update active button by matching page name
       document.querySelectorAll('.nav-btn').forEach(btn => {
-        if (btn.textContent.toLowerCase().includes(pageName === 'upload' ? 'upload' : 'mapping')) {
+        const btnText = btn.textContent.toLowerCase();
+        if ((pageName === 'upload' && btnText.includes('upload')) ||
+            (pageName === 'overview' && btnText.includes('overview')) ||
+            (pageName === 'mapping' && btnText.includes('mapping'))) {
           btn.classList.add('active');
         }
       });
@@ -2373,6 +2407,317 @@
         renderBrandCampaigns(document.getElementById('brand-search').value);
       });
     });
+    
+    // OVERVIEW PAGE
+    async function loadOverviewData() {
+      if (!accessToken) {
+        alert('Please sign in first');
+        return;
+      }
+      
+      const startDate = document.getElementById('overview-start-date').value;
+      const endDate = document.getElementById('overview-end-date').value;
+      
+      if (!startDate || !endDate) {
+        alert('Please select both start and end dates');
+        return;
+      }
+      
+      const container = document.getElementById('overview-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        // Load transactions data
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`;
+        const response = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!response.ok) throw new Error('Failed to load transactions');
+        
+        const data = await response.json();
+        const rows = data.values || [];
+        
+        if (rows.length <= 1) {
+          container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">No transaction data available</div>';
+          return;
+        }
+        
+        // Parse headers and data
+        const headers = rows[0].map(h => h.toLowerCase().trim());
+        const transactions = [];
+        
+        for (let i = 1; i < rows.length; i++) {
+          const transaction = {};
+          headers.forEach((header, index) => {
+            transaction[header] = rows[i][index] || '';
+          });
+          transactions.push(transaction);
+        }
+        
+        // Filter by date range (assuming there's a date column)
+        // We'll need to find the date column - it might be settlement date or similar
+        const dateColumn = headers.find(h => h.includes('date')) || headers[0];
+        
+        const filtered = transactions.filter(t => {
+          const transDate = t[dateColumn];
+          if (!transDate) return false;
+          // Parse date - format might vary
+          const tDate = new Date(transDate);
+          const sDate = new Date(startDate);
+          const eDate = new Date(endDate);
+          return tDate >= sDate && tDate <= eDate;
+        });
+        
+        // Calculate financial statement
+        const statement = calculateFinancialStatement(filtered);
+        
+        // Render the report
+        renderFinancialStatement(statement, startDate, endDate);
+        
+      } catch (error) {
+        console.error('Error loading overview:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    function calculateFinancialStatement(transactions) {
+      const statement = {
+        income: {
+          'FBM Product Sales': { debit: 0, credit: 0 },
+          'FBM Refunds': { debit: 0, credit: 0 },
+          'FBA Product Sales': { debit: 0, credit: 0 },
+          'FBA Refunds': { debit: 0, credit: 0 },
+          'FBA Inventory Credit': { debit: 0, credit: 0 },
+          'FBA Shipping Credits': { debit: 0, credit: 0 },
+          'Shipping Credit Refunds': { debit: 0, credit: 0 },
+          'Promotional Rebates': { debit: 0, credit: 0 }
+        },
+        expenses: {
+          'FBM Selling Fees': { debit: 0, credit: 0 },
+          'FBA Selling Fees': { debit: 0, credit: 0 },
+          'Selling Fee Refunds': { debit: 0, credit: 0 },
+          'FBA Transaction Fees': { debit: 0, credit: 0 },
+          'FBA Transaction Fee Refunds': { debit: 0, credit: 0 },
+          'FBA Inv & Inbound Fees': { debit: 0, credit: 0 },
+          'Shipping Label Purchase': { debit: 0, credit: 0 },
+          'Refund Admin Fees': { debit: 0, credit: 0 },
+          'Adjustments': { debit: 0, credit: 0 },
+          'Service Fees': { debit: 0, credit: 0 }
+        }
+      };
+      
+      transactions.forEach(t => {
+        const type = (t.type || '').toLowerCase();
+        const fulfillment = (t.fulfillment || '').toLowerCase();
+        const amount = parseFloat(t.total || 0);
+        
+        // Map transaction types to statement categories
+        // This is a simplified mapping - you'll need to adjust based on actual data
+        
+        // Income
+        if (type.includes('order') && !type.includes('refund')) {
+          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+            if (amount > 0) statement.income['FBM Product Sales'].credit += amount;
+            else statement.income['FBM Product Sales'].debit += Math.abs(amount);
+          } else {
+            if (amount > 0) statement.income['FBA Product Sales'].credit += amount;
+            else statement.income['FBA Product Sales'].debit += Math.abs(amount);
+          }
+        }
+        
+        if (type.includes('refund')) {
+          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+            if (amount > 0) statement.income['FBM Refunds'].credit += amount;
+            else statement.income['FBM Refunds'].debit += Math.abs(amount);
+          } else {
+            if (amount > 0) statement.income['FBA Refunds'].credit += amount;
+            else statement.income['FBA Refunds'].debit += Math.abs(amount);
+          }
+        }
+        
+        if (type.includes('inventory') && type.includes('credit')) {
+          if (amount > 0) statement.income['FBA Inventory Credit'].credit += amount;
+          else statement.income['FBA Inventory Credit'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('shipping') && !type.includes('fee')) {
+          if (amount > 0) statement.income['FBA Shipping Credits'].credit += amount;
+          else statement.income['FBA Shipping Credits'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('promotion') || type.includes('promotional')) {
+          if (amount > 0) statement.income['Promotional Rebates'].credit += amount;
+          else statement.income['Promotional Rebates'].debit += Math.abs(amount);
+        }
+        
+        // Expenses
+        if (type.includes('selling') && type.includes('fee')) {
+          if (fulfillment.includes('fbm') || fulfillment.includes('mfn')) {
+            if (amount > 0) statement.expenses['FBM Selling Fees'].credit += amount;
+            else statement.expenses['FBM Selling Fees'].debit += Math.abs(amount);
+          } else {
+            if (amount > 0) statement.expenses['FBA Selling Fees'].credit += amount;
+            else statement.expenses['FBA Selling Fees'].debit += Math.abs(amount);
+          }
+        }
+        
+        if (type.includes('fba') && type.includes('fee') && !type.includes('selling')) {
+          if (amount > 0) statement.expenses['FBA Transaction Fees'].credit += amount;
+          else statement.expenses['FBA Transaction Fees'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('inbound') || type.includes('inventory fee')) {
+          if (amount > 0) statement.expenses['FBA Inv & Inbound Fees'].credit += amount;
+          else statement.expenses['FBA Inv & Inbound Fees'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('shipping') && type.includes('label')) {
+          if (amount > 0) statement.expenses['Shipping Label Purchase'].credit += amount;
+          else statement.expenses['Shipping Label Purchase'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('admin') && type.includes('fee')) {
+          if (amount > 0) statement.expenses['Refund Admin Fees'].credit += amount;
+          else statement.expenses['Refund Admin Fees'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('adjustment')) {
+          if (amount > 0) statement.expenses['Adjustments'].credit += amount;
+          else statement.expenses['Adjustments'].debit += Math.abs(amount);
+        }
+        
+        if (type.includes('service') && type.includes('fee')) {
+          if (amount > 0) statement.expenses['Service Fees'].credit += amount;
+          else statement.expenses['Service Fees'].debit += Math.abs(amount);
+        }
+      });
+      
+      return statement;
+    }
+    
+    function renderFinancialStatement(statement, startDate, endDate) {
+      const container = document.getElementById('overview-content');
+      
+      // Calculate totals
+      let incomeTotalDebit = 0, incomeTotalCredit = 0;
+      Object.values(statement.income).forEach(item => {
+        incomeTotalDebit += item.debit;
+        incomeTotalCredit += item.credit;
+      });
+      
+      let expenseTotalDebit = 0, expenseTotalCredit = 0;
+      Object.values(statement.expenses).forEach(item => {
+        expenseTotalDebit += item.debit;
+        expenseTotalCredit += item.credit;
+      });
+      
+      const netIncome = incomeTotalCredit - incomeTotalDebit;
+      const netExpenses = expenseTotalDebit - expenseTotalCredit;
+      const netProfit = netIncome - netExpenses;
+      
+      let html = `
+        <div style="margin-bottom: 2rem;">
+          <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+            Report Period: ${new Date(startDate).toLocaleDateString()} - ${new Date(endDate).toLocaleDateString()}
+          </div>
+          <div style="display: flex; gap: 2rem; margin-top: 1rem;">
+            <div style="padding: 1rem; background: var(--bg-secondary); border-radius: 6px; flex: 1;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Net Income</div>
+              <div style="font-size: 1.75rem; font-weight: 700; color: var(--success);">$${netIncome.toFixed(2)}</div>
+            </div>
+            <div style="padding: 1rem; background: var(--bg-secondary); border-radius: 6px; flex: 1;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Net Expenses</div>
+              <div style="font-size: 1.75rem; font-weight: 700; color: var(--error);">$${netExpenses.toFixed(2)}</div>
+            </div>
+            <div style="padding: 1rem; background: var(--bg-secondary); border-radius: 6px; flex: 1;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Net Profit</div>
+              <div style="font-size: 1.75rem; font-weight: 700; color: ${netProfit >= 0 ? 'var(--success)' : 'var(--error)'};">$${netProfit.toFixed(2)}</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+          <!-- Income Section -->
+          <div>
+            <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--success);">Income</h3>
+            <table style="width: 100%;">
+              <thead>
+                <tr>
+                  <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary);">Category</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Debit</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Credit</th>
+                </tr>
+              </thead>
+              <tbody>
+      `;
+      
+      Object.entries(statement.income).forEach(([category, amounts]) => {
+        html += `
+          <tr>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+              ${amounts.debit > 0 ? '$' + amounts.debit.toFixed(2) : '-'}
+            </td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+              ${amounts.credit > 0 ? '$' + amounts.credit.toFixed(2) : '-'}
+            </td>
+          </tr>
+        `;
+      });
+      
+      html += `
+                <tr style="font-weight: 700; background: var(--bg-secondary);">
+                  <td style="padding: 0.75rem;">Totals</td>
+                  <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${incomeTotalDebit.toFixed(2)}</td>
+                  <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${incomeTotalCredit.toFixed(2)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Expenses Section -->
+          <div>
+            <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--error);">Expenses</h3>
+            <table style="width: 100%;">
+              <thead>
+                <tr>
+                  <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary);">Category</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Debit</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Credit</th>
+                </tr>
+              </thead>
+              <tbody>
+      `;
+      
+      Object.entries(statement.expenses).forEach(([category, amounts]) => {
+        html += `
+          <tr>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+              ${amounts.debit > 0 ? '$' + amounts.debit.toFixed(2) : '-'}
+            </td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+              ${amounts.credit > 0 ? '$' + amounts.credit.toFixed(2) : '-'}
+            </td>
+          </tr>
+        `;
+      });
+      
+      html += `
+                <tr style="font-weight: 700; background: var(--bg-secondary);">
+                  <td style="padding: 0.75rem;">Totals</td>
+                  <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${expenseTotalDebit.toFixed(2)}</td>
+                  <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${expenseTotalCredit.toFixed(2)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+      
+      container.innerHTML = html;
+    }
   </script>
 </body>
 </html>
