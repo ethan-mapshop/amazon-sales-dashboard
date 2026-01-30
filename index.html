@@ -1410,13 +1410,27 @@
     // Date conversion utilities
     function parseAmazonDate(dateStr) {
       // Parse Amazon's "Dec 1, 2025 12:07:15 AM PST" format to ISO date
+      // Extract ONLY the date portion, ignore time and timezone completely
       if (!dateStr) return null;
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) return null;
       
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      // Use regex to extract just the date part: "Dec 1, 2025"
+      const dateMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+      if (!dateMatch) return null;
+      
+      const monthStr = dateMatch[1];
+      const day = dateMatch[2].padStart(2, '0');
+      const year = dateMatch[3];
+      
+      // Convert month name to number
+      const months = {
+        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+        'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+        'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+      };
+      
+      const month = months[monthStr.toLowerCase().substring(0, 3)];
+      if (!month) return null;
+      
       return `${year}-${month}-${day}`;
     }
     
