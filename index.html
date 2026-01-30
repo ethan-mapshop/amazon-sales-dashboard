@@ -1529,20 +1529,19 @@
           uploadedData[type] = jsonData.map(row => {
             const normalized = {};
             Object.keys(row).forEach(key => {
-              const lowerKey = key.toLowerCase().trim();
               let value = row[key];
               
               // Convert dates based on report type
-              if (type === 'transactions' && lowerKey === 'date/time') {
+              if (type === 'transactions' && key === 'date/time') {
                 value = parseAmazonDate(value) || value;
-              } else if (type === 'shipping' && lowerKey === 'ship date') {
+              } else if (type === 'shipping' && key === 'Ship Date') {
                 value = parseAmazonDate(value) || value;
               } else if ((type === 'productads' || type === 'brandads') && 
-                        (lowerKey === 'start date' || lowerKey === 'end date')) {
+                        (key === 'Start Date' || key === 'End Date')) {
                 value = excelSerialToISODate(value) || value;
               }
               
-              normalized[lowerKey] = value;
+              normalized[key] = value;
             });
             return normalized;
           });
@@ -1638,7 +1637,7 @@
         
         if (existingRows.length === 0) throw new Error(`${sheetName} sheet appears empty`);
         
-        const headers = existingRows[0].map(h => h.toLowerCase().trim());
+        const headers = existingRows[0];
         
         let addedCount = 0;
         let updatedCount = 0;
@@ -1862,7 +1861,7 @@
       const rows = data.values || [];
       
       if (rows.length > 1) {
-        const headers = rows[0].map(h => h.toLowerCase().trim());
+        const headers = rows[0];
         const skuIndex = headers.indexOf('sku');
         const brandIndex = headers.indexOf('brand');
         const nameIndex = headers.indexOf('name');
@@ -1899,8 +1898,8 @@
       const rows = data.values || [];
       
       if (rows.length > 1) {
-        const headers = rows[0].map(h => h.toLowerCase().trim());
-        const campaignIndex = headers.findIndex(h => h.includes('campaign name'));
+        const headers = rows[0];
+        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
         
         const campaignSet = new Set();
         for (let i = 1; i < rows.length; i++) {
@@ -1924,8 +1923,8 @@
       const rows = data.values || [];
       
       if (rows.length > 1) {
-        const headers = rows[0].map(h => h.toLowerCase().trim());
-        const campaignIndex = headers.findIndex(h => h.includes('campaign name'));
+        const headers = rows[0];
+        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
         
         const campaignSet = new Set();
         for (let i = 1; i < rows.length; i++) {
@@ -1954,10 +1953,10 @@
       mappings.product = {};
       
       if (rows.length > 1) {
-        const headers = rows[0].map(h => h.toLowerCase().trim());
-        const campaignIndex = headers.findIndex(h => h.includes('campaign name'));
-        const brandIndex = headers.indexOf('brand');
-        const skuIndex = headers.indexOf('sku');
+        const headers = rows[0];
+        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
+        const brandIndex = headers.indexOf('Brand');
+        const skuIndex = headers.indexOf('SKU');
         
         for (let i = 1; i < rows.length; i++) {
           const campaign = rows[i][campaignIndex];
@@ -1993,9 +1992,9 @@
       mappings.brand = {};
       
       if (rows.length > 1) {
-        const headers = rows[0].map(h => h.toLowerCase().trim());
-        const campaignIndex = headers.findIndex(h => h.includes('campaign name'));
-        const brandIndex = headers.indexOf('brand');
+        const headers = rows[0];
+        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
+        const brandIndex = headers.indexOf('Brand');
         
         for (let i = 1; i < rows.length; i++) {
           const campaign = rows[i][campaignIndex];
@@ -2552,7 +2551,7 @@
         }
         
         // Parse transactions
-        const transactionsHeaders = transactionsRows[0].map(h => h.toLowerCase().trim());
+        const transactionsHeaders = transactionsRows[0];
         const transactions = [];
         
         for (let i = 1; i < transactionsRows.length; i++) {
@@ -2569,7 +2568,7 @@
           const productsData = await productsRes.json();
           const productsRows = productsData.values || [];
           if (productsRows.length > 1) {
-            const productsHeaders = productsRows[0].map(h => h.toLowerCase().trim());
+            const productsHeaders = productsRows[0];
             const skuIndex = productsHeaders.indexOf('sku');
             const costIndex = productsHeaders.indexOf('cost');
             
@@ -2588,10 +2587,10 @@
           const productAdsData = await productAdsRes.json();
           const productAdsRows = productAdsData.values || [];
           if (productAdsRows.length > 1) {
-            const adsHeaders = productAdsRows[0].map(h => h.toLowerCase().trim());
-            const startDateIndex = adsHeaders.findIndex(h => h.includes('start date'));
-            const endDateIndex = adsHeaders.findIndex(h => h.includes('end date'));
-            const spendIndex = adsHeaders.indexOf('spend');
+            const adsHeaders = productAdsRows[0];
+            const startDateIndex = adsHeaders.findIndex(h => h.includes('Start Date'));
+            const endDateIndex = adsHeaders.findIndex(h => h.includes('End Date'));
+            const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < productAdsRows.length; i++) {
               const adStartDate = new Date(productAdsRows[i][startDateIndex]);
@@ -2613,10 +2612,10 @@
           const brandAdsData = await brandAdsRes.json();
           const brandAdsRows = brandAdsData.values || [];
           if (brandAdsRows.length > 1) {
-            const adsHeaders = brandAdsRows[0].map(h => h.toLowerCase().trim());
-            const startDateIndex = adsHeaders.findIndex(h => h.includes('start date'));
-            const endDateIndex = adsHeaders.findIndex(h => h.includes('end date'));
-            const spendIndex = adsHeaders.indexOf('spend');
+            const adsHeaders = brandAdsRows[0];
+            const startDateIndex = adsHeaders.findIndex(h => h.includes('Start Date'));
+            const endDateIndex = adsHeaders.findIndex(h => h.includes('End Date'));
+            const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < brandAdsRows.length; i++) {
               const adStartDate = new Date(brandAdsRows[i][startDateIndex]);
@@ -2641,9 +2640,9 @@
           const shippingData = await shippingRes.json();
           const shippingRows = shippingData.values || [];
           if (shippingRows.length > 1) {
-            const shippingHeaders = shippingRows[0].map(h => h.toLowerCase().trim());
-            const shipDateIndex = shippingHeaders.findIndex(h => h.includes('ship date'));
-            const shippingCostIndex = shippingHeaders.indexOf('shipping cost');
+            const shippingHeaders = shippingRows[0];
+            const shipDateIndex = shippingHeaders.findIndex(h => h.includes('Ship Date'));
+            const shippingCostIndex = shippingHeaders.indexOf('Shipping Cost');
             
             for (let i = 1; i < shippingRows.length; i++) {
               const shipDate = new Date(shippingRows[i][shipDateIndex]);
