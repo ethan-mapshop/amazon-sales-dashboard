@@ -1436,16 +1436,27 @@
     
     function excelSerialToISODate(serial) {
       // Convert Excel serial number to ISO date (YYYY-MM-DD)
+      // Avoiding timezone issues by calculating directly
       if (!serial || isNaN(serial)) return null;
       
-      // Excel's epoch is December 30, 1899
-      const excelEpoch = new Date(1899, 11, 30);
-      const millisecondsPerDay = 24 * 60 * 60 * 1000;
-      const date = new Date(excelEpoch.getTime() + serial * millisecondsPerDay);
+      // Excel's epoch is December 30, 1899 (serial 0)
+      // Calculate days since epoch
+      const days = Math.floor(serial);
       
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      // Excel bug: treats 1900 as a leap year (it wasn't)
+      // So dates after Feb 28, 1900 need adjustment
+      const adjustedDays = days > 59 ? days - 1 : days;
+      
+      // Calculate from epoch using UTC to avoid timezone shifts
+      const epochDate = Date.UTC(1899, 11, 30); // Dec 30, 1899
+      const millisecondsPerDay = 24 * 60 * 60 * 1000;
+      const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+      const date = new Date(targetTime);
+      
+      // Use UTC methods to extract date parts (no timezone conversion)
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(date.getUTCDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     }
     
