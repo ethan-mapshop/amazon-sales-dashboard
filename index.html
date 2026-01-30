@@ -1409,29 +1409,40 @@
     
     // Date conversion utilities
     function parseAmazonDate(dateStr) {
-      // Parse Amazon's "Dec 1, 2025 12:07:15 AM PST" format to ISO date
-      // Extract ONLY the date portion, ignore time and timezone completely
+      // Parse Amazon date formats to ISO date
+      // Handles: "Dec 1, 2025 12:07:15 AM PST" and "12/1/2025 12:00:00 AM"
       if (!dateStr) return null;
       
-      // Use regex to extract just the date part: "Dec 1, 2025"
-      const dateMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
-      if (!dateMatch) return null;
+      // Try numeric format first: "12/1/2025 12:00:00 AM"
+      const numericMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (numericMatch) {
+        const month = numericMatch[1].padStart(2, '0');
+        const day = numericMatch[2].padStart(2, '0');
+        const year = numericMatch[3];
+        return `${year}-${month}-${day}`;
+      }
       
-      const monthStr = dateMatch[1];
-      const day = dateMatch[2].padStart(2, '0');
-      const year = dateMatch[3];
+      // Try text format: "Dec 1, 2025 12:07:15 AM PST"
+      const textMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+      if (textMatch) {
+        const monthStr = textMatch[1];
+        const day = textMatch[2].padStart(2, '0');
+        const year = textMatch[3];
+        
+        // Convert month name to number
+        const months = {
+          'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+          'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+          'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+        };
+        
+        const month = months[monthStr.toLowerCase().substring(0, 3)];
+        if (!month) return null;
+        
+        return `${year}-${month}-${day}`;
+      }
       
-      // Convert month name to number
-      const months = {
-        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
-        'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
-        'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
-      };
-      
-      const month = months[monthStr.toLowerCase().substring(0, 3)];
-      if (!month) return null;
-      
-      return `${year}-${month}-${day}`;
+      return null;
     }
     
     function excelSerialToISODate(serial) {
