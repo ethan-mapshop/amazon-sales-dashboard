@@ -1407,6 +1407,51 @@
       });
     });
     
+    // Date conversion utilities
+    function parseAmazonDate(dateStr) {
+      // Parse Amazon's "Dec 1, 2025 12:07:15 AM PST" format to ISO date
+      if (!dateStr) return null;
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return null;
+      
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    
+    function excelSerialToISODate(serial) {
+      // Convert Excel serial number to ISO date (YYYY-MM-DD)
+      if (!serial || isNaN(serial)) return null;
+      
+      // Excel's epoch is December 30, 1899
+      const excelEpoch = new Date(1899, 11, 30);
+      const millisecondsPerDay = 24 * 60 * 60 * 1000;
+      const date = new Date(excelEpoch.getTime() + serial * millisecondsPerDay);
+      
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    
+    function detectAndSkipMetadata(jsonData) {
+      // Check if first row contains Amazon metadata
+      if (jsonData.length === 0) return { data: jsonData, skipped: 0 };
+      
+      const firstRow = jsonData[0];
+      const firstValue = Object.values(firstRow)[0];
+      
+      // If first value contains metadata text, this file has the 7-row header
+      if (firstValue && typeof firstValue === 'string' && 
+          firstValue.includes('Includes Amazon Marketplace')) {
+        // Skip first 7 rows and re-read
+        return { needsReparse: true, skipRows: 7 };
+      }
+      
+      return { data: jsonData, skipped: 0 };
+    }
+    
     function handleFile(file, type) {
       const reader = new FileReader();
       const sheetConfig = SHEET_CONFIGS[type];
@@ -1418,14 +1463,25 @@
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
           
           let jsonData;
+          let skipRows = sheetConfig.skipRows;
           
-          if (sheetConfig.skipRows > 0) {
+          // First pass - check for metadata
+          let initialData = XLSX.utils.sheet_to_json(firstSheet);
+          const metadataCheck = detectAndSkipMetadata(initialData);
+          
+          if (metadataCheck.needsReparse) {
+            // File has metadata, skip those rows
+            skipRows = metadataCheck.skipRows;
+          }
+          
+          // Parse with correct skip
+          if (skipRows > 0) {
             const range = XLSX.utils.decode_range(firstSheet['!ref']);
-            range.s.r = sheetConfig.skipRows;
+            range.s.r = skipRows;
             const newRange = XLSX.utils.encode_range(range);
             jsonData = XLSX.utils.sheet_to_json(firstSheet, { range: newRange });
           } else {
-            jsonData = XLSX.utils.sheet_to_json(firstSheet);
+            jsonData = initialData;
           }
           
           if (jsonData.length === 0) {
@@ -1444,11 +1500,24 @@
             return;
           }
           
-          // Normalize
+          // Normalize and convert dates
           uploadedData[type] = jsonData.map(row => {
             const normalized = {};
             Object.keys(row).forEach(key => {
-              normalized[key.toLowerCase().trim()] = row[key];
+              const lowerKey = key.toLowerCase().trim();
+              let value = row[key];
+              
+              // Convert dates based on report type
+              if (type === 'transactions' && lowerKey === 'date/time') {
+                value = parseAmazonDate(value) || value;
+              } else if (type === 'shipping' && lowerKey === 'ship date') {
+                value = parseAmazonDate(value) || value;
+              } else if ((type === 'productads' || type === 'brandads') && 
+                        (lowerKey === 'start date' || lowerKey === 'end date')) {
+                value = excelSerialToISODate(value) || value;
+              }
+              
+              normalized[lowerKey] = value;
             });
             return normalized;
           });
@@ -1460,6 +1529,7 @@
             <div class="file-stats">
               <span>Size: ${formatBytes(file.size)}</span>
               <span>Rows: ${uploadedData[type].length}</span>
+              ${skipRows > 0 ? `<span>Skipped: ${skipRows} metadata rows</span>` : ''}
             </div>
           `;
           fileInfo.classList.add('active');
@@ -2572,17 +2642,15 @@
           const transDate = t[dateColumn];
           if (!transDate) return false;
           
-          // Parse the transaction date and normalize to date-only (ignore time)
-          const tDate = new Date(transDate);
-          if (isNaN(tDate.getTime())) return false; // Invalid date
+          // Dates are now in ISO format (YYYY-MM-DD), can compare as strings
+          // But to be safe, convert to Date objects for proper comparison
+          const tDate = new Date(transDate + 'T00:00:00');
+          if (isNaN(tDate.getTime())) return false;
           
-          // Normalize all dates to midnight local time for comparison
-          const transDateOnly = new Date(tDate.getFullYear(), tDate.getMonth(), tDate.getDate());
-          const sDate = new Date(startDate + 'T00:00:00'); // Start of day
-          const eDate = new Date(endDate + 'T23:59:59');   // End of day
+          const sDate = new Date(startDate + 'T00:00:00');
+          const eDate = new Date(endDate + 'T23:59:59');
           
-          return transDateOnly >= new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate()) && 
-                 transDateOnly <= new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
+          return tDate >= sDate && tDate <= eDate;
         });
         
         // Calculate financial statement with product costs, ad spend, and shipping costs
