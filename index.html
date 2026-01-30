@@ -1122,36 +1122,36 @@
       },
       shipping: {
         sheetName: 'ShippingCosts',
-        uniqueKey: 'order #',
-        requiredColumns: ['order #'],
+        uniqueKey: 'Order #',
+        requiredColumns: ['Order #'],
         skipRows: 0,
         allowUpdates: false
       },
       productads: {
         sheetName: 'ProductAdSpend',
         uniqueKey: null,
-        requiredColumns: ['campaign name'],
+        requiredColumns: ['Campaign Name'],
         skipRows: 0,
         allowUpdates: false
       },
       brandads: {
         sheetName: 'BrandAdSpend',
         uniqueKey: null,
-        requiredColumns: ['campaign name'],
+        requiredColumns: ['Campaign Name'],
         skipRows: 0,
         allowUpdates: false
       },
       productadmapping: {
         sheetName: 'ProductAdMapping',
         uniqueKey: null,
-        requiredColumns: ['campaign name'],
+        requiredColumns: ['Campaign Name'],
         skipRows: 0,
         allowUpdates: false
       },
       brandadmapping: {
         sheetName: 'BrandAdMapping',
         uniqueKey: null,
-        requiredColumns: ['campaign name'],
+        requiredColumns: ['Campaign Name'],
         skipRows: 0,
         allowUpdates: false
       }
@@ -1515,9 +1515,9 @@
           }
           
           // Validate columns
-          const fileCols = Object.keys(jsonData[0]).map(k => k.toLowerCase().trim());
+          const fileCols = Object.keys(jsonData[0]);
           const missingCols = sheetConfig.requiredColumns.filter(col => 
-            !fileCols.some(fc => fc.includes(col.toLowerCase()))
+            !fileCols.includes(col)
           );
           
           if (missingCols.length > 0) {
@@ -1536,8 +1536,7 @@
                 value = parseAmazonDate(value) || value;
               } else if (type === 'shipping' && key === 'Ship Date') {
                 value = parseAmazonDate(value) || value;
-              } else if ((type === 'productads' || type === 'brandads') && 
-                        (key === 'Start Date' || key === 'End Date')) {
+              } else if ((type === 'productads' || type === 'brandads') && key === 'Date') {
                 value = excelSerialToISODate(value) || value;
               }
               
@@ -1899,7 +1898,7 @@
       
       if (rows.length > 1) {
         const headers = rows[0];
-        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
+        const campaignIndex = headers.indexOf('Campaign Name');
         
         const campaignSet = new Set();
         for (let i = 1; i < rows.length; i++) {
@@ -1924,7 +1923,7 @@
       
       if (rows.length > 1) {
         const headers = rows[0];
-        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
+        const campaignIndex = headers.indexOf('Campaign Name');
         
         const campaignSet = new Set();
         for (let i = 1; i < rows.length; i++) {
@@ -1954,7 +1953,7 @@
       
       if (rows.length > 1) {
         const headers = rows[0];
-        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
+        const campaignIndex = headers.indexOf('Campaign Name');
         const brandIndex = headers.indexOf('Brand');
         const skuIndex = headers.indexOf('SKU');
         
@@ -1993,7 +1992,7 @@
       
       if (rows.length > 1) {
         const headers = rows[0];
-        const campaignIndex = headers.findIndex(h => h.includes('Campaign Name'));
+        const campaignIndex = headers.indexOf('Campaign Name');
         const brandIndex = headers.indexOf('Brand');
         
         for (let i = 1; i < rows.length; i++) {
@@ -2588,20 +2587,18 @@
           const productAdsRows = productAdsData.values || [];
           if (productAdsRows.length > 1) {
             const adsHeaders = productAdsRows[0];
-            const startDateIndex = adsHeaders.findIndex(h => h.includes('Start Date'));
-            const endDateIndex = adsHeaders.findIndex(h => h.includes('End Date'));
+            const dateIndex = adsHeaders.indexOf('Date');
             const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < productAdsRows.length; i++) {
-              const adStartDate = new Date(productAdsRows[i][startDateIndex]);
-              const adEndDate = new Date(productAdsRows[i][endDateIndex]);
+              const adDate = new Date(productAdsRows[i][dateIndex]);
               const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
               
-              // Check if ad period overlaps with report period
+              // Check if ad date is within report period
               const reportStart = new Date(startDate);
               const reportEnd = new Date(endDate);
               
-              if (adStartDate <= reportEnd && adEndDate >= reportStart) {
+              if (adDate >= reportStart && adDate <= reportEnd) {
                 totalAdSpend += spend;
               }
             }
@@ -2613,20 +2610,18 @@
           const brandAdsRows = brandAdsData.values || [];
           if (brandAdsRows.length > 1) {
             const adsHeaders = brandAdsRows[0];
-            const startDateIndex = adsHeaders.findIndex(h => h.includes('Start Date'));
-            const endDateIndex = adsHeaders.findIndex(h => h.includes('End Date'));
+            const dateIndex = adsHeaders.indexOf('Date');
             const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < brandAdsRows.length; i++) {
-              const adStartDate = new Date(brandAdsRows[i][startDateIndex]);
-              const adEndDate = new Date(brandAdsRows[i][endDateIndex]);
+              const adDate = new Date(brandAdsRows[i][dateIndex]);
               const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
               
-              // Check if ad period overlaps with report period
+              // Check if ad date is within report period
               const reportStart = new Date(startDate);
               const reportEnd = new Date(endDate);
               
-              if (adStartDate <= reportEnd && adEndDate >= reportStart) {
+              if (adDate >= reportStart && adDate <= reportEnd) {
                 totalAdSpend += spend;
               }
             }
@@ -2641,7 +2636,7 @@
           const shippingRows = shippingData.values || [];
           if (shippingRows.length > 1) {
             const shippingHeaders = shippingRows[0];
-            const shipDateIndex = shippingHeaders.findIndex(h => h.includes('Ship Date'));
+            const shipDateIndex = shippingHeaders.indexOf('Ship Date');
             const shippingCostIndex = shippingHeaders.indexOf('Shipping Cost');
             
             for (let i = 1; i < shippingRows.length; i++) {
