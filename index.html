@@ -2590,8 +2590,120 @@
           }
         }
         
-        // Parse ad spend data
-        let totalAdSpend = 0;
+        // Load mapping data for ad spend allocation
+        const [productMappingRes, brandMappingRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+        
+        // Parse product mappings (Campaign Name -> SKUs)
+        const productCampaignToSkus = {};
+        if (productMappingRes.ok) {
+          const mappingData = await productMappingRes.json();
+          const mappingRows = mappingData.values || [];
+          if (mappingRows.length > 1) {
+            const headers = mappingRows[0];
+            const campaignIndex = headers.indexOf('Campaign Name');
+            const skuIndex = headers.indexOf('SKU');
+            
+            for (let i = 1; i < mappingRows.length; i++) {
+              const campaign = mappingRows[i][campaignIndex];
+              const sku = mappingRows[i][skuIndex];
+              
+              if (campaign && sku) {
+                if (!productCampaignToSkus[campaign]) {
+                  productCampaignToSkus[campaign] = [];
+                }
+                productCampaignToSkus[campaign].push(sku);
+              }
+            }
+          }
+        }
+        
+        // Parse brand mappings (Campaign Name -> Brand)
+        const brandCampaignToBrand = {};
+        if (brandMappingRes.ok) {
+          const mappingData = await brandMappingRes.json();
+          const mappingRows = mappingData.values || [];
+          if (mappingRows.length > 1) {
+            const headers = mappingRows[0];
+            const campaignIndex = headers.indexOf('Campaign Name');
+            const brandIndex = headers.indexOf('Brand');
+            
+            for (let i = 1; i < mappingRows.length; i++) {
+              const campaign = mappingRows[i][campaignIndex];
+              const brand = mappingRows[i][brandIndex];
+              
+              if (campaign && brand) {
+                brandCampaignToBrand[campaign] = brand;
+              }
+            }
+          }
+        }
+        
+        // Create SKU to brand lookup from products
+        const skuToBrand = {};
+        const brandToSkus = {};
+        if (productsRes.ok) {
+          const productsData = await productsRes.json();
+          const productsRows = productsData.values || [];
+          if (productsRows.length > 1) {
+            const headers = productsRows[0];
+            const skuIndex = headers.indexOf('sku');
+            const brandIndex = headers.indexOf('brand');
+            
+            for (let i = 1; i < productsRows.length; i++) {
+              const sku = productsRows[i][skuIndex];
+              const brand = productsRows[i][brandIndex];
+              
+              if (sku && brand) {
+                skuToBrand[sku] = brand;
+                
+                if (!brandToSkus[brand]) {
+                  brandToSkus[brand] = [];
+                }
+                brandToSkus[brand].push(sku);
+              }
+            }
+          }
+        }
+        
+        // Calculate FBA/FBM sales by SKU from filtered transactions
+        const skuSales = {}; // { sku: { fba: amount, fbm: amount } }
+        
+        const reportStart = new Date(startDate);
+        const reportEnd = new Date(endDate);
+        
+        transactions.forEach(t => {
+          const transDate = new Date(t[transactionsHeaders.find(h => h.includes('date'))]);
+          if (transDate >= reportStart && transDate <= reportEnd) {
+            const type = (t.type || '').trim();
+            const sku = t.sku || '';
+            const fulfillment = (t.fulfillment || '').trim();
+            const productSales = parseFloat(t['product sales'] || 0);
+            
+            if (type === 'Order' && sku && productSales > 0) {
+              if (!skuSales[sku]) {
+                skuSales[sku] = { fba: 0, fbm: 0 };
+              }
+              
+              if (fulfillment === 'Amazon') {
+                skuSales[sku].fba += productSales;
+              } else if (fulfillment === 'Seller') {
+                skuSales[sku].fbm += productSales;
+              }
+            }
+          }
+        });
+        
+        // Parse ad spend data with FBA/FBM allocation
+        let fbaAdSpend = 0;
+        let fbmAdSpend = 0;
+        let unallocatedAdSpend = 0;
         
         if (productAdsRes.ok) {
           const productAdsData = await productAdsRes.json();
@@ -2599,18 +2711,47 @@
           if (productAdsRows.length > 1) {
             const adsHeaders = productAdsRows[0];
             const dateIndex = adsHeaders.indexOf('Date');
+            const campaignIndex = adsHeaders.indexOf('Campaign Name');
             const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < productAdsRows.length; i++) {
               const adDate = new Date(productAdsRows[i][dateIndex]);
+              const campaign = productAdsRows[i][campaignIndex];
               const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
               
-              // Check if ad date is within report period
-              const reportStart = new Date(startDate);
-              const reportEnd = new Date(endDate);
-              
-              if (adDate >= reportStart && adDate <= reportEnd) {
-                totalAdSpend += spend;
+              if (adDate >= reportStart && adDate <= reportEnd && spend > 0) {
+                // Get SKUs for this campaign
+                const campaignSkus = productCampaignToSkus[campaign] || [];
+                
+                if (campaignSkus.length === 0) {
+                  // No mapping - unallocated
+                  unallocatedAdSpend += spend;
+                } else {
+                  // Calculate FBA/FBM split based on sales
+                  let totalFba = 0;
+                  let totalFbm = 0;
+                  
+                  campaignSkus.forEach(sku => {
+                    if (skuSales[sku]) {
+                      totalFba += skuSales[sku].fba;
+                      totalFbm += skuSales[sku].fbm;
+                    }
+                  });
+                  
+                  const totalSales = totalFba + totalFbm;
+                  
+                  if (totalSales === 0) {
+                    // Campaign has mapping but no sales - unallocated
+                    unallocatedAdSpend += spend;
+                  } else {
+                    // Allocate proportionally
+                    const fbaPercent = totalFba / totalSales;
+                    const fbmPercent = totalFbm / totalSales;
+                    
+                    fbaAdSpend += spend * fbaPercent;
+                    fbmAdSpend += spend * fbmPercent;
+                  }
+                }
               }
             }
           }
@@ -2622,22 +2763,66 @@
           if (brandAdsRows.length > 1) {
             const adsHeaders = brandAdsRows[0];
             const dateIndex = adsHeaders.indexOf('Date');
+            const campaignIndex = adsHeaders.indexOf('Campaign Name');
             const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < brandAdsRows.length; i++) {
               const adDate = new Date(brandAdsRows[i][dateIndex]);
+              const campaign = brandAdsRows[i][campaignIndex];
               const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
               
-              // Check if ad date is within report period
-              const reportStart = new Date(startDate);
-              const reportEnd = new Date(endDate);
-              
-              if (adDate >= reportStart && adDate <= reportEnd) {
-                totalAdSpend += spend;
+              if (adDate >= reportStart && adDate <= reportEnd && spend > 0) {
+                // Get brand for this campaign
+                const brand = brandCampaignToBrand[campaign];
+                
+                if (!brand) {
+                  // No mapping - unallocated
+                  unallocatedAdSpend += spend;
+                } else {
+                  // Get all SKUs for this brand
+                  const brandSkus = brandToSkus[brand] || [];
+                  
+                  if (brandSkus.length === 0) {
+                    // Brand has no SKUs - unallocated
+                    unallocatedAdSpend += spend;
+                  } else {
+                    // Calculate FBA/FBM split based on sales across all brand SKUs
+                    let totalFba = 0;
+                    let totalFbm = 0;
+                    
+                    brandSkus.forEach(sku => {
+                      if (skuSales[sku]) {
+                        totalFba += skuSales[sku].fba;
+                        totalFbm += skuSales[sku].fbm;
+                      }
+                    });
+                    
+                    const totalSales = totalFba + totalFbm;
+                    
+                    if (totalSales === 0) {
+                      // Brand has SKUs but no sales - unallocated
+                      unallocatedAdSpend += spend;
+                    } else {
+                      // Allocate proportionally
+                      const fbaPercent = totalFba / totalSales;
+                      const fbmPercent = totalFbm / totalSales;
+                      
+                      fbaAdSpend += spend * fbaPercent;
+                      fbmAdSpend += spend * fbmPercent;
+                    }
+                  }
+                }
               }
             }
           }
         }
+        
+        console.log('Ad Spend Allocation:', {
+          FBA: fbaAdSpend.toFixed(2),
+          FBM: fbmAdSpend.toFixed(2),
+          Unallocated: unallocatedAdSpend.toFixed(2),
+          Total: (fbaAdSpend + fbmAdSpend + unallocatedAdSpend).toFixed(2)
+        });
         
         // Parse shipping costs data
         let totalShippingCosts = 0;
@@ -2684,7 +2869,7 @@
         });
         
         // Calculate financial statement with product costs, ad spend, and shipping costs
-        const statement = calculateFinancialStatement(filtered, productCosts, totalAdSpend, totalShippingCosts);
+        const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
         
         // Render the report
         renderFinancialStatement(statement, startDate, endDate);
@@ -2695,7 +2880,7 @@
       }
     }
     
-    function calculateFinancialStatement(transactions, productCosts, totalAdSpend, totalShippingCosts) {
+    function calculateFinancialStatement(transactions, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts) {
       // Initialize statement structure based on mapping
       const statement = {
         income: {
@@ -2710,7 +2895,9 @@
         expenses: {
           'FBM Product Costs': { debit: 0, credit: 0 },
           'FBM Shipping Costs': { debit: 0, credit: 0 },
+          'FBM Ad Spend': { debit: 0, credit: 0 },
           'FBA Product Costs': { debit: 0, credit: 0 },
+          'FBA Ad Spend': { debit: 0, credit: 0 },
           'FBM Transaction Fees': { debit: 0, credit: 0 },
           'FBA Transaction Fees': { debit: 0, credit: 0 },
           'FBA Fees': { debit: 0, credit: 0 },
@@ -2718,7 +2905,7 @@
           'FBA Inbound Shipping': { debit: 0, credit: 0 },
           'FBA Inventory Storage Fees': { debit: 0, credit: 0 },
           'Other Expenses': { debit: 0, credit: 0 },
-          'Ad Spend': { debit: 0, credit: 0 }
+          'Unallocated Ad Spend': { debit: 0, credit: 0 }
         }
       };
       
@@ -2858,9 +3045,17 @@
         statement.expenses['FBM Shipping Costs'].debit = totalShippingCosts;
       }
       
-      // Add ad spend
-      if (totalAdSpend > 0) {
-        statement.expenses['Ad Spend'].debit = totalAdSpend;
+      // Add ad spend by channel
+      if (fbmAdSpend > 0) {
+        statement.expenses['FBM Ad Spend'].debit = fbmAdSpend;
+      }
+      
+      if (fbaAdSpend > 0) {
+        statement.expenses['FBA Ad Spend'].debit = fbaAdSpend;
+      }
+      
+      if (unallocatedAdSpend > 0) {
+        statement.expenses['Unallocated Ad Spend'].debit = unallocatedAdSpend;
       }
       
       return statement;
