@@ -2884,16 +2884,16 @@
         },
         expenses: {
           'FBM Product Costs': { debit: 0, credit: 0 },
+          'FBM Transaction Fees': { debit: 0, credit: 0 },
           'FBM Shipping Costs': { debit: 0, credit: 0 },
           'FBM Ad Spend': { debit: 0, credit: 0 },
           'FBA Product Costs': { debit: 0, credit: 0 },
-          'FBA Ad Spend': { debit: 0, credit: 0 },
-          'FBM Transaction Fees': { debit: 0, credit: 0 },
           'FBA Transaction Fees': { debit: 0, credit: 0 },
           'FBA Fees': { debit: 0, credit: 0 },
           'FBA Inbound Placement Fees': { debit: 0, credit: 0 },
-          'FBA Inbound Shipping': { debit: 0, credit: 0 },
+          'FBA Inbound Shipping Costs': { debit: 0, credit: 0 },
           'FBA Inventory Storage Fees': { debit: 0, credit: 0 },
+          'FBA Ad Spend': { debit: 0, credit: 0 },
           'Other Expenses': { debit: 0, credit: 0 },
           'Unallocated Ad Spend': { debit: 0, credit: 0 }
         }
@@ -3014,7 +3014,7 @@
         
         // FBA Inbound Shipping: type = FBA Inventory Fee and description = FBA Amazon-Partnered Carrier Shipment Fee
         if (type === 'FBA Inventory Fee' && description === 'FBA Amazon-Partnered Carrier Shipment Fee') {
-          addAmount('FBA Inbound Shipping', 'expenses', other);
+          addAmount('FBA Inbound Shipping Costs', 'expenses', other);
         }
         
         // FBA Inventory Storage Fees: type = FBA Inventory Fee and description =/= FBA Amazon-Partnered Carrier Shipment Fee
@@ -3078,7 +3078,7 @@
         (statement.expenses['FBA Transaction Fees']?.debit || 0) - (statement.expenses['FBA Transaction Fees']?.credit || 0) +
         (statement.expenses['FBA Fees']?.debit || 0) - (statement.expenses['FBA Fees']?.credit || 0) +
         (statement.expenses['FBA Inbound Placement Fees']?.debit || 0) - (statement.expenses['FBA Inbound Placement Fees']?.credit || 0) +
-        (statement.expenses['FBA Inbound Shipping']?.debit || 0) - (statement.expenses['FBA Inbound Shipping']?.credit || 0) +
+        (statement.expenses['FBA Inbound Shipping Costs']?.debit || 0) - (statement.expenses['FBA Inbound Shipping Costs']?.credit || 0) +
         (statement.expenses['FBA Inventory Storage Fees']?.debit || 0) - (statement.expenses['FBA Inventory Storage Fees']?.credit || 0);
       
       const fbaProductCosts = (statement.expenses['FBA Product Costs']?.debit || 0) - (statement.expenses['FBA Product Costs']?.credit || 0);
@@ -3201,95 +3201,101 @@
           <div style="display: flex; flex-direction: column; gap: 1.5rem;">
             <!-- FBM Profitability -->
             <div style="border: 2px solid var(--border); border-radius: 8px; padding: 1.5rem; background: var(--bg-secondary);">
-              <h4 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">FBM Profitability</h4>
-              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Income</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600;">${fbmIncome >= 0 ? '$' + fbmIncome.toFixed(2) : '-$' + Math.abs(fbmIncome).toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Operating Expenses</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${fbmExpensesExcludingCostAndAd.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Product Costs</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${fbmProductCosts.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 2px solid var(--border);">
-                  <span>Ad Spend</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${fbmAdSpend.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.75rem 0; background: ${fbmProfit >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; margin: 0.5rem -1.5rem 0; padding-left: 1.5rem; padding-right: 1.5rem;">
-                  <span style="font-weight: 700;">Profit</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${Math.abs(fbmProfit).toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; margin-top: 0.5rem;">
-                  <span style="font-weight: 600;">Margin</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</span>
-                </div>
-              </div>
+              <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">FBM Profitability</h3>
+              <table style="width: 100%;">
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbmIncome >= 0 ? '$' + fbmIncome.toFixed(2) : '-$' + Math.abs(fbmIncome).toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbmExpensesExcludingCostAndAd.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbmProductCosts.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbmAdSpend.toFixed(2)}</td>
+                  </tr>
+                  <tr style="font-weight: 700; background: ${fbmProfit >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'};">
+                    <td style="padding: 0.75rem;">Profit</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${Math.abs(fbmProfit).toFixed(2)}</td>
+                  </tr>
+                  <tr style="font-weight: 600;">
+                    <td style="padding: 0.625rem;">Margin</td>
+                    <td style="padding: 0.625rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
             
             <!-- FBA Profitability -->
             <div style="border: 2px solid var(--border); border-radius: 8px; padding: 1.5rem; background: var(--bg-secondary);">
-              <h4 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">FBA Profitability</h4>
-              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Income</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600;">${fbaIncome >= 0 ? '$' + fbaIncome.toFixed(2) : '-$' + Math.abs(fbaIncome).toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Operating Expenses</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${fbaExpensesExcludingCostAndAd.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Product Costs</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${fbaProductCosts.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 2px solid var(--border);">
-                  <span>Ad Spend</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${fbaAdSpend.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.75rem 0; background: ${fbaProfit >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; margin: 0.5rem -1.5rem 0; padding-left: 1.5rem; padding-right: 1.5rem;">
-                  <span style="font-weight: 700;">Profit</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${Math.abs(fbaProfit).toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; margin-top: 0.5rem;">
-                  <span style="font-weight: 600;">Margin</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</span>
-                </div>
-              </div>
+              <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">FBA Profitability</h3>
+              <table style="width: 100%;">
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbaIncome >= 0 ? '$' + fbaIncome.toFixed(2) : '-$' + Math.abs(fbaIncome).toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbaExpensesExcludingCostAndAd.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbaProductCosts.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbaAdSpend.toFixed(2)}</td>
+                  </tr>
+                  <tr style="font-weight: 700; background: ${fbaProfit >= 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'};">
+                    <td style="padding: 0.75rem;">Profit</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${Math.abs(fbaProfit).toFixed(2)}</td>
+                  </tr>
+                  <tr style="font-weight: 600;">
+                    <td style="padding: 0.625rem;">Margin</td>
+                    <td style="padding: 0.625rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
             
             <!-- Total Profitability -->
             <div style="border: 3px solid var(--border); border-radius: 8px; padding: 1.5rem; background: var(--bg);">
-              <h4 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Total Profitability</h4>
-              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Income</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600;">${totalIncome >= 0 ? '$' + totalIncome.toFixed(2) : '-$' + Math.abs(totalIncome).toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Operating Expenses</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${totalExpensesExcludingCostAndAd.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
-                  <span>Product Costs</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${totalProductCosts.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 2px solid var(--border);">
-                  <span>Ad Spend</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace;">-$${totalAdSpend.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.75rem 0; background: ${totalProfit >= 0 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; margin: 0.5rem -1.5rem 0; padding-left: 1.5rem; padding-right: 1.5rem;">
-                  <span style="font-weight: 700; font-size: 1.1rem;">Total Profit</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 1.1rem; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${Math.abs(totalProfit).toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; margin-top: 0.5rem;">
-                  <span style="font-weight: 700;">Total Margin</span>
-                  <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</span>
-                </div>
-              </div>
+              <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Total Profitability</h3>
+              <table style="width: 100%;">
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${totalIncome >= 0 ? '$' + totalIncome.toFixed(2) : '-$' + Math.abs(totalIncome).toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${totalExpensesExcludingCostAndAd.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${totalProductCosts.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${totalAdSpend.toFixed(2)}</td>
+                  </tr>
+                  <tr style="font-weight: 700; background: ${totalProfit >= 0 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)'};">
+                    <td style="padding: 0.75rem; font-size: 1.05rem;">Total Profit</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 1.05rem; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${Math.abs(totalProfit).toFixed(2)}</td>
+                  </tr>
+                  <tr style="font-weight: 700;">
+                    <td style="padding: 0.625rem;">Total Margin</td>
+                    <td style="padding: 0.625rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
