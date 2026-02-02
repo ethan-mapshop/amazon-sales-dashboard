@@ -2572,8 +2572,11 @@
           transactions.push(transaction);
         }
         
-        // Parse products (for costs)
+        // Parse products (for costs and brand mappings)
         const productCosts = {};
+        const skuToBrand = {};
+        const brandToSkus = {};
+        
         if (productsRes.ok) {
           const productsData = await productsRes.json();
           const productsRows = productsData.values || [];
@@ -2581,11 +2584,25 @@
             const productsHeaders = productsRows[0];
             const skuIndex = productsHeaders.indexOf('sku');
             const costIndex = productsHeaders.indexOf('cost');
+            const brandIndex = productsHeaders.indexOf('brand');
             
             for (let i = 1; i < productsRows.length; i++) {
               const sku = productsRows[i][skuIndex];
               const cost = parseFloat(productsRows[i][costIndex]) || 0;
+              const brand = productsRows[i][brandIndex];
+              
+              // Store cost
               if (sku) productCosts[sku] = cost;
+              
+              // Store brand mappings
+              if (sku && brand) {
+                skuToBrand[sku] = brand;
+                
+                if (!brandToSkus[brand]) {
+                  brandToSkus[brand] = [];
+                }
+                brandToSkus[brand].push(sku);
+              }
             }
           }
         }
@@ -2640,33 +2657,6 @@
               
               if (campaign && brand) {
                 brandCampaignToBrand[campaign] = brand;
-              }
-            }
-          }
-        }
-        
-        // Create SKU to brand lookup from products
-        const skuToBrand = {};
-        const brandToSkus = {};
-        if (productsRes.ok) {
-          const productsData = await productsRes.json();
-          const productsRows = productsData.values || [];
-          if (productsRows.length > 1) {
-            const headers = productsRows[0];
-            const skuIndex = headers.indexOf('sku');
-            const brandIndex = headers.indexOf('brand');
-            
-            for (let i = 1; i < productsRows.length; i++) {
-              const sku = productsRows[i][skuIndex];
-              const brand = productsRows[i][brandIndex];
-              
-              if (sku && brand) {
-                skuToBrand[sku] = brand;
-                
-                if (!brandToSkus[brand]) {
-                  brandToSkus[brand] = [];
-                }
-                brandToSkus[brand].push(sku);
               }
             }
           }
