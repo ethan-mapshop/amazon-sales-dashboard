@@ -973,20 +973,28 @@
       <div class="card">
         <h2 class="section-title">Financial Overview</h2>
         
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-          <div style="display: flex; gap: 1rem;">
-            <div>
-              <label style="display: inline-block; margin-right: 0.5rem;">Start Date:</label>
-              <input type="date" id="overview-start-date" style="width: 150px;">
-            </div>
-            <div>
-              <label style="display: inline-block; margin-right: 0.5rem;">End Date:</label>
-              <input type="date" id="overview-end-date" style="width: 150px;">
-            </div>
+        <div style="margin-bottom: 2rem;">
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+            <button class="btn" onclick="setDateRange('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
+            <button class="btn" onclick="setDateRange('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
+            <button class="btn" onclick="setDateRange('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+            <button class="btn" onclick="setDateRange('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
           </div>
-          <button class="btn btn-primary" onclick="loadOverviewData()" style="padding: 0.625rem 1.5rem;">
-            Generate Report
-          </button>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 1rem;">
+              <div>
+                <label style="display: inline-block; margin-right: 0.5rem;">Start Date:</label>
+                <input type="date" id="overview-start-date" style="width: 150px;">
+              </div>
+              <div>
+                <label style="display: inline-block; margin-right: 0.5rem;">End Date:</label>
+                <input type="date" id="overview-end-date" style="width: 150px;">
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="loadOverviewData()" style="padding: 0.625rem 1.5rem;">
+              Generate Report
+            </button>
+          </div>
         </div>
 
         <div id="overview-content">
@@ -2513,6 +2521,43 @@
     });
     
     // OVERVIEW PAGE
+    // Helper function to format numbers with thousands separators
+    function formatNumber(num) {
+      return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    
+    // Helper function to set date range presets
+    function setDateRange(preset) {
+      const today = new Date();
+      let startDate, endDate;
+      
+      switch(preset) {
+        case 'lastMonth':
+          startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+          endDate = new Date(today.getFullYear(), today.getMonth(), 0);
+          break;
+        case 'thisMonth':
+          startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+          endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+          break;
+        case 'lastYear':
+          startDate = new Date(today.getFullYear() - 1, 0, 1);
+          endDate = new Date(today.getFullYear() - 1, 11, 31);
+          break;
+        case 'thisYear':
+          startDate = new Date(today.getFullYear(), 0, 1);
+          endDate = new Date(today.getFullYear(), 11, 31);
+          break;
+      }
+      
+      // Format dates as YYYY-MM-DD for input fields
+      document.getElementById('overview-start-date').value = startDate.toISOString().split('T')[0];
+      document.getElementById('overview-end-date').value = endDate.toISOString().split('T')[0];
+      
+      // Auto-generate report
+      loadOverviewData();
+    }
+    
     async function loadOverviewData() {
       if (!accessToken) {
         alert('Please sign in first');
@@ -3113,7 +3158,7 @@
       let html = `
         <div style="margin-bottom: 2rem;">
           <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
-            Report Period: ${new Date(startDate).toLocaleDateString()} - ${new Date(endDate).toLocaleDateString()}
+            Report Period: ${startDate} - ${endDate}
           </div>
         </div>
         
@@ -3139,10 +3184,10 @@
           <tr>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.debit > 0 ? '$' + amounts.debit.toFixed(2) : '-'}
+              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '-'}
             </td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.credit > 0 ? '$' + amounts.credit.toFixed(2) : '-'}
+              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '-'}
             </td>
           </tr>
         `;
@@ -3151,8 +3196,8 @@
       html += `
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Totals</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${incomeTotalDebit.toFixed(2)}</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${incomeTotalCredit.toFixed(2)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(incomeTotalDebit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(incomeTotalCredit)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -3177,10 +3222,10 @@
           <tr>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.debit > 0 ? '$' + amounts.debit.toFixed(2) : '-'}
+              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '-'}
             </td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.credit > 0 ? '$' + amounts.credit.toFixed(2) : '-'}
+              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '-'}
             </td>
           </tr>
         `;
@@ -3189,8 +3234,8 @@
       html += `
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Totals</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${expenseTotalDebit.toFixed(2)}</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${expenseTotalCredit.toFixed(2)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(expenseTotalDebit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(expenseTotalCredit)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -3206,23 +3251,23 @@
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbmIncome >= 0 ? '$' + fbmIncome.toFixed(2) : '-$' + Math.abs(fbmIncome).toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbmIncome >= 0 ? '$' + formatNumber(fbmIncome) : '-$' + formatNumber(Math.abs(fbmIncome))}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbmExpensesExcludingCostAndAd.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmExpensesExcludingCostAndAd)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbmProductCosts.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmProductCosts)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbmAdSpend.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${Math.abs(fbmProfit).toFixed(2)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
@@ -3239,23 +3284,23 @@
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbaIncome >= 0 ? '$' + fbaIncome.toFixed(2) : '-$' + Math.abs(fbaIncome).toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbaIncome >= 0 ? '$' + formatNumber(fbaIncome) : '-$' + formatNumber(Math.abs(fbaIncome))}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbaExpensesExcludingCostAndAd.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaExpensesExcludingCostAndAd)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbaProductCosts.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaProductCosts)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${fbaAdSpend.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${Math.abs(fbaProfit).toFixed(2)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
@@ -3272,23 +3317,23 @@
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${totalIncome >= 0 ? '$' + totalIncome.toFixed(2) : '-$' + Math.abs(totalIncome).toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${totalIncome >= 0 ? '$' + formatNumber(totalIncome) : '-$' + formatNumber(Math.abs(totalIncome))}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${totalExpensesExcludingCostAndAd.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalExpensesExcludingCostAndAd)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${totalProductCosts.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalProductCosts)}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${totalAdSpend.toFixed(2)}</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Totals</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${Math.abs(totalProfit).toFixed(2)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
