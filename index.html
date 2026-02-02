@@ -3171,9 +3171,9 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary);">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Debit</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Credit</th>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Debit</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Credit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3184,10 +3184,10 @@
           <tr>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '-'}
+              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '$0.00'}
             </td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '-'}
+              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '$0.00'}
             </td>
           </tr>
         `;
@@ -3209,9 +3209,9 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary);">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Debit</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary);">Credit</th>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Debit</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Credit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3222,10 +3222,10 @@
           <tr>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '-'}
+              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '$0.00'}
             </td>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
-              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '-'}
+              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '$0.00'}
             </td>
           </tr>
         `;
@@ -3248,6 +3248,12 @@
             <div style="margin-bottom: 2rem;">
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">FBM Profitability</h3>
               <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 50%; min-width: 140px;">Total</th>
+                  </tr>
+                </thead>
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
@@ -3281,6 +3287,12 @@
             <div style="margin-bottom: 2rem;">
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">FBA Profitability</h3>
               <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 50%; min-width: 140px;">Total</th>
+                  </tr>
+                </thead>
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
@@ -3314,6 +3326,12 @@
             <div>
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Total Profitability</h3>
               <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 50%; min-width: 140px;">Total</th>
+                  </tr>
+                </thead>
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
