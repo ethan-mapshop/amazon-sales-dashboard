@@ -2774,11 +2774,23 @@
           
           console.log(`Calculating statement for ${year}-${month+1}: ${startDateStr} to ${endDateStr}`);
           
-          // Filter transactions
-          const filtered = transactionsRows.filter(row => {
+          // Parse transaction headers
+          const transactionsHeaders = transactionsRows[0];
+          
+          // Filter and parse transactions into objects
+          const filtered = [];
+          for (let i = 1; i < transactionsRows.length; i++) {
+            const row = transactionsRows[i];
             const dateStr = row[0];
-            return dateStr >= startDateStr && dateStr <= endDateStr;
-          });
+            
+            if (dateStr >= startDateStr && dateStr <= endDateStr) {
+              const transaction = {};
+              transactionsHeaders.forEach((header, index) => {
+                transaction[header] = row[index] || '';
+              });
+              filtered.push(transaction);
+            }
+          }
           
           console.log(`  Found ${filtered.length} transactions`);
           
