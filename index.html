@@ -3585,7 +3585,11 @@
         
         console.log('Current values:', current);
         console.log('Previous month values:', prev);
+        console.log('  - FBM Income:', prev.fbm.income, 'vs Current:', current.fbm.income);
+        console.log('  - FBA Income:', prev.fba.income, 'vs Current:', current.fba.income);
         console.log('Year over year values:', yoy);
+        console.log('  - FBM Income:', yoy.fbm.income, 'vs Current:', current.fbm.income);
+        console.log('  - FBA Income:', yoy.fba.income, 'vs Current:', current.fba.income);
         
         // Normalize MoM for days in month
         const dayRatio = comparisonData.currentMonthDays / comparisonData.prevMonthDays;
