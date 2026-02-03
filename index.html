@@ -2756,7 +2756,7 @@
     }
     
     // Load comparison data for monthly reports (YoY and MoM)
-    async function loadMonthlyComparisonData(transactionsRows, productsData, productAdsData, brandAdsData, shippingData, currentMonth, currentYear) {
+    async function loadMonthlyComparisonData(transactionsRows, productsRows, productAdsRows, brandAdsRows, shippingRows, currentMonth, currentYear, productCampaignToSkus, brandCampaignToBrand, skuToBrand, brandToSkus) {
       try {
         // Calculate previous month (MoM)
         const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
@@ -2780,55 +2780,89 @@
           
           // Calculate product costs
           const productCosts = {};
+          const productCostMap = {}; // sku -> cost
+          
+          // Parse products rows to get costs
+          if (productsRows.length > 1) {
+            const productsHeaders = productsRows[0];
+            const skuIndex = productsHeaders.indexOf('sku');
+            const costIndex = productsHeaders.indexOf('cost');
+            
+            for (let i = 1; i < productsRows.length; i++) {
+              const sku = productsRows[i][skuIndex];
+              const cost = parseFloat(productsRows[i][costIndex]) || 0;
+              if (sku) productCostMap[sku] = cost;
+            }
+          }
+          
+          // Calculate total product costs from transactions
           filtered.forEach(t => {
             const sku = t[3];
             const qty = parseFloat(t[4]) || 0;
-            if (sku && qty !== 0) {
-              const productRow = productsData.find(p => p.sku === sku);
-              if (productRow && productRow.cost) {
-                const cost = parseFloat(productRow.cost) || 0;
-                productCosts[sku] = (productCosts[sku] || 0) + (Math.abs(qty) * cost);
-              }
+            if (sku && qty !== 0 && productCostMap[sku]) {
+              const cost = productCostMap[sku];
+              productCosts[sku] = (productCosts[sku] || 0) + (Math.abs(qty) * cost);
             }
           });
           const totalProductCosts = Object.values(productCosts).reduce((sum, cost) => sum + cost, 0);
           
-          // Calculate ad spend (simplified - just get totals for the period)
+          // Calculate ad spend (need to parse and allocate similar to main function)
           let fbaAdSpend = 0, fbmAdSpend = 0, unallocatedAdSpend = 0;
           
-          // Get product ad spend
-          const productAds = productAdsData.filter(row => {
-            const adDate = row.date;
-            return adDate >= startDateStr && adDate <= endDateStr;
-          });
+          // For simplicity in comparison, just sum all ad spend without allocation
+          // This is approximate but sufficient for trend analysis
+          if (productAdsRows.length > 1) {
+            const productAdsHeaders = productAdsRows[0];
+            const dateIndex = productAdsHeaders.indexOf('Date');
+            const spendIndex = productAdsHeaders.indexOf('Spend ($)');
+            
+            for (let i = 1; i < productAdsRows.length; i++) {
+              const adDate = productAdsRows[i][dateIndex];
+              const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
+              
+              if (adDate >= startDateStr && adDate <= endDateStr) {
+                // Simplified: split 50/50 between FBA/FBM
+                // This is approximate for comparison purposes
+                fbaAdSpend += spend * 0.5;
+                fbmAdSpend += spend * 0.5;
+              }
+            }
+          }
           
-          productAds.forEach(ad => {
-            fbaAdSpend += ad.fbaSpend || 0;
-            fbmAdSpend += ad.fbmSpend || 0;
-            unallocatedAdSpend += ad.unallocated || 0;
-          });
+          if (brandAdsRows.length > 1) {
+            const brandAdsHeaders = brandAdsRows[0];
+            const dateIndex = brandAdsHeaders.indexOf('Date');
+            const spendIndex = brandAdsHeaders.indexOf('Spend ($)');
+            
+            for (let i = 1; i < brandAdsRows.length; i++) {
+              const adDate = brandAdsRows[i][dateIndex];
+              const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
+              
+              if (adDate >= startDateStr && adDate <= endDateStr) {
+                // Simplified: split 50/50 between FBA/FBM
+                fbaAdSpend += spend * 0.5;
+                fbmAdSpend += spend * 0.5;
+              }
+            }
+          }
           
-          // Get brand ad spend
-          const brandAds = brandAdsData.filter(row => {
-            const adDate = row.date;
-            return adDate >= startDateStr && adDate <= endDateStr;
-          });
-          
-          brandAds.forEach(ad => {
-            fbaAdSpend += ad.fbaSpend || 0;
-            fbmAdSpend += ad.fbmSpend || 0;
-            unallocatedAdSpend += ad.unallocated || 0;
-          });
           
           // Calculate shipping costs
           let totalShippingCosts = 0;
-          const shipments = shippingData.filter(row => {
-            const shipDate = row.date;
-            return shipDate >= startDateStr && shipDate <= endDateStr;
-          });
-          shipments.forEach(s => {
-            totalShippingCosts += s.cost || 0;
-          });
+          if (shippingRows.length > 1) {
+            const shippingHeaders = shippingRows[0];
+            const dateIndex = shippingHeaders.indexOf('Date');
+            const costIndex = shippingHeaders.indexOf('Cost');
+            
+            for (let i = 1; i < shippingRows.length; i++) {
+              const shipDate = shippingRows[i][dateIndex];
+              const cost = parseFloat(shippingRows[i][costIndex]) || 0;
+              
+              if (shipDate >= startDateStr && shipDate <= endDateStr) {
+                totalShippingCosts += cost;
+              }
+            }
+          }
           
           // Calculate statement
           return calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
@@ -2908,6 +2942,12 @@
           return;
         }
         
+        // Store raw rows for comparison calculations (needed for monthly reports)
+        let productsRows = [];
+        let productAdsRows = [];
+        let brandAdsRows = [];
+        let shippingRows = [];
+        
         // Parse transactions
         const transactionsHeaders = transactionsRows[0];
         const transactions = [];
@@ -2927,7 +2967,7 @@
         
         if (productsRes.ok) {
           const productsData = await productsRes.json();
-          const productsRows = productsData.values || [];
+          productsRows = productsData.values || [];
           if (productsRows.length > 1) {
             const productsHeaders = productsRows[0];
             const skuIndex = productsHeaders.indexOf('sku');
@@ -3045,7 +3085,7 @@
         
         if (productAdsRes.ok) {
           const productAdsData = await productAdsRes.json();
-          const productAdsRows = productAdsData.values || [];
+          productAdsRows = productAdsData.values || [];
           if (productAdsRows.length > 1) {
             const adsHeaders = productAdsRows[0];
             const dateIndex = adsHeaders.indexOf('Date');
@@ -3097,7 +3137,7 @@
         
         if (brandAdsRes.ok) {
           const brandAdsData = await brandAdsRes.json();
-          const brandAdsRows = brandAdsData.values || [];
+          brandAdsRows = brandAdsData.values || [];
           if (brandAdsRows.length > 1) {
             const adsHeaders = brandAdsRows[0];
             const dateIndex = adsHeaders.indexOf('Date');
@@ -3167,7 +3207,7 @@
         
         if (shippingRes.ok) {
           const shippingData = await shippingRes.json();
-          const shippingRows = shippingData.values || [];
+          shippingRows = shippingData.values || [];
           if (shippingRows.length > 1) {
             const shippingHeaders = shippingRows[0];
             const shipDateIndex = shippingHeaders.indexOf('Ship Date');
@@ -3212,7 +3252,19 @@
         // Load comparison data for monthly reports
         let comparisonData = null;
         if (isMonthly && month !== null && year !== null) {
-          comparisonData = await loadMonthlyComparisonData(transactionsRows, productsData, productAdsData, brandAdsData, shippingData, month, year);
+          comparisonData = await loadMonthlyComparisonData(
+            transactionsRows, 
+            productsRows, 
+            productAdsRows, 
+            brandAdsRows, 
+            shippingRows, 
+            month, 
+            year,
+            productCampaignToSkus,
+            brandCampaignToBrand,
+            skuToBrand,
+            brandToSkus
+          );
         }
         
         // Render the report
