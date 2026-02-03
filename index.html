@@ -3272,7 +3272,7 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Profit</td>
+                    <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
                   </tr>
                   <tr>
@@ -3311,7 +3311,7 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Profit</td>
+                    <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
                   </tr>
                   <tr>
@@ -3349,8 +3349,8 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
                   </tr>
-                  <tr style="font-weight: 700;">
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Profit</td>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.75rem;">Totals</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
                   </tr>
                   <tr>
