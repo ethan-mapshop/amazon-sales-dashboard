@@ -2869,7 +2869,11 @@
           }
           
           // Calculate statement
-          return calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
+          const stmt = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
+          console.log(`  Statement calculated:`, stmt);
+          console.log(`    FBM Sales credit: ${stmt.income['FBM Sales']?.credit}, debit: ${stmt.income['FBM Sales']?.debit}`);
+          console.log(`    FBA Sales credit: ${stmt.income['FBA Sales']?.credit}, debit: ${stmt.income['FBA Sales']?.debit}`);
+          return stmt;
         };
         
         // Get statements for comparison periods
