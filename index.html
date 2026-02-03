@@ -3319,92 +3319,84 @@
       let fbmAdSpend = 0;
       let unallocatedAdSpend = 0;
       
-      if (productAdsRes.ok) {
-        const productAdsData = await productAdsRes.json();
-        const productAdsRows = productAdsData.values || [];
-        if (productAdsRows.length > 1) {
-          const adsHeaders = productAdsRows[0];
-          const dateIndex = adsHeaders.indexOf('Date');
-          const campaignIndex = adsHeaders.indexOf('Campaign Name');
-          const spendIndex = adsHeaders.indexOf('Spend ($)');
+      if (productAdsRows.length > 1) {
+        const adsHeaders = productAdsRows[0];
+        const dateIndex = adsHeaders.indexOf('Date');
+        const campaignIndex = adsHeaders.indexOf('Campaign Name');
+        const spendIndex = adsHeaders.indexOf('Spend ($)');
+        
+        for (let i = 1; i < productAdsRows.length; i++) {
+          const adDate = productAdsRows[i][dateIndex];
+          const campaign = productAdsRows[i][campaignIndex];
+          const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
           
-          for (let i = 1; i < productAdsRows.length; i++) {
-            const adDate = productAdsRows[i][dateIndex];
-            const campaign = productAdsRows[i][campaignIndex];
-            const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
+          if (adDate >= startDateStr && adDate <= endDateStr && spend > 0) {
+            const mappedSkus = productCampaignToSkus[campaign] || [];
             
-            if (adDate >= startDateStr && adDate <= endDateStr && spend > 0) {
-              const mappedSkus = productCampaignToSkus[campaign] || [];
+            if (mappedSkus.length > 0) {
+              let totalSales = 0;
+              let fbaSales = 0;
+              let fbmSales = 0;
               
-              if (mappedSkus.length > 0) {
-                let totalSales = 0;
-                let fbaSales = 0;
-                let fbmSales = 0;
-                
-                mappedSkus.forEach(sku => {
-                  const sales = skuSales[sku];
-                  if (sales) {
-                    totalSales += sales.fba + sales.fbm;
-                    fbaSales += sales.fba;
-                    fbmSales += sales.fbm;
-                  }
-                });
-                
-                if (totalSales > 0) {
-                  fbaAdSpend += spend * (fbaSales / totalSales);
-                  fbmAdSpend += spend * (fbmSales / totalSales);
-                } else {
-                  unallocatedAdSpend += spend;
+              mappedSkus.forEach(sku => {
+                const sales = skuSales[sku];
+                if (sales) {
+                  totalSales += sales.fba + sales.fbm;
+                  fbaSales += sales.fba;
+                  fbmSales += sales.fbm;
                 }
+              });
+              
+              if (totalSales > 0) {
+                fbaAdSpend += spend * (fbaSales / totalSales);
+                fbmAdSpend += spend * (fbmSales / totalSales);
               } else {
                 unallocatedAdSpend += spend;
               }
+            } else {
+              unallocatedAdSpend += spend;
             }
           }
         }
       }
       
-      if (brandAdsRes.ok) {
-        const brandAdsData = await brandAdsRes.json();
-        const brandAdsRows = brandAdsData.values || [];
-        if (brandAdsRows.length > 1) {
-          const adsHeaders = brandAdsRows[0];
-          const dateIndex = adsHeaders.indexOf('Date');
-          const campaignIndex = adsHeaders.indexOf('Campaign Name');
-          const spendIndex = adsHeaders.indexOf('Spend ($)');
+      if (brandAdsRows.length > 1) {
+        const adsHeaders = brandAdsRows[0];
+        const dateIndex = adsHeaders.indexOf('Date');
+        const campaignIndex = adsHeaders.indexOf('Campaign Name');
+        const spendIndex = adsHeaders.indexOf('Spend ($)');
+        
+        for (let i = 1; i < brandAdsRows.length; i++) {
+          const adDate = brandAdsRows[i][dateIndex];
+          const campaign = brandAdsRows[i][campaignIndex];
+          const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
           
-          for (let i = 1; i < brandAdsRows.length; i++) {
-            const adDate = brandAdsRows[i][dateIndex];
-            const campaign = brandAdsRows[i][campaignIndex];
-            const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
+          if (adDate >= startDateStr && adDate <= endDateStr && spend > 0) {
+            const mappedBrand = brandCampaignToBrand[campaign];
             
-            if (adDate >= startDateStr && adDate <= endDateStr && spend > 0) {
-              const mappedBrand = brandCampaignToBrand[campaign];
+            if (mappedBrand && brandToSkus[mappedBrand]) {
+              const brandSkus = brandToSkus[mappedBrand];
+              let totalSales = 0;
+              let fbaSales = 0;
+              let fbmSales = 0;
               
-              if (mappedBrand && brandToSkus[mappedBrand]) {
-                const brandSkus = brandToSkus[mappedBrand];
-                let totalSales = 0;
-                let fbaSales = 0;
-                let fbmSales = 0;
-                
-                brandSkus.forEach(sku => {
-                  const sales = skuSales[sku];
-                  if (sales) {
-                    totalSales += sales.fba + sales.fbm;
-                    fbaSales += sales.fba;
-                    fbmSales += sales.fbm;
-                  }
-                });
-                
-                if (totalSales > 0) {
-                  fbaAdSpend += spend * (fbaSales / totalSales);
-                  fbmAdSpend += spend * (fbmSales / totalSales);
-                } else {
-                  unallocatedAdSpend += spend;
+              brandSkus.forEach(sku => {
+                const sales = skuSales[sku];
+                if (sales) {
+                  totalSales += sales.fba + sales.fbm;
+                  fbaSales += sales.fba;
+                  fbmSales += sales.fbm;
                 }
+              });
+              
+              if (totalSales > 0) {
+                fbaAdSpend += spend * (fbaSales / totalSales);
+                fbmAdSpend += spend * (fbmSales / totalSales);
               } else {
                 unallocatedAdSpend += spend;
               }
+            } else {
+              unallocatedAdSpend += spend;
             }
           }
         }
@@ -3415,21 +3407,17 @@
       // Parse shipping costs data
       let totalShippingCosts = 0;
       
-      if (shippingRes.ok) {
-        const shippingData = await shippingRes.json();
-        const shippingRows = shippingData.values || [];
-        if (shippingRows.length > 1) {
-          const shippingHeaders = shippingRows[0];
-          const dateIndex = shippingHeaders.indexOf('Date');
-          const costIndex = shippingHeaders.indexOf('Cost');
+      if (shippingRows.length > 1) {
+        const shippingHeaders = shippingRows[0];
+        const dateIndex = shippingHeaders.indexOf('Date');
+        const costIndex = shippingHeaders.indexOf('Cost');
+        
+        for (let i = 1; i < shippingRows.length; i++) {
+          const shipDate = shippingRows[i][dateIndex];
+          const cost = parseFloat(shippingRows[i][costIndex]) || 0;
           
-          for (let i = 1; i < shippingRows.length; i++) {
-            const shipDate = shippingRows[i][dateIndex];
-            const cost = parseFloat(shippingRows[i][costIndex]) || 0;
-            
-            if (shipDate >= startDateStr && shipDate <= endDateStr) {
-              totalShippingCosts += cost;
-            }
+          if (shipDate >= startDateStr && shipDate <= endDateStr) {
+            totalShippingCosts += cost;
           }
         }
       }
