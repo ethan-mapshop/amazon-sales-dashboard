@@ -2772,11 +2772,15 @@
           const startDateStr = monthStart.toISOString().split('T')[0];
           const endDateStr = monthEnd.toISOString().split('T')[0];
           
+          console.log(`Calculating statement for ${year}-${month+1}: ${startDateStr} to ${endDateStr}`);
+          
           // Filter transactions
           const filtered = transactionsRows.filter(row => {
             const dateStr = row[0];
             return dateStr >= startDateStr && dateStr <= endDateStr;
           });
+          
+          console.log(`  Found ${filtered.length} transactions`);
           
           // Calculate product costs
           const productCosts = {};
@@ -2871,6 +2875,10 @@
         // Get statements for comparison periods
         const prevMonthStatement = calculateMonthStatement(prevMonth, prevMonthYear);
         const yoyStatement = calculateMonthStatement(currentMonth, yoyYear);
+        
+        console.log('Comparison data loaded:');
+        console.log('  Previous month statement:', prevMonthStatement);
+        console.log('  YoY statement:', yoyStatement);
         
         // Calculate days in each month for normalization
         const currentMonthDays = new Date(currentYear, currentMonth + 1, 0).getDate();
@@ -3574,6 +3582,10 @@
         
         const prev = extractValues(comparisonData.prevMonth);
         const yoy = extractValues(comparisonData.yoy);
+        
+        console.log('Current values:', current);
+        console.log('Previous month values:', prev);
+        console.log('Year over year values:', yoy);
         
         // Normalize MoM for days in month
         const dayRatio = comparisonData.currentMonthDays / comparisonData.prevMonthDays;
