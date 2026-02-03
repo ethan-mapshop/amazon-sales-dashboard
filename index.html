@@ -1248,6 +1248,10 @@
       if (pageName === 'mapping' && accessToken) {
         loadMappingData();
       }
+      
+      if (pageName === 'overview' && accessToken) {
+        initializeOverviewView();
+      }
     }
     
     // Client ID management
@@ -1336,8 +1340,6 @@
             // Show signed in state
             displayUserInfo(null);
             enableUpload();
-            // Initialize overview view
-            initializeOverviewView();
           } else {
             showAuthError('Failed to get access token');
           }
@@ -1362,13 +1364,6 @@
           if (tokenClient) tokenClient.requestAccessToken();
         });
       }
-      
-      // Initialize overview view after a short delay to ensure elements are ready
-      setTimeout(() => {
-        if (accessToken) {
-          initializeOverviewView();
-        }
-      }, 100);
     });
     
     function displayUserInfo(userInfo) {
@@ -2608,6 +2603,12 @@
     
     // Initialize view on page load
     function initializeOverviewView() {
+      // Check if elements exist first
+      if (!document.getElementById('ytd-view') || !document.getElementById('monthly-view')) {
+        console.log('Overview elements not ready yet');
+        return;
+      }
+      
       const savedView = localStorage.getItem('overviewView') || 'ytd';
       if (savedView === 'monthly') {
         showMonthly();
@@ -2672,6 +2673,12 @@
     function fillYearDropdowns(years) {
       const ytdSelect = document.getElementById('ytd-year-select');
       const monthlySelect = document.getElementById('monthly-year-select');
+      const monthSelect = document.getElementById('monthly-month-select');
+      
+      if (!ytdSelect || !monthlySelect || !monthSelect) {
+        console.log('Dropdown elements not ready yet');
+        return;
+      }
       
       ytdSelect.innerHTML = '';
       monthlySelect.innerHTML = '';
@@ -2690,7 +2697,7 @@
       
       // Set current month
       const currentMonth = new Date().getMonth();
-      document.getElementById('monthly-month-select').value = currentMonth;
+      monthSelect.value = currentMonth;
     }
     
     // YTD preset functions
