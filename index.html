@@ -2767,7 +2767,15 @@
         return;
       }
       
+      console.log('Loading overview data for container:', containerId);
       const container = document.getElementById(containerId);
+      
+      if (!container) {
+        console.error('Container not found:', containerId);
+        alert('Error: Unable to find display container. Please try refreshing the page.');
+        return;
+      }
+      
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
@@ -3102,7 +3110,7 @@
         const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
         
         // Render the report
-        renderFinancialStatement(statement, startDate, endDate);
+        renderFinancialStatement(statement, startDate, endDate, container);
         
       } catch (error) {
         console.error('Error loading overview:', error);
@@ -3291,8 +3299,7 @@
       return statement;
     }
     
-    function renderFinancialStatement(statement, startDate, endDate) {
-      const container = document.getElementById('overview-content');
+    function renderFinancialStatement(statement, startDate, endDate, container) {
       
       // Calculate FBM totals
       const fbmIncome = (statement.income['FBM Sales']?.credit || 0) - (statement.income['FBM Sales']?.debit || 0) +
