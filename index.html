@@ -3275,7 +3275,7 @@
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
                   </tr>
-                  <tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
                   </tr>
@@ -3314,7 +3314,7 @@
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
                   </tr>
-                  <tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
                   </tr>
@@ -3350,10 +3350,10 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
-                    <td style="padding: 0.75rem;">Totals</td>
+                    <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
                   </tr>
-                  <tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
                   </tr>
