@@ -973,76 +973,34 @@
       <div class="card">
         <h2 class="section-title">Financial Overview</h2>
         
-        <!-- Tabs -->
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem; border-bottom: 2px solid var(--border);">
-          <button id="ytd-tab" class="btn" onclick="showYTD()" style="padding: 0.75rem 1.5rem; border-radius: 6px 6px 0 0; border-bottom: none;">
-            Year-to-Date Profitability
-          </button>
-          <button id="monthly-tab" class="btn" onclick="showMonthly()" style="padding: 0.75rem 1.5rem; border-radius: 6px 6px 0 0; border-bottom: none;">
-            Monthly Profitability
-          </button>
-        </div>
-        
-        <!-- Year-to-Date View -->
-        <div id="ytd-view">
-          <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
-              <button class="btn" onclick="setYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
-              <button class="btn" onclick="setYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div style="display: flex; gap: 1rem; align-items: center;">
-                <label style="font-weight: 600;">Year:</label>
-                <select id="ytd-year-select" onchange="generateYTDReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 120px;">
-                </select>
+        <div style="margin-bottom: 2rem;">
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+            <button class="btn" onclick="setDateRange('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
+            <button class="btn" onclick="setDateRange('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
+            <button class="btn" onclick="setDateRange('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+            <button class="btn" onclick="setDateRange('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 1rem;">
+              <div>
+                <label style="display: inline-block; margin-right: 0.5rem;">Start Date:</label>
+                <input type="date" id="overview-start-date" style="width: 150px;">
+              </div>
+              <div>
+                <label style="display: inline-block; margin-right: 0.5rem;">End Date:</label>
+                <input type="date" id="overview-end-date" style="width: 150px;">
               </div>
             </div>
-          </div>
-
-          <div id="ytd-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability</div>
-            </div>
+            <button class="btn btn-primary" onclick="loadOverviewData()" style="padding: 0.625rem 1.5rem;">
+              Generate Report
+            </button>
           </div>
         </div>
-        
-        <!-- Monthly View -->
-        <div id="monthly-view" style="display: none;">
-          <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
-              <button class="btn" onclick="setMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-              <button class="btn" onclick="setMonthlyDate('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div style="display: flex; gap: 1rem; align-items: center;">
-                <label style="font-weight: 600;">Month:</label>
-                <select id="monthly-month-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 140px;">
-                  <option value="0">January</option>
-                  <option value="1">February</option>
-                  <option value="2">March</option>
-                  <option value="3">April</option>
-                  <option value="4">May</option>
-                  <option value="5">June</option>
-                  <option value="6">July</option>
-                  <option value="7">August</option>
-                  <option value="8">September</option>
-                  <option value="9">October</option>
-                  <option value="10">November</option>
-                  <option value="11">December</option>
-                </select>
-                <label style="font-weight: 600;">Year:</label>
-                <select id="monthly-year-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 120px;">
-                </select>
-              </div>
-            </div>
-          </div>
 
-          <div id="monthly-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability</div>
-            </div>
+        <div id="overview-content">
+          <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+            <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+            <div style="font-size: 1.125rem;">Select a date range and click Generate Report</div>
           </div>
         </div>
       </div>
@@ -1247,10 +1205,6 @@
       
       if (pageName === 'mapping' && accessToken) {
         loadMappingData();
-      }
-      
-      if (pageName === 'overview' && accessToken) {
-        initializeOverviewView();
       }
     }
     
@@ -2572,368 +2526,53 @@
       return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
     
-    // Tab management
-    let currentView = 'ytd'; // Track current view
-    
-    function showYTD() {
-      currentView = 'ytd';
-      localStorage.setItem('overviewView', 'ytd');
-      
-      document.getElementById('ytd-view').style.display = 'block';
-      document.getElementById('monthly-view').style.display = 'none';
-      
-      document.getElementById('ytd-tab').style.background = 'var(--primary)';
-      document.getElementById('ytd-tab').style.color = 'white';
-      document.getElementById('monthly-tab').style.background = 'transparent';
-      document.getElementById('monthly-tab').style.color = 'var(--text-primary)';
-    }
-    
-    function showMonthly() {
-      currentView = 'monthly';
-      localStorage.setItem('overviewView', 'monthly');
-      
-      document.getElementById('ytd-view').style.display = 'none';
-      document.getElementById('monthly-view').style.display = 'block';
-      
-      document.getElementById('monthly-tab').style.background = 'var(--primary)';
-      document.getElementById('monthly-tab').style.color = 'white';
-      document.getElementById('ytd-tab').style.background = 'transparent';
-      document.getElementById('ytd-tab').style.color = 'var(--text-primary)';
-    }
-    
-    // Initialize view on page load
-    function initializeOverviewView() {
-      // Check if elements exist first
-      if (!document.getElementById('ytd-view') || !document.getElementById('monthly-view')) {
-        console.log('Overview elements not ready yet');
-        return;
-      }
-      
-      const savedView = localStorage.getItem('overviewView') || 'ytd';
-      if (savedView === 'monthly') {
-        showMonthly();
-      } else {
-        showYTD();
-      }
-      populateYearDropdowns();
-    }
-    
-    // Populate year dropdowns from transaction data
-    async function populateYearDropdowns() {
-      try {
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        
-        if (!response.ok) {
-          // Fallback to current year +/- 2
-          const currentYear = new Date().getFullYear();
-          const years = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
-          fillYearDropdowns(years);
-          return;
-        }
-        
-        const data = await response.json();
-        const rows = data.values || [];
-        
-        if (rows.length > 7) {
-          const years = new Set();
-          const dateColIndex = 0; // date/time is first column
-          
-          for (let i = 7; i < rows.length; i++) {
-            const dateStr = rows[i][dateColIndex];
-            if (dateStr) {
-              const year = parseInt(dateStr.substring(0, 4)); // Extract YYYY from ISO date
-              if (year && year >= 2000 && year <= 2100) {
-                years.add(year);
-              }
-            }
-          }
-          
-          if (years.size > 0) {
-            const sortedYears = Array.from(years).sort((a, b) => b - a); // Descending
-            fillYearDropdowns(sortedYears);
-            return;
-          }
-        }
-        
-        // Fallback if no data
-        const currentYear = new Date().getFullYear();
-        const years = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
-        fillYearDropdowns(years);
-        
-      } catch (error) {
-        console.error('Error loading years:', error);
-        const currentYear = new Date().getFullYear();
-        const years = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
-        fillYearDropdowns(years);
-      }
-    }
-    
-    function fillYearDropdowns(years) {
-      const ytdSelect = document.getElementById('ytd-year-select');
-      const monthlySelect = document.getElementById('monthly-year-select');
-      const monthSelect = document.getElementById('monthly-month-select');
-      
-      if (!ytdSelect || !monthlySelect || !monthSelect) {
-        console.log('Dropdown elements not ready yet');
-        return;
-      }
-      
-      ytdSelect.innerHTML = '';
-      monthlySelect.innerHTML = '';
-      
-      years.forEach(year => {
-        ytdSelect.innerHTML += `<option value="${year}">${year}</option>`;
-        monthlySelect.innerHTML += `<option value="${year}">${year}</option>`;
-      });
-      
-      // Set to current year if available
-      const currentYear = new Date().getFullYear();
-      if (years.includes(currentYear)) {
-        ytdSelect.value = currentYear;
-        monthlySelect.value = currentYear;
-      }
-      
-      // Set current month
-      const currentMonth = new Date().getMonth();
-      monthSelect.value = currentMonth;
-    }
-    
-    // YTD preset functions
-    function setYTDYear(preset) {
-      const ytdSelect = document.getElementById('ytd-year-select');
-      const currentYear = new Date().getFullYear();
-      
-      if (preset === 'lastYear') {
-        ytdSelect.value = currentYear - 1;
-      } else if (preset === 'thisYear') {
-        ytdSelect.value = currentYear;
-      }
-      
-      generateYTDReport();
-    }
-    
-    // Monthly preset functions
-    function setMonthlyDate(preset) {
-      const monthSelect = document.getElementById('monthly-month-select');
-      const yearSelect = document.getElementById('monthly-year-select');
+    // Helper function to set date range presets
+    function setDateRange(preset) {
       const today = new Date();
+      let startDate, endDate;
       
-      if (preset === 'lastMonth') {
-        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        monthSelect.value = lastMonth.getMonth();
-        yearSelect.value = lastMonth.getFullYear();
-      } else if (preset === 'thisMonth') {
-        monthSelect.value = today.getMonth();
-        yearSelect.value = today.getFullYear();
+      switch(preset) {
+        case 'lastMonth':
+          startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+          endDate = new Date(today.getFullYear(), today.getMonth(), 0);
+          break;
+        case 'thisMonth':
+          startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+          endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+          break;
+        case 'lastYear':
+          startDate = new Date(today.getFullYear() - 1, 0, 1);
+          endDate = new Date(today.getFullYear() - 1, 11, 31);
+          break;
+        case 'thisYear':
+          startDate = new Date(today.getFullYear(), 0, 1);
+          endDate = new Date(today.getFullYear(), 11, 31);
+          break;
       }
       
-      generateMonthlyReport();
+      // Format dates as YYYY-MM-DD for input fields
+      document.getElementById('overview-start-date').value = startDate.toISOString().split('T')[0];
+      document.getElementById('overview-end-date').value = endDate.toISOString().split('T')[0];
+      
+      // Auto-generate report
+      loadOverviewData();
     }
     
-    // Generate YTD report
-    async function generateYTDReport() {
-      const year = document.getElementById('ytd-year-select').value;
-      const startDate = `${year}-01-01`;
-      const endDate = `${year}-12-31`;
-      
-      await loadOverviewData(startDate, endDate, 'ytd-content');
-    }
-    
-    // Generate Monthly report
-    async function generateMonthlyReport() {
-      const month = parseInt(document.getElementById('monthly-month-select').value);
-      const year = parseInt(document.getElementById('monthly-year-select').value);
-      
-      const startDate = new Date(year, month, 1);
-      const endDate = new Date(year, month + 1, 0);
-      
-      const startDateStr = startDate.toISOString().split('T')[0];
-      const endDateStr = endDate.toISOString().split('T')[0];
-      
-      await loadOverviewData(startDateStr, endDateStr, 'monthly-content', true, month, year);
-    }
-    
-    // Load comparison data for monthly reports (YoY and MoM)
-    async function loadMonthlyComparisonData(transactionsRows, productsRows, productAdsRows, brandAdsRows, shippingRows, currentMonth, currentYear, productCampaignToSkus, brandCampaignToBrand, skuToBrand, brandToSkus) {
-      try {
-        // Calculate previous month (MoM)
-        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-        const prevMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
-        
-        // Calculate same month last year (YoY)
-        const yoyYear = currentYear - 1;
-        
-        // Helper to calculate statement for a given month/year
-        const calculateMonthStatement = (month, year) => {
-          const monthStart = new Date(year, month, 1);
-          const monthEnd = new Date(year, month + 1, 0);
-          const startDateStr = monthStart.toISOString().split('T')[0];
-          const endDateStr = monthEnd.toISOString().split('T')[0];
-          
-          console.log(`Calculating statement for ${year}-${month+1}: ${startDateStr} to ${endDateStr}`);
-          
-          // Parse transaction headers
-          const transactionsHeaders = transactionsRows[0];
-          
-          // Filter and parse transactions into objects
-          const filtered = [];
-          for (let i = 1; i < transactionsRows.length; i++) {
-            const row = transactionsRows[i];
-            const dateStr = row[0];
-            
-            if (dateStr >= startDateStr && dateStr <= endDateStr) {
-              const transaction = {};
-              transactionsHeaders.forEach((header, index) => {
-                transaction[header] = row[index] || '';
-              });
-              filtered.push(transaction);
-            }
-          }
-          
-          console.log(`  Found ${filtered.length} transactions`);
-          
-          // Calculate product costs
-          const productCosts = {};
-          const productCostMap = {}; // sku -> cost
-          
-          // Parse products rows to get costs
-          if (productsRows.length > 1) {
-            const productsHeaders = productsRows[0];
-            const skuIndex = productsHeaders.indexOf('sku');
-            const costIndex = productsHeaders.indexOf('cost');
-            
-            for (let i = 1; i < productsRows.length; i++) {
-              const sku = productsRows[i][skuIndex];
-              const cost = parseFloat(productsRows[i][costIndex]) || 0;
-              if (sku) productCostMap[sku] = cost;
-            }
-          }
-          
-          // Calculate total product costs from transactions
-          filtered.forEach(t => {
-            const sku = t.sku || t['sku'];
-            const qty = parseFloat(t.quantity || t['quantity']) || 0;
-            if (sku && qty !== 0 && productCostMap[sku]) {
-              const cost = productCostMap[sku];
-              productCosts[sku] = (productCosts[sku] || 0) + (Math.abs(qty) * cost);
-            }
-          });
-          const totalProductCosts = Object.values(productCosts).reduce((sum, cost) => sum + cost, 0);
-          
-          // Calculate ad spend (need to parse and allocate similar to main function)
-          let fbaAdSpend = 0, fbmAdSpend = 0, unallocatedAdSpend = 0;
-          
-          // For simplicity in comparison, just sum all ad spend without allocation
-          // This is approximate but sufficient for trend analysis
-          if (productAdsRows.length > 1) {
-            const productAdsHeaders = productAdsRows[0];
-            const dateIndex = productAdsHeaders.indexOf('Date');
-            const spendIndex = productAdsHeaders.indexOf('Spend ($)');
-            
-            for (let i = 1; i < productAdsRows.length; i++) {
-              const adDate = productAdsRows[i][dateIndex];
-              const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
-              
-              if (adDate >= startDateStr && adDate <= endDateStr) {
-                // Simplified: split 50/50 between FBA/FBM
-                // This is approximate for comparison purposes
-                fbaAdSpend += spend * 0.5;
-                fbmAdSpend += spend * 0.5;
-              }
-            }
-          }
-          
-          if (brandAdsRows.length > 1) {
-            const brandAdsHeaders = brandAdsRows[0];
-            const dateIndex = brandAdsHeaders.indexOf('Date');
-            const spendIndex = brandAdsHeaders.indexOf('Spend ($)');
-            
-            for (let i = 1; i < brandAdsRows.length; i++) {
-              const adDate = brandAdsRows[i][dateIndex];
-              const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
-              
-              if (adDate >= startDateStr && adDate <= endDateStr) {
-                // Simplified: split 50/50 between FBA/FBM
-                fbaAdSpend += spend * 0.5;
-                fbmAdSpend += spend * 0.5;
-              }
-            }
-          }
-          
-          
-          // Calculate shipping costs
-          let totalShippingCosts = 0;
-          if (shippingRows.length > 1) {
-            const shippingHeaders = shippingRows[0];
-            const dateIndex = shippingHeaders.indexOf('Date');
-            const costIndex = shippingHeaders.indexOf('Cost');
-            
-            for (let i = 1; i < shippingRows.length; i++) {
-              const shipDate = shippingRows[i][dateIndex];
-              const cost = parseFloat(shippingRows[i][costIndex]) || 0;
-              
-              if (shipDate >= startDateStr && shipDate <= endDateStr) {
-                totalShippingCosts += cost;
-              }
-            }
-          }
-          
-          // Calculate statement
-          const stmt = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
-          console.log(`  Statement calculated:`, stmt);
-          console.log(`    FBM Sales credit: ${stmt.income['FBM Sales']?.credit}, debit: ${stmt.income['FBM Sales']?.debit}`);
-          console.log(`    FBA Sales credit: ${stmt.income['FBA Sales']?.credit}, debit: ${stmt.income['FBA Sales']?.debit}`);
-          return stmt;
-        };
-        
-        // Get statements for comparison periods
-        const prevMonthStatement = calculateMonthStatement(prevMonth, prevMonthYear);
-        const yoyStatement = calculateMonthStatement(currentMonth, yoyYear);
-        
-        console.log('Comparison data loaded:');
-        console.log('  Previous month statement:', prevMonthStatement);
-        console.log('  YoY statement:', yoyStatement);
-        
-        // Calculate days in each month for normalization
-        const currentMonthDays = new Date(currentYear, currentMonth + 1, 0).getDate();
-        const prevMonthDays = new Date(prevMonthYear, prevMonth + 1, 0).getDate();
-        
-        return {
-          prevMonth: prevMonthStatement,
-          prevMonthDays,
-          currentMonthDays,
-          yoy: yoyStatement
-        };
-        
-      } catch (error) {
-        console.error('Error loading comparison data:', error);
-        return null;
-      }
-    }
-    
-    
-    async function loadOverviewData(startDate, endDate, containerId, isMonthly = false, month = null, year = null) {
+    async function loadOverviewData() {
       if (!accessToken) {
         alert('Please sign in first');
         return;
       }
       
+      const startDate = document.getElementById('overview-start-date').value;
+      const endDate = document.getElementById('overview-end-date').value;
+      
       if (!startDate || !endDate) {
-        alert('Please select a date range');
+        alert('Please select both start and end dates');
         return;
       }
       
-      console.log('Loading overview data for container:', containerId);
-      const container = document.getElementById(containerId);
-      
-      if (!container) {
-        console.error('Container not found:', containerId);
-        alert('Error: Unable to find display container. Please try refreshing the page.');
-        return;
-      }
-      
+      const container = document.getElementById('overview-content');
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
@@ -2966,12 +2605,6 @@
           return;
         }
         
-        // Store raw rows for comparison calculations (needed for monthly reports)
-        let productsRows = [];
-        let productAdsRows = [];
-        let brandAdsRows = [];
-        let shippingRows = [];
-        
         // Parse transactions
         const transactionsHeaders = transactionsRows[0];
         const transactions = [];
@@ -2991,7 +2624,7 @@
         
         if (productsRes.ok) {
           const productsData = await productsRes.json();
-          productsRows = productsData.values || [];
+          const productsRows = productsData.values || [];
           if (productsRows.length > 1) {
             const productsHeaders = productsRows[0];
             const skuIndex = productsHeaders.indexOf('sku');
@@ -3109,7 +2742,7 @@
         
         if (productAdsRes.ok) {
           const productAdsData = await productAdsRes.json();
-          productAdsRows = productAdsData.values || [];
+          const productAdsRows = productAdsData.values || [];
           if (productAdsRows.length > 1) {
             const adsHeaders = productAdsRows[0];
             const dateIndex = adsHeaders.indexOf('Date');
@@ -3161,7 +2794,7 @@
         
         if (brandAdsRes.ok) {
           const brandAdsData = await brandAdsRes.json();
-          brandAdsRows = brandAdsData.values || [];
+          const brandAdsRows = brandAdsData.values || [];
           if (brandAdsRows.length > 1) {
             const adsHeaders = brandAdsRows[0];
             const dateIndex = adsHeaders.indexOf('Date');
@@ -3231,7 +2864,7 @@
         
         if (shippingRes.ok) {
           const shippingData = await shippingRes.json();
-          shippingRows = shippingData.values || [];
+          const shippingRows = shippingData.values || [];
           if (shippingRows.length > 1) {
             const shippingHeaders = shippingRows[0];
             const shipDateIndex = shippingHeaders.indexOf('Ship Date');
@@ -3273,26 +2906,8 @@
         // Calculate financial statement with product costs, ad spend, and shipping costs
         const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
         
-        // Load comparison data for monthly reports
-        let comparisonData = null;
-        if (isMonthly && month !== null && year !== null) {
-          comparisonData = await loadMonthlyComparisonData(
-            transactionsRows, 
-            productsRows, 
-            productAdsRows, 
-            brandAdsRows, 
-            shippingRows, 
-            month, 
-            year,
-            productCampaignToSkus,
-            brandCampaignToBrand,
-            skuToBrand,
-            brandToSkus
-          );
-        }
-        
         // Render the report
-        renderFinancialStatement(statement, startDate, endDate, container, isMonthly, comparisonData);
+        renderFinancialStatement(statement, startDate, endDate);
         
       } catch (error) {
         console.error('Error loading overview:', error);
@@ -3481,25 +3096,8 @@
       return statement;
     }
     
-    function renderFinancialStatement(statement, startDate, endDate, container, isMonthly = false, comparisonData = null) {
-      
-      // Helper function to calculate comparison percentages
-      const calculateComparison = (current, previous) => {
-        if (!previous || previous === 0) return null;
-        return ((current - previous) / Math.abs(previous)) * 100;
-      };
-      
-      // Helper function to format comparison display
-      const formatComparison = (percentage, inverted = false) => {
-        if (percentage === null) return '<span style="color: var(--text-secondary);">N/A</span>';
-        
-        // Invert color logic for expenses (red for increase, green for decrease)
-        const isGood = inverted ? (percentage < 0) : (percentage >= 0);
-        const color = isGood ? 'var(--success)' : 'var(--error)';
-        const sign = percentage >= 0 ? '+' : '';
-        
-        return `<span style="color: ${color};">${sign}${percentage.toFixed(2)}%</span>`;
-      };
+    function renderFinancialStatement(statement, startDate, endDate) {
+      const container = document.getElementById('overview-content');
       
       // Calculate FBM totals
       const fbmIncome = (statement.income['FBM Sales']?.credit || 0) - (statement.income['FBM Sales']?.debit || 0) +
@@ -3543,104 +3141,6 @@
       const totalAdSpend = fbmAdSpend + fbaAdSpend + unallocatedAdSpend;
       const totalProfit = totalIncome - totalExpensesExcludingCostAndAd - totalProductCosts - totalAdSpend;
       const totalMargin = totalIncome > 0 ? (totalProfit / totalIncome * 100) : 0;
-      
-      // Calculate comparison data for monthly reports
-      let comparisons = null;
-      if (isMonthly && comparisonData) {
-        // Helper to extract values from comparison statements
-        const extractValues = (stmt) => {
-          const fbmInc = (stmt.income['FBM Sales']?.credit || 0) - (stmt.income['FBM Sales']?.debit || 0) +
-                        (stmt.income['FBM Returns']?.credit || 0) - (stmt.income['FBM Returns']?.debit || 0) +
-                        (stmt.income['FBM Other']?.credit || 0) - (stmt.income['FBM Other']?.debit || 0);
-          
-          const fbmOpEx = (stmt.expenses['FBM Shipping Costs']?.debit || 0) - (stmt.expenses['FBM Shipping Costs']?.credit || 0) +
-                          (stmt.expenses['FBM Transaction Fees']?.debit || 0) - (stmt.expenses['FBM Transaction Fees']?.credit || 0);
-          
-          const fbmProdCost = (stmt.expenses['FBM Product Costs']?.debit || 0) - (stmt.expenses['FBM Product Costs']?.credit || 0);
-          const fbmAd = stmt.expenses['FBM Ad Spend']?.debit || 0;
-          const fbmProf = fbmInc - fbmOpEx - fbmProdCost - fbmAd;
-          const fbmMar = fbmInc > 0 ? (fbmProf / fbmInc * 100) : 0;
-          
-          const fbaInc = (stmt.income['FBA Sales']?.credit || 0) - (stmt.income['FBA Sales']?.debit || 0) +
-                        (stmt.income['FBA Returns']?.credit || 0) - (stmt.income['FBA Returns']?.debit || 0) +
-                        (stmt.income['FBA Other']?.credit || 0) - (stmt.income['FBA Other']?.debit || 0);
-          
-          const fbaOpEx = (stmt.expenses['FBA Transaction Fees']?.debit || 0) - (stmt.expenses['FBA Transaction Fees']?.credit || 0) +
-                         (stmt.expenses['FBA Fees']?.debit || 0) - (stmt.expenses['FBA Fees']?.credit || 0) +
-                         (stmt.expenses['FBA Inbound Placement Fees']?.debit || 0) - (stmt.expenses['FBA Inbound Placement Fees']?.credit || 0) +
-                         (stmt.expenses['FBA Inbound Shipping Costs']?.debit || 0) - (stmt.expenses['FBA Inbound Shipping Costs']?.credit || 0) +
-                         (stmt.expenses['FBA Inventory Storage Fees']?.debit || 0) - (stmt.expenses['FBA Inventory Storage Fees']?.credit || 0) +
-                         (stmt.expenses['FBA Inventory Reimbursement']?.debit || 0) - (stmt.expenses['FBA Inventory Reimbursement']?.credit || 0);
-          
-          const fbaProdCost = (stmt.expenses['FBA Product Costs']?.debit || 0) - (stmt.expenses['FBA Product Costs']?.credit || 0);
-          const fbaAd = stmt.expenses['FBA Ad Spend']?.debit || 0;
-          const fbaProf = fbaInc - fbaOpEx - fbaProdCost - fbaAd;
-          const fbaMar = fbaInc > 0 ? (fbaProf / fbaInc * 100) : 0;
-          
-          const otherEx = (stmt.expenses['Other Expenses']?.debit || 0) - (stmt.expenses['Other Expenses']?.credit || 0);
-          const unallocAd = stmt.expenses['Unallocated Ad Spend']?.debit || 0;
-          
-          const totInc = fbmInc + fbaInc;
-          const totOpEx = fbmOpEx + fbaOpEx + otherEx;
-          const totProdCost = fbmProdCost + fbaProdCost;
-          const totAd = fbmAd + fbaAd + unallocAd;
-          const totProf = totInc - totOpEx - totProdCost - totAd;
-          const totMar = totInc > 0 ? (totProf / totInc * 100) : 0;
-          
-          return {
-            fbm: { income: fbmInc, opex: fbmOpEx, prodCost: fbmProdCost, adSpend: fbmAd, profit: fbmProf, margin: fbmMar },
-            fba: { income: fbaInc, opex: fbaOpEx, prodCost: fbaProdCost, adSpend: fbaAd, profit: fbaProf, margin: fbaMar },
-            total: { income: totInc, opex: totOpEx, prodCost: totProdCost, adSpend: totAd, profit: totProf, margin: totMar }
-          };
-        };
-        
-        const current = {
-          fbm: { income: fbmIncome, opex: fbmExpensesExcludingCostAndAd, prodCost: fbmProductCosts, adSpend: fbmAdSpend, profit: fbmProfit, margin: fbmMargin },
-          fba: { income: fbaIncome, opex: fbaExpensesExcludingCostAndAd, prodCost: fbaProductCosts, adSpend: fbaAdSpend, profit: fbaProfit, margin: fbaMargin },
-          total: { income: totalIncome, opex: totalExpensesExcludingCostAndAd, prodCost: totalProductCosts, adSpend: totalAdSpend, profit: totalProfit, margin: totalMargin }
-        };
-        
-        const prev = extractValues(comparisonData.prevMonth);
-        const yoy = extractValues(comparisonData.yoy);
-        
-        console.log('Current values:', current);
-        console.log('Previous month values:', prev);
-        console.log('  - FBM Income:', prev.fbm.income, 'vs Current:', current.fbm.income);
-        console.log('  - FBA Income:', prev.fba.income, 'vs Current:', current.fba.income);
-        console.log('Year over year values:', yoy);
-        console.log('  - FBM Income:', yoy.fbm.income, 'vs Current:', current.fbm.income);
-        console.log('  - FBA Income:', yoy.fba.income, 'vs Current:', current.fba.income);
-        
-        // Normalize MoM for days in month
-        const dayRatio = comparisonData.currentMonthDays / comparisonData.prevMonthDays;
-        
-        comparisons = {
-          fbm: {
-            income: { yoy: calculateComparison(current.fbm.income, yoy.fbm.income), mom: calculateComparison(current.fbm.income / comparisonData.currentMonthDays, prev.fbm.income / comparisonData.prevMonthDays) },
-            opex: { yoy: calculateComparison(current.fbm.opex, yoy.fbm.opex), mom: calculateComparison(current.fbm.opex / comparisonData.currentMonthDays, prev.fbm.opex / comparisonData.prevMonthDays) },
-            prodCost: { yoy: calculateComparison(current.fbm.prodCost, yoy.fbm.prodCost), mom: calculateComparison(current.fbm.prodCost / comparisonData.currentMonthDays, prev.fbm.prodCost / comparisonData.prevMonthDays) },
-            adSpend: { yoy: calculateComparison(current.fbm.adSpend, yoy.fbm.adSpend), mom: calculateComparison(current.fbm.adSpend / comparisonData.currentMonthDays, prev.fbm.adSpend / comparisonData.prevMonthDays) },
-            profit: { yoy: calculateComparison(current.fbm.profit, yoy.fbm.profit), mom: calculateComparison(current.fbm.profit / comparisonData.currentMonthDays, prev.fbm.profit / comparisonData.prevMonthDays) },
-            margin: { yoy: calculateComparison(current.fbm.margin, yoy.fbm.margin), mom: calculateComparison(current.fbm.margin, prev.fbm.margin) } // Margin is already a %
-          },
-          fba: {
-            income: { yoy: calculateComparison(current.fba.income, yoy.fba.income), mom: calculateComparison(current.fba.income / comparisonData.currentMonthDays, prev.fba.income / comparisonData.prevMonthDays) },
-            opex: { yoy: calculateComparison(current.fba.opex, yoy.fba.opex), mom: calculateComparison(current.fba.opex / comparisonData.currentMonthDays, prev.fba.opex / comparisonData.prevMonthDays) },
-            prodCost: { yoy: calculateComparison(current.fba.prodCost, yoy.fba.prodCost), mom: calculateComparison(current.fba.prodCost / comparisonData.currentMonthDays, prev.fba.prodCost / comparisonData.prevMonthDays) },
-            adSpend: { yoy: calculateComparison(current.fba.adSpend, yoy.fba.adSpend), mom: calculateComparison(current.fba.adSpend / comparisonData.currentMonthDays, prev.fba.adSpend / comparisonData.prevMonthDays) },
-            profit: { yoy: calculateComparison(current.fba.profit, yoy.fba.profit), mom: calculateComparison(current.fba.profit / comparisonData.currentMonthDays, prev.fba.profit / comparisonData.prevMonthDays) },
-            margin: { yoy: calculateComparison(current.fba.margin, yoy.fba.margin), mom: calculateComparison(current.fba.margin, prev.fba.margin) }
-          },
-          total: {
-            income: { yoy: calculateComparison(current.total.income, yoy.total.income), mom: calculateComparison(current.total.income / comparisonData.currentMonthDays, prev.total.income / comparisonData.prevMonthDays) },
-            opex: { yoy: calculateComparison(current.total.opex, yoy.total.opex), mom: calculateComparison(current.total.opex / comparisonData.currentMonthDays, prev.total.opex / comparisonData.prevMonthDays) },
-            prodCost: { yoy: calculateComparison(current.total.prodCost, yoy.total.prodCost), mom: calculateComparison(current.total.prodCost / comparisonData.currentMonthDays, prev.total.prodCost / comparisonData.prevMonthDays) },
-            adSpend: { yoy: calculateComparison(current.total.adSpend, yoy.total.adSpend), mom: calculateComparison(current.total.adSpend / comparisonData.currentMonthDays, prev.total.adSpend / comparisonData.prevMonthDays) },
-            profit: { yoy: calculateComparison(current.total.profit, yoy.total.profit), mom: calculateComparison(current.total.profit / comparisonData.currentMonthDays, prev.total.profit / comparisonData.prevMonthDays) },
-            margin: { yoy: calculateComparison(current.total.margin, yoy.total.margin), mom: calculateComparison(current.total.margin, prev.total.margin) }
-          }
-        };
-      }
       
       // Calculate overall totals for traditional view
       let incomeTotalDebit = 0, incomeTotalCredit = 0;
@@ -3750,48 +3250,34 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 34%;' : 'width: 50%;'}">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 22%;' : 'width: 50%;'} min-width: 110px;">Total</th>
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 22%; min-width: 100px;">YoY</th>' : ''}
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 22%; min-width: 100px;">MoM</th>' : ''}
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 50%; min-width: 140px;">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbmIncome >= 0 ? '$' + formatNumber(fbmIncome) : '-$' + formatNumber(Math.abs(fbmIncome))}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.mom)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmExpensesExcludingCostAndAd)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmProductCosts)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.prodCost.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.prodCost.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.mom)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.mom)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
@@ -3803,48 +3289,34 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 34%;' : 'width: 50%;'}">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 22%;' : 'width: 50%;'} min-width: 110px;">Total</th>
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 22%; min-width: 100px;">YoY</th>' : ''}
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 22%; min-width: 100px;">MoM</th>' : ''}
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 50%; min-width: 140px;">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbaIncome >= 0 ? '$' + formatNumber(fbaIncome) : '-$' + formatNumber(Math.abs(fbaIncome))}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.mom)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaExpensesExcludingCostAndAd)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaProductCosts)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.prodCost.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.prodCost.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.mom)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.mom)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
@@ -3856,48 +3328,34 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 34%;' : 'width: 50%;'}">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 22%;' : 'width: 50%;'} min-width: 110px;">Total</th>
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 22%; min-width: 100px;">YoY</th>' : ''}
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 22%; min-width: 100px;">MoM</th>' : ''}
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 50%; min-width: 140px;">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${totalIncome >= 0 ? '$' + formatNumber(totalIncome) : '-$' + formatNumber(Math.abs(totalIncome))}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.mom)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalExpensesExcludingCostAndAd)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalProductCosts)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.prodCost.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.prodCost.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.mom)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.yoy)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.mom)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
