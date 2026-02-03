@@ -3081,7 +3081,7 @@
         
         // Confirm with user
         const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-        const monthList = toBake.map(m => `${monthNames[m.month]} ${m.year}`).join(', ');
+        const monthList = toBake.map(m => `${monthNames[m.month - 1]} ${m.year}`).join(', ');
         
         if (!confirm(`Found ${toBake.length} month(s) to bake:\n\n${monthList}\n\nContinue?`)) {
           btn.disabled = false;
@@ -3089,7 +3089,63 @@
           return;
         }
         
-        // Bake each month
+        // LOAD ALL DATA ONCE (prevents rate limiting)
+        btn.innerHTML = '⏳ Loading data sheets...';
+        
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+        
+        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+        
+        // Parse all data
+        const transactionsData = await transactionsRes.json();
+        const transactionsRows = transactionsData.values || [];
+        
+        const productsData = productsRes.ok ? await productsRes.json() : { values: [] };
+        const productsRows = productsData.values || [];
+        
+        const productAdsData = productAdsRes.ok ? await productAdsRes.json() : { values: [] };
+        const productAdsRows = productAdsData.values || [];
+        
+        const brandAdsData = brandAdsRes.ok ? await brandAdsRes.json() : { values: [] };
+        const brandAdsRows = brandAdsData.values || [];
+        
+        const shippingData = shippingRes.ok ? await shippingRes.json() : { values: [] };
+        const shippingRows = shippingData.values || [];
+        
+        const productMappingData = productMappingRes.ok ? await productMappingRes.json() : { values: [] };
+        const productMappingRows = productMappingData.values || [];
+        
+        const brandMappingData = brandMappingRes.ok ? await brandMappingRes.json() : { values: [] };
+        const brandMappingRows = brandMappingData.values || [];
+        
+        console.log('Data loaded - starting baking process');
+        console.log(`  Transactions: ${transactionsRows.length} rows`);
+        console.log(`  Product Ads: ${productAdsRows.length} rows`);
+        console.log(`  Brand Ads: ${brandAdsRows.length} rows`);
+        
+        // Bake each month using the loaded data
         let successCount = 0;
         let failCount = 0;
         const errors = [];
@@ -3099,7 +3155,17 @@
           btn.innerHTML = `🔥 Baking ${monthNames[month - 1]} ${year}... (${i + 1}/${toBake.length})`;
           
           try {
-            await bakeOneMonth(year, month);
+            await bakeOneMonth(
+              year, 
+              month, 
+              transactionsRows,
+              productsRows,
+              productAdsRows,
+              brandAdsRows,
+              shippingRows,
+              productMappingRows,
+              brandMappingRows
+            );
             successCount++;
           } catch (error) {
             console.error(`Error baking ${monthNames[month - 1]} ${year}:`, error);
@@ -3125,7 +3191,7 @@
     }
     
     // Function to bake a single month
-    async function bakeOneMonth(year, month) {
+    async function bakeOneMonth(year, month, transactionsRows, productsRows, productAdsRows, brandAdsRows, shippingRows, productMappingRows, brandMappingRows) {
       // month is 1-12, convert to 0-11 for Date objects
       const monthIndex = month - 1;
       
@@ -3137,35 +3203,7 @@
       
       console.log(`Baking ${year}-${month}: ${startDateStr} to ${endDateStr}`);
       
-      // Load all the data (same as loadOverviewData but return the values)
-      const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        })
-      ]);
-      
-      if (!transactionsRes.ok) throw new Error('Failed to load transactions');
-      
-      const transactionsData = await transactionsRes.json();
-      const transactionsRows = transactionsData.values || [];
+      // Data is already loaded, just need to parse it
       
       if (transactionsRows.length <= 1) {
         throw new Error('No transaction data available');
@@ -3188,75 +3226,63 @@
       const skuToBrand = {};
       const brandToSkus = {};
       
-      if (productsRes.ok) {
-        const productsData = await productsRes.json();
-        const productsRows = productsData.values || [];
-        if (productsRows.length > 1) {
-          const productsHeaders = productsRows[0];
-          const skuIndex = productsHeaders.indexOf('sku');
-          const costIndex = productsHeaders.indexOf('cost');
-          const brandIndex = productsHeaders.indexOf('brand');
+      if (productsRows.length > 1) {
+        const productsHeaders = productsRows[0];
+        const skuIndex = productsHeaders.indexOf('sku');
+        const costIndex = productsHeaders.indexOf('cost');
+        const brandIndex = productsHeaders.indexOf('brand');
+        
+        for (let i = 1; i < productsRows.length; i++) {
+          const sku = productsRows[i][skuIndex];
+          const cost = parseFloat(productsRows[i][costIndex]) || 0;
+          const brand = productsRows[i][brandIndex];
           
-          for (let i = 1; i < productsRows.length; i++) {
-            const sku = productsRows[i][skuIndex];
-            const cost = parseFloat(productsRows[i][costIndex]) || 0;
-            const brand = productsRows[i][brandIndex];
+          if (sku) productCosts[sku] = cost;
+          
+          if (sku && brand) {
+            skuToBrand[sku] = brand;
             
-            if (sku) productCosts[sku] = cost;
-            
-            if (sku && brand) {
-              skuToBrand[sku] = brand;
-              
-              if (!brandToSkus[brand]) {
-                brandToSkus[brand] = [];
-              }
-              brandToSkus[brand].push(sku);
+            if (!brandToSkus[brand]) {
+              brandToSkus[brand] = [];
             }
+            brandToSkus[brand].push(sku);
           }
         }
       }
       
       // Parse product mappings
       const productCampaignToSkus = {};
-      if (productMappingRes.ok) {
-        const mappingData = await productMappingRes.json();
-        const mappingRows = mappingData.values || [];
-        if (mappingRows.length > 1) {
-          const headers = mappingRows[0];
-          const campaignIndex = headers.indexOf('Campaign Name');
-          const skuIndex = headers.indexOf('SKU');
+      if (productMappingRows.length > 1) {
+        const headers = productMappingRows[0];
+        const campaignIndex = headers.indexOf('Campaign Name');
+        const skuIndex = headers.indexOf('SKU');
+        
+        for (let i = 1; i < productMappingRows.length; i++) {
+          const campaign = productMappingRows[i][campaignIndex];
+          const sku = productMappingRows[i][skuIndex];
           
-          for (let i = 1; i < mappingRows.length; i++) {
-            const campaign = mappingRows[i][campaignIndex];
-            const sku = mappingRows[i][skuIndex];
-            
-            if (campaign && sku) {
-              if (!productCampaignToSkus[campaign]) {
-                productCampaignToSkus[campaign] = [];
-              }
-              productCampaignToSkus[campaign].push(sku);
+          if (campaign && sku) {
+            if (!productCampaignToSkus[campaign]) {
+              productCampaignToSkus[campaign] = [];
             }
+            productCampaignToSkus[campaign].push(sku);
           }
         }
       }
       
       // Parse brand mappings
       const brandCampaignToBrand = {};
-      if (brandMappingRes.ok) {
-        const mappingData = await brandMappingRes.json();
-        const mappingRows = mappingData.values || [];
-        if (mappingRows.length > 1) {
-          const headers = mappingRows[0];
-          const campaignIndex = headers.indexOf('Campaign Name');
-          const brandIndex = headers.indexOf('Brand');
+      if (brandMappingRows.length > 1) {
+        const headers = brandMappingRows[0];
+        const campaignIndex = headers.indexOf('Campaign Name');
+        const brandIndex = headers.indexOf('Brand');
+        
+        for (let i = 1; i < brandMappingRows.length; i++) {
+          const campaign = brandMappingRows[i][campaignIndex];
+          const brand = brandMappingRows[i][brandIndex];
           
-          for (let i = 1; i < mappingRows.length; i++) {
-            const campaign = mappingRows[i][campaignIndex];
-            const brand = mappingRows[i][brandIndex];
-            
-            if (campaign && brand) {
-              brandCampaignToBrand[campaign] = brand;
-            }
+          if (campaign && brand) {
+            brandCampaignToBrand[campaign] = brand;
           }
         }
       }
