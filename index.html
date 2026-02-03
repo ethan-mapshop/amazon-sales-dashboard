@@ -2924,8 +2924,7 @@
           'FBM Other': { debit: 0, credit: 0 },
           'FBA Sales': { debit: 0, credit: 0 },
           'FBA Returns': { debit: 0, credit: 0 },
-          'FBA Other': { debit: 0, credit: 0 },
-          'FBA Inventory Reimbursement': { debit: 0, credit: 0 }
+          'FBA Other': { debit: 0, credit: 0 }
         },
         expenses: {
           'FBM Product Costs': { debit: 0, credit: 0 },
@@ -2938,6 +2937,7 @@
           'FBA Inbound Placement Fees': { debit: 0, credit: 0 },
           'FBA Inbound Shipping Costs': { debit: 0, credit: 0 },
           'FBA Inventory Storage Fees': { debit: 0, credit: 0 },
+          'FBA Inventory Reimbursement': { debit: 0, credit: 0 },
           'FBA Ad Spend': { debit: 0, credit: 0 },
           'Other Expenses': { debit: 0, credit: 0 },
           'Unallocated Ad Spend': { debit: 0, credit: 0 }
@@ -3009,7 +3009,7 @@
         
         // FBA Inventory Reimbursement: description starts with "FBA Inventory Reimbursement"
         if (description.startsWith('FBA Inventory Reimbursement')) {
-          addAmount('FBA Inventory Reimbursement', 'income', other);
+          addAmount('FBA Inventory Reimbursement', 'expenses', other);
         }
         
         // EXPENSE CALCULATIONS
@@ -3116,15 +3116,15 @@
       // Calculate FBA totals
       const fbaIncome = (statement.income['FBA Sales']?.credit || 0) - (statement.income['FBA Sales']?.debit || 0) +
                         (statement.income['FBA Returns']?.credit || 0) - (statement.income['FBA Returns']?.debit || 0) +
-                        (statement.income['FBA Other']?.credit || 0) - (statement.income['FBA Other']?.debit || 0) +
-                        (statement.income['FBA Inventory Reimbursement']?.credit || 0) - (statement.income['FBA Inventory Reimbursement']?.debit || 0);
+                        (statement.income['FBA Other']?.credit || 0) - (statement.income['FBA Other']?.debit || 0);
       
       const fbaExpensesExcludingCostAndAd = 
         (statement.expenses['FBA Transaction Fees']?.debit || 0) - (statement.expenses['FBA Transaction Fees']?.credit || 0) +
         (statement.expenses['FBA Fees']?.debit || 0) - (statement.expenses['FBA Fees']?.credit || 0) +
         (statement.expenses['FBA Inbound Placement Fees']?.debit || 0) - (statement.expenses['FBA Inbound Placement Fees']?.credit || 0) +
         (statement.expenses['FBA Inbound Shipping Costs']?.debit || 0) - (statement.expenses['FBA Inbound Shipping Costs']?.credit || 0) +
-        (statement.expenses['FBA Inventory Storage Fees']?.debit || 0) - (statement.expenses['FBA Inventory Storage Fees']?.credit || 0);
+        (statement.expenses['FBA Inventory Storage Fees']?.debit || 0) - (statement.expenses['FBA Inventory Storage Fees']?.credit || 0) +
+        (statement.expenses['FBA Inventory Reimbursement']?.debit || 0) - (statement.expenses['FBA Inventory Reimbursement']?.credit || 0);
       
       const fbaProductCosts = (statement.expenses['FBA Product Costs']?.debit || 0) - (statement.expenses['FBA Product Costs']?.credit || 0);
       const fbaAdSpend = statement.expenses['FBA Ad Spend']?.debit || 0;
