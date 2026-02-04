@@ -3055,7 +3055,7 @@
         const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
         
         // Render the report
-        renderFinancialStatement(statement, startDate, endDate);
+        renderFinancialStatement(statement, startDate, endDate, container);
         
       } catch (error) {
         console.error('Error loading overview:', error);
@@ -3244,8 +3244,7 @@
       return statement;
     }
     
-    function renderFinancialStatement(statement, startDate, endDate) {
-      const container = document.getElementById('overview-content');
+    function renderFinancialStatement(statement, startDate, endDate, container) {
       
       // Calculate FBM totals
       const fbmIncome = (statement.income['FBM Sales']?.credit || 0) - (statement.income['FBM Sales']?.debit || 0) +
