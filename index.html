@@ -3075,6 +3075,7 @@
     }
     
     // Function to bake a single month
+    // Function to bake a single month
     async function bakeOneMonth(year, month, transactionsRows, productsRows, productAdsRows, brandAdsRows, shippingRows, productMappingRows, brandMappingRows) {
       // month is 1-12, convert to 0-11 for Date objects
       const monthIndex = month - 1;
@@ -3087,287 +3088,78 @@
       
       console.log(`Baking ${year}-${month}: ${startDateStr} to ${endDateStr}`);
       
-      // Data is already loaded, just need to parse it
+      // Create a temporary container for loadOverviewData to render into
+      const tempContainer = document.createElement('div');
+      tempContainer.id = 'temp-bake-container';
+      tempContainer.style.display = 'none';
+      document.body.appendChild(tempContainer);
       
-      if (transactionsRows.length <= 1) {
-        throw new Error('No transaction data available');
-      }
+      // Call loadOverviewData to do all the calculation (it works!)
+      await loadOverviewData(startDateStr, endDateStr, 'temp-bake-container', false);
       
-      // Parse transactions
-      const transactionsHeaders = transactionsRows[0];
-      const transactions = [];
+      // Now extract the values from the rendered HTML
+      // Find the profitability tables that were rendered
+      const fbmTable = Array.from(tempContainer.querySelectorAll('table')).find(t => 
+        t.previousElementSibling && t.previousElementSibling.textContent.includes('FBM Profitability')
+      );
+      const fbaTable = Array.from(tempContainer.querySelectorAll('table')).find(t => 
+        t.previousElementSibling && t.previousElementSibling.textContent.includes('FBA Profitability')
+      );
+      const totalTable = Array.from(tempContainer.querySelectorAll('table')).find(t => 
+        t.previousElementSibling && t.previousElementSibling.textContent.includes('Total Profitability')
+      );
       
-      for (let i = 1; i < transactionsRows.length; i++) {
-        const transaction = {};
-        transactionsHeaders.forEach((header, index) => {
-          transaction[header] = transactionsRows[i][index] || '';
-        });
-        transactions.push(transaction);
-      }
+      // Helper to extract number from table cell
+      const extractValue = (table, rowLabel) => {
+        if (!table) return 0;
+        const rows = Array.from(table.querySelectorAll('tr'));
+        const row = rows.find(r => r.textContent.includes(rowLabel));
+        if (!row) return 0;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 2) return 0;
+        const text = cells[1].textContent.replace(/[$,]/g, '').replace(/^-/, '');
+        return parseFloat(text) || 0;
+      };
       
-      // Parse products (for costs and brand mappings)
-      const productCosts = {};
-      const skuToBrand = {};
-      const brandToSkus = {};
+      const extractPercentage = (table, rowLabel) => {
+        if (!table) return 0;
+        const rows = Array.from(table.querySelectorAll('tr'));
+        const row = rows.find(r => r.textContent.includes(rowLabel));
+        if (!row) return 0;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 2) return 0;
+        const text = cells[1].textContent.replace(/%/g, '');
+        return parseFloat(text) || 0;
+      };
       
-      if (productsRows.length > 1) {
-        const productsHeaders = productsRows[0];
-        const skuIndex = productsHeaders.indexOf('sku');
-        const costIndex = productsHeaders.indexOf('cost');
-        const brandIndex = productsHeaders.indexOf('brand');
-        
-        for (let i = 1; i < productsRows.length; i++) {
-          const sku = productsRows[i][skuIndex];
-          const cost = parseFloat(productsRows[i][costIndex]) || 0;
-          const brand = productsRows[i][brandIndex];
-          
-          if (sku) productCosts[sku] = cost;
-          
-          if (sku && brand) {
-            skuToBrand[sku] = brand;
-            
-            if (!brandToSkus[brand]) {
-              brandToSkus[brand] = [];
-            }
-            brandToSkus[brand].push(sku);
-          }
-        }
-      }
+      // Extract FBM values
+      const fbmIncome = extractValue(fbmTable, 'Income');
+      const fbmOpEx = extractValue(fbmTable, 'Operating Expenses');
+      const fbmProductCosts = extractValue(fbmTable, 'Product Costs');
+      const fbmAdSpend = extractValue(fbmTable, 'Ad Spend');
+      const fbmProfit = extractValue(fbmTable, 'Profit');
+      const fbmMargin = extractPercentage(fbmTable, 'Margin');
       
-      // Parse product mappings
-      const productCampaignToSkus = {};
-      if (productMappingRows.length > 1) {
-        const headers = productMappingRows[0];
-        const campaignIndex = headers.indexOf('Campaign Name');
-        const skuIndex = headers.indexOf('SKU');
-        
-        for (let i = 1; i < productMappingRows.length; i++) {
-          const campaign = productMappingRows[i][campaignIndex];
-          const sku = productMappingRows[i][skuIndex];
-          
-          if (campaign && sku) {
-            if (!productCampaignToSkus[campaign]) {
-              productCampaignToSkus[campaign] = [];
-            }
-            productCampaignToSkus[campaign].push(sku);
-          }
-        }
-      }
+      // Extract FBA values
+      const fbaIncome = extractValue(fbaTable, 'Income');
+      const fbaOpEx = extractValue(fbaTable, 'Operating Expenses');
+      const fbaProductCosts = extractValue(fbaTable, 'Product Costs');
+      const fbaAdSpend = extractValue(fbaTable, 'Ad Spend');
+      const fbaProfit = extractValue(fbaTable, 'Profit');
+      const fbaMargin = extractPercentage(fbaTable, 'Margin');
       
-      // Parse brand mappings
-      const brandCampaignToBrand = {};
-      if (brandMappingRows.length > 1) {
-        const headers = brandMappingRows[0];
-        const campaignIndex = headers.indexOf('Campaign Name');
-        const brandIndex = headers.indexOf('Brand');
-        
-        for (let i = 1; i < brandMappingRows.length; i++) {
-          const campaign = brandMappingRows[i][campaignIndex];
-          const brand = brandMappingRows[i][brandIndex];
-          
-          if (campaign && brand) {
-            brandCampaignToBrand[campaign] = brand;
-          }
-        }
-      }
+      // Extract Total values
+      const totalIncome = extractValue(totalTable, 'Income');
+      const totalOpEx = extractValue(totalTable, 'Operating Expenses');
+      const totalProductCosts = extractValue(totalTable, 'Product Costs');
+      const totalAdSpend = extractValue(totalTable, 'Ad Spend');
+      const totalProfit = extractValue(totalTable, 'Profit');
+      const totalMargin = extractPercentage(totalTable, 'Margin');
       
-      // Calculate FBA/FBM sales by SKU from filtered transactions
-      const skuSales = {};
-      const reportStart = new Date(startDateStr);
-      const reportEnd = new Date(endDateStr);
+      // Clean up temp container
+      document.body.removeChild(tempContainer);
       
-      transactions.forEach(t => {
-        const transDate = new Date(t[transactionsHeaders.find(h => h.includes('date'))]);
-        if (transDate >= reportStart && transDate <= reportEnd) {
-          const type = (t.type || '').trim();
-          const sku = t.sku || '';
-          const fulfillment = (t.fulfillment || '').trim();
-          const productSales = parseFloat(t['product sales'] || 0);
-          
-          if (type === 'Order' && sku && productSales > 0) {
-            if (!skuSales[sku]) {
-              skuSales[sku] = { fba: 0, fbm: 0 };
-            }
-            
-            if (fulfillment === 'Amazon') {
-              skuSales[sku].fba += productSales;
-            } else if (fulfillment === 'Seller') {
-              skuSales[sku].fbm += productSales;
-            }
-          }
-        }
-      });
-      
-      // Parse ad spend data with FBA/FBM allocation (same complex logic as main report)
-      let fbaAdSpend = 0;
-      let fbmAdSpend = 0;
-      let unallocatedAdSpend = 0;
-      
-      if (productAdsRows.length > 1) {
-        const adsHeaders = productAdsRows[0];
-        const dateIndex = adsHeaders.indexOf('Date');
-        const campaignIndex = adsHeaders.indexOf('Campaign Name');
-        const spendIndex = adsHeaders.indexOf('Spend ($)');
-        
-        for (let i = 1; i < productAdsRows.length; i++) {
-          const adDate = productAdsRows[i][dateIndex];
-          if (!adDate) continue;
-          
-          // Extract year and month from ad date
-          const adYear = parseInt(adDate.substring(0, 4));
-          const adMonth = parseInt(adDate.substring(5, 7));
-          
-          // Check if ad is in this month
-          if (adYear === year && adMonth === month) {
-            const campaign = productAdsRows[i][campaignIndex];
-            const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
-            
-            if (spend > 0) {
-              const mappedSkus = productCampaignToSkus[campaign] || [];
-              
-              if (mappedSkus.length > 0) {
-                let totalSales = 0;
-                let fbaSales = 0;
-                let fbmSales = 0;
-                
-                mappedSkus.forEach(sku => {
-                  const sales = skuSales[sku];
-                  if (sales) {
-                    totalSales += sales.fba + sales.fbm;
-                    fbaSales += sales.fba;
-                    fbmSales += sales.fbm;
-                  }
-                });
-                
-                if (totalSales > 0) {
-                  fbaAdSpend += spend * (fbaSales / totalSales);
-                  fbmAdSpend += spend * (fbmSales / totalSales);
-                } else {
-                  unallocatedAdSpend += spend;
-                }
-              } else {
-                unallocatedAdSpend += spend;
-              }
-            }
-          }
-        }
-      }
-      
-      if (brandAdsRows.length > 1) {
-        const adsHeaders = brandAdsRows[0];
-        const dateIndex = adsHeaders.indexOf('Date');
-        const campaignIndex = adsHeaders.indexOf('Campaign Name');
-        const spendIndex = adsHeaders.indexOf('Spend ($)');
-        
-        for (let i = 1; i < brandAdsRows.length; i++) {
-          const adDate = brandAdsRows[i][dateIndex];
-          if (!adDate) continue;
-          
-          // Extract year and month from ad date
-          const adYear = parseInt(adDate.substring(0, 4));
-          const adMonth = parseInt(adDate.substring(5, 7));
-          
-          // Check if ad is in this month
-          if (adYear === year && adMonth === month) {
-            const campaign = brandAdsRows[i][campaignIndex];
-            const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
-            
-            if (spend > 0) {
-              const mappedBrand = brandCampaignToBrand[campaign];
-              
-              if (mappedBrand && brandToSkus[mappedBrand]) {
-                const brandSkus = brandToSkus[mappedBrand];
-                let totalSales = 0;
-                let fbaSales = 0;
-                let fbmSales = 0;
-                
-                brandSkus.forEach(sku => {
-                  const sales = skuSales[sku];
-                  if (sales) {
-                    totalSales += sales.fba + sales.fbm;
-                    fbaSales += sales.fba;
-                    fbmSales += sales.fbm;
-                  }
-                });
-                
-                if (totalSales > 0) {
-                  fbaAdSpend += spend * (fbaSales / totalSales);
-                  fbmAdSpend += spend * (fbmSales / totalSales);
-                } else {
-                  unallocatedAdSpend += spend;
-                }
-              } else {
-                unallocatedAdSpend += spend;
-              }
-            }
-          }
-        }
-      }
-      
-      console.log(`  Ad Spend - FBA: $${fbaAdSpend.toFixed(2)}, FBM: $${fbmAdSpend.toFixed(2)}, Unallocated: $${unallocatedAdSpend.toFixed(2)}`);
-      
-      // Parse shipping costs data
-      let totalShippingCosts = 0;
-      
-      if (shippingRows.length > 1) {
-        const shippingHeaders = shippingRows[0];
-        const dateIndex = shippingHeaders.indexOf('Date');
-        const costIndex = shippingHeaders.indexOf('Cost');
-        
-        for (let i = 1; i < shippingRows.length; i++) {
-          const shipDate = shippingRows[i][dateIndex];
-          const cost = parseFloat(shippingRows[i][costIndex]) || 0;
-          
-          if (shipDate >= startDateStr && shipDate <= endDateStr) {
-            totalShippingCosts += cost;
-          }
-        }
-      }
-      
-      // Filter transactions for this date range
-      const filtered = transactions.filter(t => {
-        const tDate = t.date || t[transactionsHeaders.find(h => h && h.toLowerCase().includes('date'))];
-        return tDate >= startDateStr && tDate <= endDateStr;
-      });
-      
-      // Calculate financial statement
-      const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
-      
-      // Extract profitability metrics
-      const fbmIncome = (statement.income['FBM Sales']?.credit || 0) - (statement.income['FBM Sales']?.debit || 0) +
-                       (statement.income['FBM Returns']?.credit || 0) - (statement.income['FBM Returns']?.debit || 0) +
-                       (statement.income['FBM Other']?.credit || 0) - (statement.income['FBM Other']?.debit || 0);
-      
-      const fbmOpEx = (statement.expenses['FBM Shipping Costs']?.debit || 0) - (statement.expenses['FBM Shipping Costs']?.credit || 0) +
-                      (statement.expenses['FBM Transaction Fees']?.debit || 0) - (statement.expenses['FBM Transaction Fees']?.credit || 0);
-      
-      const fbmProductCosts = (statement.expenses['FBM Product Costs']?.debit || 0) - (statement.expenses['FBM Product Costs']?.credit || 0);
-      const fbmProfit = fbmIncome - fbmOpEx - fbmProductCosts - fbmAdSpend;
-      const fbmMargin = fbmIncome > 0 ? (fbmProfit / fbmIncome * 100) : 0;
-      
-      const fbaIncome = (statement.income['FBA Sales']?.credit || 0) - (statement.income['FBA Sales']?.debit || 0) +
-                       (statement.income['FBA Returns']?.credit || 0) - (statement.income['FBA Returns']?.debit || 0) +
-                       (statement.income['FBA Other']?.credit || 0) - (statement.income['FBA Other']?.debit || 0);
-      
-      const fbaOpEx = (statement.expenses['FBA Transaction Fees']?.debit || 0) - (statement.expenses['FBA Transaction Fees']?.credit || 0) +
-                     (statement.expenses['FBA Fees']?.debit || 0) - (statement.expenses['FBA Fees']?.credit || 0) +
-                     (statement.expenses['FBA Inbound Placement Fees']?.debit || 0) - (statement.expenses['FBA Inbound Placement Fees']?.credit || 0) +
-                     (statement.expenses['FBA Inbound Shipping Costs']?.debit || 0) - (statement.expenses['FBA Inbound Shipping Costs']?.credit || 0) +
-                     (statement.expenses['FBA Inventory Storage Fees']?.debit || 0) - (statement.expenses['FBA Inventory Storage Fees']?.credit || 0) +
-                     (statement.expenses['FBA Inventory Reimbursement']?.debit || 0) - (statement.expenses['FBA Inventory Reimbursement']?.credit || 0);
-      
-      const fbaProductCosts = (statement.expenses['FBA Product Costs']?.debit || 0) - (statement.expenses['FBA Product Costs']?.credit || 0);
-      const fbaProfit = fbaIncome - fbaOpEx - fbaProductCosts - fbaAdSpend;
-      const fbaMargin = fbaIncome > 0 ? (fbaProfit / fbaIncome * 100) : 0;
-      
-      const otherExpenses = (statement.expenses['Other Expenses']?.debit || 0) - (statement.expenses['Other Expenses']?.credit || 0);
-      
-      const totalIncome = fbmIncome + fbaIncome;
-      const totalOpEx = fbmOpEx + fbaOpEx + otherExpenses;
-      const totalProductCosts = fbmProductCosts + fbaProductCosts;
-      const totalAdSpend = fbmAdSpend + fbaAdSpend + unallocatedAdSpend;
-      const totalProfit = totalIncome - totalOpEx - totalProductCosts - totalAdSpend;
-      const totalMargin = totalIncome > 0 ? (totalProfit / totalIncome * 100) : 0;
+      console.log(`  Ad Spend - FBA: $${fbaAdSpend.toFixed(2)}, FBM: $${fbmAdSpend.toFixed(2)}`);
       
       // Write to MonthlyMetrics sheet
       const row = [
@@ -3395,6 +3187,7 @@
       
       await appendToMonthlyMetrics(row);
     }
+
     
     // Function to append a row to MonthlyMetrics sheet
     async function appendToMonthlyMetrics(row) {
