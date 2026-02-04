@@ -2611,8 +2611,8 @@
       document.getElementById('monthly-view').style.display = 'none';
       document.getElementById('ytd-tab').style.background = 'var(--primary)';
       document.getElementById('ytd-tab').style.color = 'white';
-      document.getElementById('monthly-tab').style.background = '';
-      document.getElementById('monthly-tab').style.color = '';
+      document.getElementById('monthly-tab').style.background = 'transparent';
+      document.getElementById('monthly-tab').style.color = 'var(--text)';
       
       // Initialize year dropdown if not already done
       initializeYearDropdown();
@@ -2621,8 +2621,8 @@
     function showMonthly() {
       document.getElementById('ytd-view').style.display = 'none';
       document.getElementById('monthly-view').style.display = 'block';
-      document.getElementById('ytd-tab').style.background = '';
-      document.getElementById('ytd-tab').style.color = '';
+      document.getElementById('ytd-tab').style.background = 'transparent';
+      document.getElementById('ytd-tab').style.color = 'var(--text)';
       document.getElementById('monthly-tab').style.background = 'var(--primary)';
       document.getElementById('monthly-tab').style.color = 'white';
       
@@ -2639,6 +2639,9 @@
           const option = document.createElement('option');
           option.value = year;
           option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
           select.appendChild(option);
         }
       }
@@ -2653,14 +2656,16 @@
           const option = document.createElement('option');
           option.value = year;
           option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
           yearSelect.appendChild(option);
         }
       }
       
-      // Set to current month/year
+      // Set to current month
       const now = new Date();
       document.getElementById('monthly-month-select').value = now.getMonth();
-      document.getElementById('monthly-year-select').value = now.getFullYear();
     }
     
     // YTD preset buttons
@@ -2730,11 +2735,14 @@
         return;
       }
       
+      console.log('Loading data for container:', containerId);
       const container = document.getElementById(containerId);
       if (!container) {
         console.error('Container not found:', containerId);
+        alert('Error: Container not found. Please refresh the page.');
         return;
       }
+      
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
