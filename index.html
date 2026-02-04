@@ -3326,7 +3326,7 @@
       
       // Filter transactions for this date range
       const filtered = transactions.filter(t => {
-        const tDate = t[transactionsHeaders.find(h => h.includes('date'))];
+        const tDate = t.date || t[transactionsHeaders.find(h => h && h.toLowerCase().includes('date'))];
         return tDate >= startDateStr && tDate <= endDateStr;
       });
       
