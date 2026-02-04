@@ -2751,33 +2751,35 @@
       const year = parseInt(document.getElementById('monthly-year-select').value);
       const month = monthIndex + 1; // Convert to 1-12 for sheet lookup
       
-      const container = document.getElementById('monthly-content');
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      const startDate = new Date(year, monthIndex, 1);
+      const endDate = new Date(year, monthIndex + 1, 0);
       
+      const startDateStr = startDate.toISOString().split('T')[0];
+      const endDateStr = endDate.toISOString().split('T')[0];
+      
+      // Store comparison info for loadOverviewData to use
+      window.monthlyComparisonInfo = { month, year, monthIndex };
+      
+      // Load fresh data (will generate left side + right side)
+      await loadOverviewData(startDateStr, endDateStr, 'monthly-content', true, monthIndex, year);
+    }
+    
+    
+    
+    // Load comparison data from MonthlyMetrics sheet for monthly reports
+    async function loadMonthlyComparisonDataFromSheet(month, year, monthIndex) {
       try {
         // Load MonthlyMetrics sheet
         const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/MonthlyMetrics`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
-        if (!response.ok) {
-          throw new Error('Failed to load MonthlyMetrics sheet. Have you baked data yet?');
-        }
+        if (!response.ok) return null;
         
         const data = await response.json();
         const rows = data.values || [];
         
-        if (rows.length <= 1) {
-          container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);"><div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">🔥</div><div style="font-size: 1.125rem;">No baked data found. Click "Bake New Data" to generate monthly metrics.</div></div>';
-          return;
-        }
-        
-        // Find current month data (month is 1-12 in sheet)
-        const currentRow = rows.find(r => parseInt(r[0]) === year && parseInt(r[1]) === month);
-        if (!currentRow) {
-          container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--text-secondary);"><div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">🔥</div><div style="font-size: 1.125rem;">No data for this month. Click "Bake New Data" to generate it.</div></div>`;
-          return;
-        }
+        if (rows.length <= 1) return null;
         
         // Find comparison periods (using 1-12 format for sheet)
         const prevMonth = month === 1 ? 12 : month - 1;
@@ -2787,197 +2789,79 @@
         const prevMonthRow = rows.find(r => parseInt(r[0]) === prevMonthYear && parseInt(r[1]) === prevMonth);
         const yoyRow = rows.find(r => parseInt(r[0]) === yoyYear && parseInt(r[1]) === month);
         
-        // Parse current month data
-        const current = {
+        if (!prevMonthRow && !yoyRow) return null;
+        
+        // Parse comparison data
+        const prev = prevMonthRow ? {
           fbm: {
-            income: parseFloat(currentRow[2]) || 0,
-            opex: parseFloat(currentRow[3]) || 0,
-            prodCost: parseFloat(currentRow[4]) || 0,
-            adSpend: parseFloat(currentRow[5]) || 0,
-            profit: parseFloat(currentRow[6]) || 0,
-            margin: parseFloat(currentRow[7]) || 0
+            income: parseFloat(prevMonthRow[2]) || 0,
+            opex: parseFloat(prevMonthRow[3]) || 0,
+            prodCost: parseFloat(prevMonthRow[4]) || 0,
+            adSpend: parseFloat(prevMonthRow[5]) || 0,
+            profit: parseFloat(prevMonthRow[6]) || 0,
+            margin: parseFloat(prevMonthRow[7]) || 0
           },
           fba: {
-            income: parseFloat(currentRow[8]) || 0,
-            opex: parseFloat(currentRow[9]) || 0,
-            prodCost: parseFloat(currentRow[10]) || 0,
-            adSpend: parseFloat(currentRow[11]) || 0,
-            profit: parseFloat(currentRow[12]) || 0,
-            margin: parseFloat(currentRow[13]) || 0
+            income: parseFloat(prevMonthRow[8]) || 0,
+            opex: parseFloat(prevMonthRow[9]) || 0,
+            prodCost: parseFloat(prevMonthRow[10]) || 0,
+            adSpend: parseFloat(prevMonthRow[11]) || 0,
+            profit: parseFloat(prevMonthRow[12]) || 0,
+            margin: parseFloat(prevMonthRow[13]) || 0
           },
           total: {
-            income: parseFloat(currentRow[14]) || 0,
-            opex: parseFloat(currentRow[15]) || 0,
-            prodCost: parseFloat(currentRow[16]) || 0,
-            adSpend: parseFloat(currentRow[17]) || 0,
-            profit: parseFloat(currentRow[18]) || 0,
-            margin: parseFloat(currentRow[19]) || 0
+            income: parseFloat(prevMonthRow[14]) || 0,
+            opex: parseFloat(prevMonthRow[15]) || 0,
+            prodCost: parseFloat(prevMonthRow[16]) || 0,
+            adSpend: parseFloat(prevMonthRow[17]) || 0,
+            profit: parseFloat(prevMonthRow[18]) || 0,
+            margin: parseFloat(prevMonthRow[19]) || 0
           }
+        } : null;
+        
+        const yoy = yoyRow ? {
+          fbm: {
+            income: parseFloat(yoyRow[2]) || 0,
+            opex: parseFloat(yoyRow[3]) || 0,
+            prodCost: parseFloat(yoyRow[4]) || 0,
+            adSpend: parseFloat(yoyRow[5]) || 0,
+            profit: parseFloat(yoyRow[6]) || 0,
+            margin: parseFloat(yoyRow[7]) || 0
+          },
+          fba: {
+            income: parseFloat(yoyRow[8]) || 0,
+            opex: parseFloat(yoyRow[9]) || 0,
+            prodCost: parseFloat(yoyRow[10]) || 0,
+            adSpend: parseFloat(yoyRow[11]) || 0,
+            profit: parseFloat(yoyRow[12]) || 0,
+            margin: parseFloat(yoyRow[13]) || 0
+          },
+          total: {
+            income: parseFloat(yoyRow[14]) || 0,
+            opex: parseFloat(yoyRow[15]) || 0,
+            prodCost: parseFloat(yoyRow[16]) || 0,
+            adSpend: parseFloat(yoyRow[17]) || 0,
+            profit: parseFloat(yoyRow[18]) || 0,
+            margin: parseFloat(yoyRow[19]) || 0
+          }
+        } : null;
+        
+        // Calculate days for MoM normalization
+        const currentMonthDays = new Date(year, monthIndex + 1, 0).getDate();
+        const prevMonthDays = new Date(prevMonthYear, prevMonth, 0).getDate();
+        
+        return {
+          prevMonth: prev,
+          yoy: yoy,
+          currentMonthDays: currentMonthDays,
+          prevMonthDays: prevMonthDays
         };
         
-        // Parse comparison data if available
-        let comparisons = null;
-        if (prevMonthRow || yoyRow) {
-          const prev = prevMonthRow ? {
-            fbm: {
-              income: parseFloat(prevMonthRow[2]) || 0,
-              opex: parseFloat(prevMonthRow[3]) || 0,
-              prodCost: parseFloat(prevMonthRow[4]) || 0,
-              adSpend: parseFloat(prevMonthRow[5]) || 0,
-              profit: parseFloat(prevMonthRow[6]) || 0,
-              margin: parseFloat(prevMonthRow[7]) || 0
-            },
-            fba: {
-              income: parseFloat(prevMonthRow[8]) || 0,
-              opex: parseFloat(prevMonthRow[9]) || 0,
-              prodCost: parseFloat(prevMonthRow[10]) || 0,
-              adSpend: parseFloat(prevMonthRow[11]) || 0,
-              profit: parseFloat(prevMonthRow[12]) || 0,
-              margin: parseFloat(prevMonthRow[13]) || 0
-            },
-            total: {
-              income: parseFloat(prevMonthRow[14]) || 0,
-              opex: parseFloat(prevMonthRow[15]) || 0,
-              prodCost: parseFloat(prevMonthRow[16]) || 0,
-              adSpend: parseFloat(prevMonthRow[17]) || 0,
-              profit: parseFloat(prevMonthRow[18]) || 0,
-              margin: parseFloat(prevMonthRow[19]) || 0
-            }
-          } : null;
-          
-          const yoy = yoyRow ? {
-            fbm: {
-              income: parseFloat(yoyRow[2]) || 0,
-              opex: parseFloat(yoyRow[3]) || 0,
-              prodCost: parseFloat(yoyRow[4]) || 0,
-              adSpend: parseFloat(yoyRow[5]) || 0,
-              profit: parseFloat(yoyRow[6]) || 0,
-              margin: parseFloat(yoyRow[7]) || 0
-            },
-            fba: {
-              income: parseFloat(yoyRow[8]) || 0,
-              opex: parseFloat(yoyRow[9]) || 0,
-              prodCost: parseFloat(yoyRow[10]) || 0,
-              adSpend: parseFloat(yoyRow[11]) || 0,
-              profit: parseFloat(yoyRow[12]) || 0,
-              margin: parseFloat(yoyRow[13]) || 0
-            },
-            total: {
-              income: parseFloat(yoyRow[14]) || 0,
-              opex: parseFloat(yoyRow[15]) || 0,
-              prodCost: parseFloat(yoyRow[16]) || 0,
-              adSpend: parseFloat(yoyRow[17]) || 0,
-              profit: parseFloat(yoyRow[18]) || 0,
-              margin: parseFloat(yoyRow[19]) || 0
-            }
-          } : null;
-          
-          // Calculate days for MoM normalization (month is 1-12, need 0-11 for Date)
-          const currentMonthDays = new Date(year, month, 0).getDate(); // Gets last day of (month-1) which is the monthIndex
-          const prevMonthDays = new Date(prevMonthYear, prevMonth, 0).getDate();
-          
-          // Helper to calculate comparison
-          const calculateComparison = (current, previous) => {
-            if (!previous || previous === 0) return null;
-            return ((current - previous) / Math.abs(previous)) * 100;
-          };
-          
-          // Build comparisons object
-          comparisons = {
-            fbm: {
-              income: { 
-                yoy: yoy ? calculateComparison(current.fbm.income, yoy.fbm.income) : null,
-                mom: prev ? calculateComparison(current.fbm.income / currentMonthDays, prev.fbm.income / prevMonthDays) : null
-              },
-              opex: { 
-                yoy: yoy ? calculateComparison(current.fbm.opex, yoy.fbm.opex) : null,
-                mom: prev ? calculateComparison(current.fbm.opex / currentMonthDays, prev.fbm.opex / prevMonthDays) : null
-              },
-              prodCost: { 
-                yoy: yoy ? calculateComparison(current.fbm.prodCost, yoy.fbm.prodCost) : null,
-                mom: prev ? calculateComparison(current.fbm.prodCost / currentMonthDays, prev.fbm.prodCost / prevMonthDays) : null
-              },
-              adSpend: { 
-                yoy: yoy ? calculateComparison(current.fbm.adSpend, yoy.fbm.adSpend) : null,
-                mom: prev ? calculateComparison(current.fbm.adSpend / currentMonthDays, prev.fbm.adSpend / prevMonthDays) : null
-              },
-              profit: { 
-                yoy: yoy ? calculateComparison(current.fbm.profit, yoy.fbm.profit) : null,
-                mom: prev ? calculateComparison(current.fbm.profit / currentMonthDays, prev.fbm.profit / prevMonthDays) : null
-              },
-              margin: { 
-                yoy: yoy ? calculateComparison(current.fbm.margin, yoy.fbm.margin) : null,
-                mom: prev ? calculateComparison(current.fbm.margin, prev.fbm.margin) : null
-              }
-            },
-            fba: {
-              income: { 
-                yoy: yoy ? calculateComparison(current.fba.income, yoy.fba.income) : null,
-                mom: prev ? calculateComparison(current.fba.income / currentMonthDays, prev.fba.income / prevMonthDays) : null
-              },
-              opex: { 
-                yoy: yoy ? calculateComparison(current.fba.opex, yoy.fba.opex) : null,
-                mom: prev ? calculateComparison(current.fba.opex / currentMonthDays, prev.fba.opex / prevMonthDays) : null
-              },
-              prodCost: { 
-                yoy: yoy ? calculateComparison(current.fba.prodCost, yoy.fba.prodCost) : null,
-                mom: prev ? calculateComparison(current.fba.prodCost / currentMonthDays, prev.fba.prodCost / prevMonthDays) : null
-              },
-              adSpend: { 
-                yoy: yoy ? calculateComparison(current.fba.adSpend, yoy.fba.adSpend) : null,
-                mom: prev ? calculateComparison(current.fba.adSpend / currentMonthDays, prev.fba.adSpend / prevMonthDays) : null
-              },
-              profit: { 
-                yoy: yoy ? calculateComparison(current.fba.profit, yoy.fba.profit) : null,
-                mom: prev ? calculateComparison(current.fba.profit / currentMonthDays, prev.fba.profit / prevMonthDays) : null
-              },
-              margin: { 
-                yoy: yoy ? calculateComparison(current.fba.margin, yoy.fba.margin) : null,
-                mom: prev ? calculateComparison(current.fba.margin, prev.fba.margin) : null
-              }
-            },
-            total: {
-              income: { 
-                yoy: yoy ? calculateComparison(current.total.income, yoy.total.income) : null,
-                mom: prev ? calculateComparison(current.total.income / currentMonthDays, prev.total.income / prevMonthDays) : null
-              },
-              opex: { 
-                yoy: yoy ? calculateComparison(current.total.opex, yoy.total.opex) : null,
-                mom: prev ? calculateComparison(current.total.opex / currentMonthDays, prev.total.opex / prevMonthDays) : null
-              },
-              prodCost: { 
-                yoy: yoy ? calculateComparison(current.total.prodCost, yoy.total.prodCost) : null,
-                mom: prev ? calculateComparison(current.total.prodCost / currentMonthDays, prev.total.prodCost / prevMonthDays) : null
-              },
-              adSpend: { 
-                yoy: yoy ? calculateComparison(current.total.adSpend, yoy.total.adSpend) : null,
-                mom: prev ? calculateComparison(current.total.adSpend / currentMonthDays, prev.total.adSpend / prevMonthDays) : null
-              },
-              profit: { 
-                yoy: yoy ? calculateComparison(current.total.profit, yoy.total.profit) : null,
-                mom: prev ? calculateComparison(current.total.profit / currentMonthDays, prev.total.profit / prevMonthDays) : null
-              },
-              margin: { 
-                yoy: yoy ? calculateComparison(current.total.margin, yoy.total.margin) : null,
-                mom: prev ? calculateComparison(current.total.margin, prev.total.margin) : null
-              }
-            }
-          };
-        }
-        
-        // Render the profitability tables
-        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-        const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-        const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-        
-        renderMonthlyProfitability(current, comparisons, `${monthNames[month - 1]} ${year}`, startDate, endDate, container);
-        
       } catch (error) {
-        console.error('Error loading monthly report:', error);
-        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+        console.error('Error loading comparison data from sheet:', error);
+        return null;
       }
     }
-    
     
     // ========== BAKE DATA FUNCTIONS ==========
     
@@ -3327,34 +3211,43 @@
         
         for (let i = 1; i < productAdsRows.length; i++) {
           const adDate = productAdsRows[i][dateIndex];
-          const campaign = productAdsRows[i][campaignIndex];
-          const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
+          if (!adDate) continue;
           
-          if (adDate >= startDateStr && adDate <= endDateStr && spend > 0) {
-            const mappedSkus = productCampaignToSkus[campaign] || [];
+          // Extract year and month from ad date
+          const adYear = parseInt(adDate.substring(0, 4));
+          const adMonth = parseInt(adDate.substring(5, 7));
+          
+          // Check if ad is in this month
+          if (adYear === year && adMonth === month) {
+            const campaign = productAdsRows[i][campaignIndex];
+            const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
             
-            if (mappedSkus.length > 0) {
-              let totalSales = 0;
-              let fbaSales = 0;
-              let fbmSales = 0;
+            if (spend > 0) {
+              const mappedSkus = productCampaignToSkus[campaign] || [];
               
-              mappedSkus.forEach(sku => {
-                const sales = skuSales[sku];
-                if (sales) {
-                  totalSales += sales.fba + sales.fbm;
-                  fbaSales += sales.fba;
-                  fbmSales += sales.fbm;
+              if (mappedSkus.length > 0) {
+                let totalSales = 0;
+                let fbaSales = 0;
+                let fbmSales = 0;
+                
+                mappedSkus.forEach(sku => {
+                  const sales = skuSales[sku];
+                  if (sales) {
+                    totalSales += sales.fba + sales.fbm;
+                    fbaSales += sales.fba;
+                    fbmSales += sales.fbm;
+                  }
+                });
+                
+                if (totalSales > 0) {
+                  fbaAdSpend += spend * (fbaSales / totalSales);
+                  fbmAdSpend += spend * (fbmSales / totalSales);
+                } else {
+                  unallocatedAdSpend += spend;
                 }
-              });
-              
-              if (totalSales > 0) {
-                fbaAdSpend += spend * (fbaSales / totalSales);
-                fbmAdSpend += spend * (fbmSales / totalSales);
               } else {
                 unallocatedAdSpend += spend;
               }
-            } else {
-              unallocatedAdSpend += spend;
             }
           }
         }
@@ -3368,35 +3261,44 @@
         
         for (let i = 1; i < brandAdsRows.length; i++) {
           const adDate = brandAdsRows[i][dateIndex];
-          const campaign = brandAdsRows[i][campaignIndex];
-          const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
+          if (!adDate) continue;
           
-          if (adDate >= startDateStr && adDate <= endDateStr && spend > 0) {
-            const mappedBrand = brandCampaignToBrand[campaign];
+          // Extract year and month from ad date
+          const adYear = parseInt(adDate.substring(0, 4));
+          const adMonth = parseInt(adDate.substring(5, 7));
+          
+          // Check if ad is in this month
+          if (adYear === year && adMonth === month) {
+            const campaign = brandAdsRows[i][campaignIndex];
+            const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
             
-            if (mappedBrand && brandToSkus[mappedBrand]) {
-              const brandSkus = brandToSkus[mappedBrand];
-              let totalSales = 0;
-              let fbaSales = 0;
-              let fbmSales = 0;
+            if (spend > 0) {
+              const mappedBrand = brandCampaignToBrand[campaign];
               
-              brandSkus.forEach(sku => {
-                const sales = skuSales[sku];
-                if (sales) {
-                  totalSales += sales.fba + sales.fbm;
-                  fbaSales += sales.fba;
-                  fbmSales += sales.fbm;
+              if (mappedBrand && brandToSkus[mappedBrand]) {
+                const brandSkus = brandToSkus[mappedBrand];
+                let totalSales = 0;
+                let fbaSales = 0;
+                let fbmSales = 0;
+                
+                brandSkus.forEach(sku => {
+                  const sales = skuSales[sku];
+                  if (sales) {
+                    totalSales += sales.fba + sales.fbm;
+                    fbaSales += sales.fba;
+                    fbmSales += sales.fbm;
+                  }
+                });
+                
+                if (totalSales > 0) {
+                  fbaAdSpend += spend * (fbaSales / totalSales);
+                  fbmAdSpend += spend * (fbmSales / totalSales);
+                } else {
+                  unallocatedAdSpend += spend;
                 }
-              });
-              
-              if (totalSales > 0) {
-                fbaAdSpend += spend * (fbaSales / totalSales);
-                fbmAdSpend += spend * (fbmSales / totalSales);
               } else {
                 unallocatedAdSpend += spend;
               }
-            } else {
-              unallocatedAdSpend += spend;
             }
           }
         }
@@ -4037,20 +3939,8 @@
         
         // Load comparison data for monthly reports
         let comparisonData = null;
-        if (isMonthly && month !== null && year !== null) {
-          comparisonData = await loadMonthlyComparisonData(
-            transactionsRows, 
-            productsRows, 
-            productAdsRows, 
-            brandAdsRows, 
-            shippingRows, 
-            month, 
-            year,
-            productCampaignToSkus,
-            brandCampaignToBrand,
-            skuToBrand,
-            brandToSkus
-          );
+        if (isMonthly && window.monthlyComparisonInfo) {
+          comparisonData = await loadMonthlyComparisonDataFromSheet(window.monthlyComparisonInfo.month, window.monthlyComparisonInfo.year, window.monthlyComparisonInfo.monthIndex);
         }
         
         // Render the report
