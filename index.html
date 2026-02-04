@@ -2573,37 +2573,6 @@
     }
     
     // Helper function to set date range presets
-    function setDateRange(preset) {
-      const today = new Date();
-      let startDate, endDate;
-      
-      switch(preset) {
-        case 'lastMonth':
-          startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-          endDate = new Date(today.getFullYear(), today.getMonth(), 0);
-          break;
-        case 'thisMonth':
-          startDate = new Date(today.getFullYear(), today.getMonth(), 1);
-          endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-          break;
-        case 'lastYear':
-          startDate = new Date(today.getFullYear() - 1, 0, 1);
-          endDate = new Date(today.getFullYear() - 1, 11, 31);
-          break;
-        case 'thisYear':
-          startDate = new Date(today.getFullYear(), 0, 1);
-          endDate = new Date(today.getFullYear(), 11, 31);
-          break;
-      }
-      
-      // Format dates as YYYY-MM-DD for input fields
-      document.getElementById('overview-start-date').value = startDate.toISOString().split('T')[0];
-      document.getElementById('overview-end-date').value = endDate.toISOString().split('T')[0];
-      
-      // Auto-generate report
-      loadOverviewData();
-    }
-    
     
     // Tab switching functions
     function showYTD() {
@@ -2611,8 +2580,8 @@
       document.getElementById('monthly-view').style.display = 'none';
       document.getElementById('ytd-tab').style.background = 'var(--primary)';
       document.getElementById('ytd-tab').style.color = 'white';
-      document.getElementById('monthly-tab').style.background = 'transparent';
-      document.getElementById('monthly-tab').style.color = 'var(--text)';
+      document.getElementById('monthly-tab').style.removeProperty('background');
+      document.getElementById('monthly-tab').style.removeProperty('color');
       
       // Initialize year dropdown if not already done
       initializeYearDropdown();
@@ -2621,8 +2590,8 @@
     function showMonthly() {
       document.getElementById('ytd-view').style.display = 'none';
       document.getElementById('monthly-view').style.display = 'block';
-      document.getElementById('ytd-tab').style.background = 'transparent';
-      document.getElementById('ytd-tab').style.color = 'var(--text)';
+      document.getElementById('ytd-tab').style.removeProperty('background');
+      document.getElementById('ytd-tab').style.removeProperty('color');
       document.getElementById('monthly-tab').style.background = 'var(--primary)';
       document.getElementById('monthly-tab').style.color = 'white';
       
@@ -2703,6 +2672,10 @@
     // Generate YTD report
     async function generateYTDReport() {
       const year = document.getElementById('ytd-year-select').value;
+      if (!year) {
+        console.error('No year selected');
+        return;
+      }
       const startDate = `${year}-01-01`;
       const endDate = `${year}-12-31`;
       
@@ -2713,6 +2686,11 @@
     async function generateMonthlyReport() {
       const month = parseInt(document.getElementById('monthly-month-select').value);
       const year = parseInt(document.getElementById('monthly-year-select').value);
+      
+      if (isNaN(month) || isNaN(year)) {
+        console.error('Invalid month or year');
+        return;
+      }
       
       const startDate = new Date(year, month, 1);
       const endDate = new Date(year, month + 1, 0);
