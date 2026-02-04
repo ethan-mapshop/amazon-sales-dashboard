@@ -2731,6 +2731,10 @@
       }
       
       const container = document.getElementById(containerId);
+      if (!container) {
+        console.error('Container not found:', containerId);
+        return;
+      }
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
