@@ -968,139 +968,85 @@
       </div>
     </div>
 
-<!-- OVERVIEW PAGE -->
-<div id="overview-page" class="page">
-  <div class="card">
-    <h2 class="section-title">Financial Overview</h2>
-
-    <!-- Tab Styles -->
-    <style>
-      .tab {
-        padding: 0.75rem 1.5rem;
-        border-radius: 6px 6px 0 0;
-        border-bottom: none;
-      }
-
-      .tab.active {
-        background: var(--primary);
-        color: white;
-      }
-    </style>
-
-    <!-- Tabs -->
-    <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem; border-bottom: 2px solid var(--border);">
-      <button
-        id="ytd-tab"
-        class="btn tab"
-        onclick="showYTD()">
-        Year-to-Date Profitability
-      </button>
-
-      <button
-        id="monthly-tab"
-        class="btn tab"
-        onclick="showMonthly()">
-        Monthly Profitability
-      </button>
-    </div>
-
-    <!-- Year-to-Date View -->
-    <div id="ytd-view">
-      <div style="margin-bottom: 2rem;">
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
-          <button class="btn" onclick="setYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
-          <button class="btn" onclick="setYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+    <!-- OVERVIEW PAGE -->
+    <div id="overview-page" class="page">
+      <div class="card">
+        <h2 class="section-title">Financial Overview</h2>
+        
+        <!-- Tabs -->
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem; border-bottom: 2px solid var(--border);">
+          <button id="ytd-tab" class="btn" onclick="showYTD()" style="padding: 0.75rem 1.5rem; border-radius: 6px 6px 0 0; border-bottom: none; background: var(--primary); color: white;">
+            Year-to-Date Profitability
+          </button>
+          <button id="monthly-tab" class="btn" onclick="showMonthly()" style="padding: 0.75rem 1.5rem; border-radius: 6px 6px 0 0; border-bottom: none;">
+            Monthly Profitability
+          </button>
         </div>
+        
+        <!-- Year-to-Date View -->
+        <div id="ytd-view">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+              <button class="btn" onclick="setYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+              <button class="btn" onclick="setYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; gap: 1rem; align-items: center;">
+                <label style="font-weight: 600;">Year:</label>
+                <select id="ytd-year-select" onchange="generateYTDReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 120px;">
+                </select>
+              </div>
+            </div>
+          </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; gap: 1rem; align-items: center;">
-            <label style="font-weight: 600;">Year:</label>
-            <select
-              id="ytd-year-select"
-              onchange="generateYTDReport()"
-              style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 120px;">
-            </select>
+          <div id="ytd-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability</div>
+            </div>
           </div>
         </div>
-      </div>
-
-      <div id="ytd-content">
-        <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-          <div style="font-size: 1.125rem;">
-            Select a year to view Year-to-Date profitability
+        
+        <!-- Monthly View -->
+        <div id="monthly-view" style="display: none;">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+              <button class="btn" onclick="setMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
+              <button class="btn" onclick="setMonthlyDate('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; gap: 1rem; align-items: center;">
+                <label style="font-weight: 600;">Month:</label>
+                <select id="monthly-month-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 140px;">
+                  <option value="0">January</option>
+                  <option value="1">February</option>
+                  <option value="2">March</option>
+                  <option value="3">April</option>
+                  <option value="4">May</option>
+                  <option value="5">June</option>
+                  <option value="6">July</option>
+                  <option value="7">August</option>
+                  <option value="8">September</option>
+                  <option value="9">October</option>
+                  <option value="10">November</option>
+                  <option value="11">December</option>
+                </select>
+                <label style="font-weight: 600;">Year:</label>
+                <select id="monthly-year-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 120px;">
+                </select>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-    </div>
 
-    <!-- Monthly View -->
-    <div id="monthly-view" style="display: none;">
-      <div style="margin-bottom: 2rem;">
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
-          <button class="btn" onclick="setMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-          <button class="btn" onclick="setMonthlyDate('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; gap: 1rem; align-items: center;">
-            <label style="font-weight: 600;">Month:</label>
-            <select
-              id="monthly-month-select"
-              onchange="generateMonthlyReport()"
-              style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 140px;">
-              <option value="0">January</option>
-              <option value="1">February</option>
-              <option value="2">March</option>
-              <option value="3">April</option>
-              <option value="4">May</option>
-              <option value="5">June</option>
-              <option value="6">July</option>
-              <option value="7">August</option>
-              <option value="8">September</option>
-              <option value="9">October</option>
-              <option value="10">November</option>
-              <option value="11">December</option>
-            </select>
-
-            <label style="font-weight: 600;">Year:</label>
-            <select
-              id="monthly-year-select"
-              onchange="generateMonthlyReport()"
-              style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; min-width: 120px;">
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div id="monthly-content">
-        <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-          <div style="font-size: 1.125rem;">
-            Select a month and year to view monthly profitability
+          <div id="monthly-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability</div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
-</div>
-
-<!-- Tab Logic -->
-<script>
-  function showYTD() {
-    document.getElementById("ytd-view").style.display = "block";
-    document.getElementById("monthly-view").style.display = "none";
-
-    document.getElementById("ytd-tab").classList.add("active");
-    document.getElementById("monthly-tab").classList.remove("active");
-  }
-
-  function showMonthly() {
-    document.getElementById("ytd-view").style.display = "none";
-    document.getElementById("monthly-view").style.display = "block";
-
-    document.getElementById("monthly-tab").classList
-
 
     <!-- MAPPING PAGE -->
     <div id="mapping-page" class="page">
