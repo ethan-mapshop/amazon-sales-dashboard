@@ -3805,13 +3805,12 @@
       const dateIdx = headers.indexOf('date');
       const campaignIdx = headers.indexOf('campaign name');
       const spendIdx = headers.indexOf('spend');
-      const skuIdx = headers.indexOf('sku');
       
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
         const dateStr = row[dateIdx];
         
-        if (!dateStr || !row[skuIdx]) continue;
+        if (!dateStr || !row[campaignIdx]) continue; // Need campaign name for mapping
         
         // Parse date (handle Excel serial or ISO format)
         let date = null;
@@ -3836,7 +3835,6 @@
         ads.push({
           date: date,
           campaign: row[campaignIdx] || '',
-          sku: row[skuIdx],
           spend: parseFloat(row[spendIdx]) || 0
         });
       }
@@ -3854,13 +3852,12 @@
       const dateIdx = headers.indexOf('date');
       const campaignIdx = headers.indexOf('campaign name');
       const spendIdx = headers.indexOf('spend');
-      const brandIdx = headers.indexOf('brand');
       
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
         const dateStr = row[dateIdx];
         
-        if (!dateStr || !row[brandIdx]) continue;
+        if (!dateStr || !row[campaignIdx]) continue; // Need campaign name for mapping
         
         // Parse date (handle Excel serial or ISO format)
         let date = null;
@@ -3885,7 +3882,6 @@
         ads.push({
           date: date,
           campaign: row[campaignIdx] || '',
-          brand: row[brandIdx],
           spend: parseFloat(row[spendIdx]) || 0
         });
       }
@@ -3947,7 +3943,7 @@
       }
       
       // Load all required data
-      const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes] = await Promise.all([
+      const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
         fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }),
@@ -3962,18 +3958,68 @@
         }),
         fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
         })
       ]);
       
       if (!transactionsRes.ok) throw new Error('Failed to load transactions');
       
-      const [transactionsData, productsData, productAdsData, brandAdsData, shippingData] = await Promise.all([
+      const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
         transactionsRes.json(),
         productsRes.json(),
         productAdsRes.json(),
         brandAdsRes.json(),
-        shippingRes.json()
+        shippingRes.json(),
+        productMappingRes.json(),
+        brandMappingRes.json()
       ]);
+      
+      // Parse product ad mapping (Campaign Name -> SKUs)
+      const productCampaignToSkus = {};
+      if (productMappingData.values && productMappingData.values.length > 1) {
+        const headers = productMappingData.values[0].map(h => h.toLowerCase());
+        const campaignIdx = headers.indexOf('campaign name');
+        const skuIdx = headers.indexOf('sku');
+        
+        for (let i = 1; i < productMappingData.values.length; i++) {
+          const row = productMappingData.values[i];
+          const campaign = row[campaignIdx];
+          const sku = row[skuIdx];
+          
+          if (campaign && sku) {
+            if (!productCampaignToSkus[campaign]) {
+              productCampaignToSkus[campaign] = [];
+            }
+            productCampaignToSkus[campaign].push(sku);
+          }
+        }
+      }
+      
+      // Parse brand ad mapping (Campaign Name -> Brand)
+      const brandCampaignToBrand = {};
+      if (brandMappingData.values && brandMappingData.values.length > 1) {
+        const headers = brandMappingData.values[0].map(h => h.toLowerCase());
+        const campaignIdx = headers.indexOf('campaign name');
+        const brandIdx = headers.indexOf('brand');
+        
+        for (let i = 1; i < brandMappingData.values.length; i++) {
+          const row = brandMappingData.values[i];
+          const campaign = row[campaignIdx];
+          const brand = row[brandIdx];
+          
+          if (campaign && brand) {
+            brandCampaignToBrand[campaign] = brand;
+          }
+        }
+      }
+      
+      console.log('BP: Product campaign mappings:', Object.keys(productCampaignToSkus).length);
+      console.log('BP: Brand campaign mappings:', Object.keys(brandCampaignToBrand).length);
       
       // Debug: Show raw transaction data
       if (transactionsData.values && transactionsData.values.length > 1) {
@@ -4110,9 +4156,12 @@
               return sum;
             }, 0);
             
-            // Ad spend
+            // Ad spend (using product campaign mappings)
             product.fbm.adSpend = productAds.reduce((sum, ad) => {
-              if (fbmSkus.includes(ad.sku)) return sum + ad.spend;
+              const mappedSkus = productCampaignToSkus[ad.campaign] || [];
+              if (mappedSkus.some(sku => fbmSkus.includes(sku))) {
+                return sum + ad.spend;
+              }
               return sum;
             }, 0);
             
@@ -4168,9 +4217,12 @@
               return sum;
             }, 0);
             
-            // Ad spend
+            // Ad spend (using product campaign mappings)
             product.fba.adSpend = productAds.reduce((sum, ad) => {
-              if (fbaSkus.includes(ad.sku)) return sum + ad.spend;
+              const mappedSkus = productCampaignToSkus[ad.campaign] || [];
+              if (mappedSkus.some(sku => fbaSkus.includes(sku))) {
+                return sum + ad.spend;
+              }
               return sum;
             }, 0);
             
@@ -4214,8 +4266,15 @@
         brand.total.profit = brand.total.income - brand.total.opex - brand.total.productCosts - brand.total.adSpend;
         brand.total.margin = brand.total.income > 0 ? (brand.total.profit / brand.total.income) * 100 : 0;
         
-        // Add brand ad spend
-        const brandAdSpend = brandAds.filter(a => a.brand === brand.brandName).reduce((sum, a) => sum + a.spend, 0);
+        // Add brand ad spend (using brand campaign mapping)
+        const brandAdSpend = brandAds.reduce((sum, ad) => {
+          const mappedBrand = brandCampaignToBrand[ad.campaign];
+          if (mappedBrand === brand.brandName) {
+            return sum + ad.spend;
+          }
+          return sum;
+        }, 0);
+        
         if (brandAdSpend > 0) {
           // Allocate brand ad spend proportionally across FBM/FBA based on income
           const totalIncome = brand.total.income;
