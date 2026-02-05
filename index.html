@@ -757,21 +757,35 @@
       white-space: nowrap;
     }
     
-    /* Vertical divider before FBM section (2nd column) */
-    .bp-table th:nth-child(2),
-    .bp-table td:nth-child(2) {
+    /* Vertical divider before FBM section (2nd column in body rows) */
+    .bp-table tbody tr th:nth-child(2),
+    .bp-table tbody tr td:nth-child(2) {
       border-left: 2px solid var(--border);
     }
     
-    /* Vertical divider before FBA section (8th column) */
-    .bp-table th:nth-child(8),
-    .bp-table td:nth-child(8) {
+    /* Vertical divider before FBA section (8th column in body rows) */
+    .bp-table tbody tr th:nth-child(8),
+    .bp-table tbody tr td:nth-child(8) {
       border-left: 2px solid var(--border);
     }
     
-    /* Vertical divider before Total section (14th column) */
-    .bp-table th:nth-child(14),
-    .bp-table td:nth-child(14) {
+    /* Vertical divider before Total section (14th column in body rows) */
+    .bp-table tbody tr th:nth-child(14),
+    .bp-table tbody tr td:nth-child(14) {
+      border-left: 2px solid var(--border);
+    }
+    
+    /* First header row - same as body (has Brand/Product column) */
+    .bp-table thead tr:first-child th:nth-child(2),
+    .bp-table thead tr:first-child th:nth-child(8),
+    .bp-table thead tr:first-child th:nth-child(14) {
+      border-left: 2px solid var(--border);
+    }
+    
+    /* Second header row - shifted by 1 (no Brand/Product column due to rowspan) */
+    .bp-table thead tr:nth-child(2) th:nth-child(1),
+    .bp-table thead tr:nth-child(2) th:nth-child(7),
+    .bp-table thead tr:nth-child(2) th:nth-child(13) {
       border-left: 2px solid var(--border);
     }
     
