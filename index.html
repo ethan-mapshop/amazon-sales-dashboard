@@ -1489,6 +1489,10 @@
       if (pageName === 'overview') {
         showYTD(); // Default to YTD view
       }
+      
+      if (pageName === 'brandproduct') {
+        showBPYTD(); // Default to YTD view and initialize dropdowns
+      }
     }
     
     // Client ID management
@@ -3724,7 +3728,14 @@
       const descriptionIdx = headers.indexOf('description');
       const quantityIdx = headers.indexOf('quantity');
       const fulfillmentIdx = headers.indexOf('fulfillment');
-      const amountIdx = headers.indexOf('total');
+      const productSalesIdx = headers.indexOf('product sales');
+      const shippingCreditsIdx = headers.indexOf('shipping credits');
+      const giftWrapIdx = headers.indexOf('gift wrap credits');
+      const promoIdx = headers.indexOf('promotional rebates');
+      const sellingFeesIdx = headers.indexOf('selling fees');
+      const fbaFeesIdx = headers.indexOf('fba fees');
+      const otherIdx = headers.indexOf('other');
+      const totalIdx = headers.indexOf('total');
       
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i];
@@ -3762,7 +3773,14 @@
           description: row[descriptionIdx] || '',
           quantity: parseFloat(row[quantityIdx]) || 1,
           fulfillment: row[fulfillmentIdx] || '',
-          amount: parseFloat(row[amountIdx]) || 0
+          'product sales': parseFloat(row[productSalesIdx]) || 0,
+          'shipping credits': parseFloat(row[shippingCreditsIdx]) || 0,
+          'gift wrap credits': parseFloat(row[giftWrapIdx]) || 0,
+          'promotional rebates': parseFloat(row[promoIdx]) || 0,
+          'selling fees': parseFloat(row[sellingFeesIdx]) || 0,
+          'fba fees': parseFloat(row[fbaFeesIdx]) || 0,
+          other: parseFloat(row[otherIdx]) || 0,
+          amount: parseFloat(row[totalIdx]) || 0
         });
       }
       
@@ -4020,23 +4038,31 @@
             const fbmTransactions = transactions.filter(t => fbmSkus.includes(t.sku));
             const fbmShipping = shippingCosts.filter(s => fbmSkus.includes(s.sku));
             
-            // Income
+            // Income (using transaction columns like Overview does)
             product.fbm.income = fbmTransactions.reduce((sum, t) => {
-              if (t.type === 'Order' && t.description === 'Principal') return sum + t.amount;
-              if (t.type === 'Refund' && t.description === 'Principal') return sum + t.amount;
-              if (t.type === 'Order' && t.description === 'Shipping') return sum + t.amount;
+              if (t.type === 'Order' && t.fulfillment === 'Seller') {
+                sum += t['product sales'] || 0;
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Seller') {
+                sum += t['product sales'] || 0; // Refunds are negative
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
               return sum;
             }, 0);
             
-            // OpEx (fees, excluding product costs and shipping)
+            // OpEx (fees from transaction columns)
             product.fbm.opex = fbmTransactions.reduce((sum, t) => {
-              if (t.description === 'FBA Per Unit Fulfillment Fee') return sum + Math.abs(t.amount);
-              if (t.description === 'Selling Fees') return sum + Math.abs(t.amount);
-              if (t.description === 'FBA Weight Based Fee') return sum + Math.abs(t.amount);
-              if (t.description === 'Adjustment') return sum + Math.abs(t.amount);
-              if (t.description === 'FBA Inventory Fee') return sum + Math.abs(t.amount);
-              if (t.description === 'Service Fee') return sum + Math.abs(t.amount);
-              if (t.description === 'Shipping Services') return sum + Math.abs(t.amount);
+              if (t.type === 'Order' && t.fulfillment === 'Seller') {
+                sum += Math.abs(t['selling fees'] || 0);
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Seller') {
+                sum += Math.abs(t['selling fees'] || 0);
+              }
               return sum;
             }, 0);
             
@@ -4050,7 +4076,7 @@
             });
             
             product.fbm.productCosts = fbmTransactions.reduce((sum, t) => {
-              if (t.type === 'Order' && t.description === 'Principal' && fbmCostMap[t.sku]) {
+              if (t.type === 'Order' && t.fulfillment === 'Seller' && fbmCostMap[t.sku]) {
                 return sum + (fbmCostMap[t.sku] * Math.abs(t.quantity || 1));
               }
               return sum;
@@ -4071,21 +4097,33 @@
           if (fbaSkus.length > 0) {
             const fbaTransactions = transactions.filter(t => fbaSkus.includes(t.sku));
             
-            // Income
+            // Income (using transaction columns like Overview does)
             product.fba.income = fbaTransactions.reduce((sum, t) => {
-              if (t.type === 'Order' && t.description === 'Principal') return sum + t.amount;
-              if (t.type === 'Refund' && t.description === 'Principal') return sum + t.amount;
-              if (t.type === 'Order' && t.description === 'Shipping') return sum + t.amount;
+              if (t.type === 'Order' && t.fulfillment === 'Amazon') {
+                sum += t['product sales'] || 0;
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Amazon') {
+                sum += t['product sales'] || 0; // Refunds are negative
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
               return sum;
             }, 0);
             
-            // OpEx (fees, excluding unallocable expenses per requirements)
+            // OpEx (fees from transaction columns, excluding unallocable per requirements)
             product.fba.opex = fbaTransactions.reduce((sum, t) => {
-              if (t.description === 'FBA Per Unit Fulfillment Fee') return sum + Math.abs(t.amount);
-              if (t.description === 'Selling Fees') return sum + Math.abs(t.amount);
-              if (t.description === 'FBA Weight Based Fee') return sum + Math.abs(t.amount);
-              if (t.description === 'Adjustment') return sum + Math.abs(t.amount);
-              if (t.description === 'Service Fee') return sum + Math.abs(t.amount);
+              if (t.type === 'Order' && t.fulfillment === 'Amazon') {
+                sum += Math.abs(t['selling fees'] || 0);
+                sum += Math.abs(t['fba fees'] || 0);
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Amazon') {
+                sum += Math.abs(t['selling fees'] || 0);
+                sum += Math.abs(t['fba fees'] || 0);
+              }
               return sum;
             }, 0);
             
@@ -4096,7 +4134,7 @@
             });
             
             product.fba.productCosts = fbaTransactions.reduce((sum, t) => {
-              if (t.type === 'Order' && t.description === 'Principal' && fbaCostMap[t.sku]) {
+              if (t.type === 'Order' && t.fulfillment === 'Amazon' && fbaCostMap[t.sku]) {
                 return sum + (fbaCostMap[t.sku] * Math.abs(t.quantity || 1));
               }
               return sum;
