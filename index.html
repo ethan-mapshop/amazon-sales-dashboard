@@ -920,7 +920,22 @@
       border-radius: 4px;
       background: var(--bg-card);
       color: var(--text-primary);
-      min-width: 200px;
+      width: auto;
+    }
+    
+    /* Specific widths based on content */
+    #bp-ytd-brand-select,
+    #bp-monthly-brand-select {
+      min-width: 180px; /* Fits "BrightWay Educational" + padding */
+    }
+    
+    #bp-monthly-month-select {
+      min-width: 120px; /* Fits "September" + padding */
+    }
+    
+    #bp-ytd-year-select,
+    #bp-monthly-year-select {
+      min-width: 90px; /* Fits "2025" + padding */
     }
 
     @media (max-width: 1024px) {
