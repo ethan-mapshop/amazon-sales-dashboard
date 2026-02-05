@@ -7,7 +7,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;600&display=swap');
     
     :root {
       --bg-primary: #0f1419;
@@ -75,17 +75,18 @@
     }
     
     .nav-btn {
-      padding: 0.75rem 1.5rem;
+      padding: 0.625rem 1rem;
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 6px;
       color: var(--text-primary);
       font-weight: 600;
-      font-size: 0.95rem;
+      font-size: 0.85rem;
       cursor: pointer;
       transition: all 0.2s ease;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      white-space: nowrap;
     }
     
     .nav-btn:hover {
@@ -163,7 +164,7 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       color: var(--text-primary);
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: 'Roboto Mono', monospace;
       font-size: 0.875rem;
       transition: all 0.2s ease;
     }
@@ -289,7 +290,7 @@
     }
     
     .file-name {
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: 'Roboto Mono', monospace;
       font-size: 0.875rem;
       color: var(--accent-yellow);
       margin-bottom: 0.5rem;
@@ -438,7 +439,7 @@
     }
     
     td {
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: 'Roboto Mono', monospace;
       font-size: 0.75rem;
     }
 
@@ -777,7 +778,7 @@
     }
     
     .bp-table .header-group.fbm {
-      color: var(--accent-blue);
+      color: #60a5fa;
     }
     
     .bp-table .header-group.fba {
@@ -819,7 +820,7 @@
     .bp-table td {
       padding: 0.75rem 0.5rem;
       text-align: right;
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: 'Roboto Mono', monospace;
     }
     
     .bp-table td:first-child {
@@ -962,14 +963,14 @@
         
         <div class="config-group">
           <label>Spreadsheet</label>
-          <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; color: var(--text-secondary);">
+          <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem; color: var(--text-secondary);">
             Data spreadsheet configured ✓
           </div>
         </div>
 
         <div class="config-group">
           <label>OAuth Client ID</label>
-          <div id="clientIdDisplay" style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center;">
+          <div id="clientIdDisplay" style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center;">
             <span>Default client configured ✓</span>
             <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
           </div>
@@ -1166,7 +1167,6 @@
           <div style="margin-bottom: 2rem;">
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
               <button class="btn" onclick="setMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-              <button class="btn" onclick="setMonthlyDate('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div style="display: flex; gap: 1rem; align-items: center;">
@@ -1270,7 +1270,6 @@
             </select>
             <div style="display: flex; gap: 0.5rem;">
               <button class="btn" onclick="setBPMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-              <button class="btn" onclick="setBPMonthlyDate('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
             </div>
           </div>
 
@@ -1572,12 +1571,25 @@
     function initializeGoogleAuth() {
       if (!config.clientId) return;
       
+      // Check for saved token
+      const savedToken = localStorage.getItem('googleAccessToken');
+      const tokenExpiry = localStorage.getItem('tokenExpiry');
+      
+      if (savedToken && tokenExpiry && Date.now() < parseInt(tokenExpiry)) {
+        accessToken = savedToken;
+        displayUserInfo(null);
+        enableUpload();
+      }
+      
       tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: config.clientId,
         scope: 'https://www.googleapis.com/auth/spreadsheets',
         callback: (response) => {
           if (response.access_token) {
             accessToken = response.access_token;
+            // Save token (expires in 1 hour)
+            localStorage.setItem('googleAccessToken', accessToken);
+            localStorage.setItem('tokenExpiry', Date.now() + 3600000); // 1 hour
             // Show signed in state
             displayUserInfo(null);
             enableUpload();
@@ -1590,9 +1602,17 @@
       document.getElementById('signInBtn').style.display = 'inline-flex';
     }
     
-    window.addEventListener('load', () => {
-      if (config.clientId) initializeGoogleAuth();
-    });
+    // Initialize immediately when script loads
+    if (typeof google !== 'undefined' && google.accounts) {
+      initializeGoogleAuth();
+    } else {
+      // Wait for Google API to load
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          if (config.clientId) initializeGoogleAuth();
+        }, 100);
+      });
+    }
     
     function updateAuthUI() {
       if (config.clientId && !tokenClient) initializeGoogleAuth();
@@ -1618,6 +1638,8 @@
     
     function signOut() {
       accessToken = null;
+      localStorage.removeItem('googleAccessToken');
+      localStorage.removeItem('tokenExpiry');
       location.reload();
     }
     
@@ -4770,10 +4792,10 @@
         html += `
           <tr>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
               ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '$0.00'}
             </td>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
               ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '$0.00'}
             </td>
           </tr>
@@ -4783,8 +4805,8 @@
       html += `
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Totals</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(incomeTotalDebit)}</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(incomeTotalCredit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(incomeTotalDebit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(incomeTotalCredit)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -4808,10 +4830,10 @@
         html += `
           <tr>
             <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
               ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '$0.00'}
             </td>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
               ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '$0.00'}
             </td>
           </tr>
@@ -4821,8 +4843,8 @@
       html += `
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Totals</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(expenseTotalDebit)}</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">$${formatNumber(expenseTotalCredit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(expenseTotalDebit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(expenseTotalCredit)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -4846,39 +4868,39 @@
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbmIncome >= 0 ? '$' + formatNumber(fbmIncome) : '-$' + formatNumber(Math.abs(fbmIncome))}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.fbm.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.mom, false)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${fbmIncome >= 0 ? '$' + formatNumber(fbmIncome) : '-$' + formatNumber(Math.abs(fbmIncome))}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.income.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.income.mom, false)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmExpensesExcludingCostAndAd)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.fbm.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbmExpensesExcludingCostAndAd)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.opex.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmProductCosts)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.fbm.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbmProductCosts)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.fbm.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.fbm.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.mom, false)}</td>` : ''}
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
+                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.profit.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.profit.mom, false)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.fbm.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.mom, false)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.margin.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.margin.mom, false)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
@@ -4899,39 +4921,39 @@
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbaIncome >= 0 ? '$' + formatNumber(fbaIncome) : '-$' + formatNumber(Math.abs(fbaIncome))}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.fba.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.mom, false)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${fbaIncome >= 0 ? '$' + formatNumber(fbaIncome) : '-$' + formatNumber(Math.abs(fbaIncome))}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.income.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.income.mom, false)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaExpensesExcludingCostAndAd)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.fba.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbaExpensesExcludingCostAndAd)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.opex.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaProductCosts)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.productCosts.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.fba.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.productCosts.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbaProductCosts)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.productCosts.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.productCosts.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.fba.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.adSpend.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.fba.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.mom, false)}</td>` : ''}
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
+                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.profit.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.profit.mom, false)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.fba.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.mom, false)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.margin.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.margin.mom, false)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
@@ -4952,39 +4974,39 @@
                 <tbody>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${totalIncome >= 0 ? '$' + formatNumber(totalIncome) : '-$' + formatNumber(Math.abs(totalIncome))}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.total.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.mom, false)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${totalIncome >= 0 ? '$' + formatNumber(totalIncome) : '-$' + formatNumber(Math.abs(totalIncome))}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.income.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.income.mom, false)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalExpensesExcludingCostAndAd)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.total.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(totalExpensesExcludingCostAndAd)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.opex.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalProductCosts)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.productCosts.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.total.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.productCosts.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(totalProductCosts)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.productCosts.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.productCosts.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons && comparisons.total.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.mom, true)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.adSpend.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
-                    <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.total.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.mom, false)}</td>` : ''}
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
+                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.profit.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.profit.mom, false)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
-                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.yoy, false)}</td>` : ''}
-                    ${comparisons && comparisons.total.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.mom, false)}</td>` : ''}
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.margin.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.margin.mom, false)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
