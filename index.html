@@ -3677,6 +3677,243 @@
       }
     }
     
+    // ============================================
+    // PARSE HELPER FUNCTIONS (shared utilities)
+    // ============================================
+    
+    function parseProducts(productsData) {
+      const products = [];
+      const rows = productsData.values || [];
+      
+      if (rows.length < 2) return products;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const skuIdx = headers.indexOf('sku');
+      const nameIdx = headers.indexOf('name');
+      const brandIdx = headers.indexOf('brand');
+      const costIdx = headers.indexOf('cost');
+      const fulfillmentIdx = headers.indexOf('fulfillment');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row[skuIdx]) continue;
+        
+        products.push({
+          sku: row[skuIdx],
+          name: row[nameIdx] || '',
+          brand: row[brandIdx] || '',
+          cost: parseFloat(row[costIdx]) || 0,
+          fulfillmentType: row[fulfillmentIdx] || 'FBM'
+        });
+      }
+      
+      return products;
+    }
+    
+    function parseTransactions(transactionsData) {
+      const transactions = [];
+      const rows = transactionsData.values || [];
+      
+      if (rows.length < 2) return transactions;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date/time');
+      const typeIdx = headers.indexOf('type');
+      const orderIdIdx = headers.indexOf('order id');
+      const skuIdx = headers.indexOf('sku');
+      const descriptionIdx = headers.indexOf('description');
+      const quantityIdx = headers.indexOf('quantity');
+      const fulfillmentIdx = headers.indexOf('fulfillment');
+      const amountIdx = headers.indexOf('total');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr) continue;
+        
+        // Parse date (handle format: "Dec 1, 2025 12:07:15 AM PST")
+        let date = null;
+        const textMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+        if (textMatch) {
+          const monthStr = textMatch[1];
+          const day = textMatch[2].padStart(2, '0');
+          const year = textMatch[3];
+          
+          const months = {
+            'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+            'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+            'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+          };
+          
+          const month = months[monthStr.toLowerCase().substring(0, 3)];
+          if (month) {
+            date = `${year}-${month}-${day}`;
+          }
+        }
+        
+        if (!date) continue;
+        
+        transactions.push({
+          date: date,
+          type: row[typeIdx] || '',
+          orderId: row[orderIdIdx] || '',
+          sku: row[skuIdx] || '',
+          description: row[descriptionIdx] || '',
+          quantity: parseFloat(row[quantityIdx]) || 1,
+          fulfillment: row[fulfillmentIdx] || '',
+          amount: parseFloat(row[amountIdx]) || 0
+        });
+      }
+      
+      return transactions;
+    }
+    
+    function parseProductAds(productAdsData) {
+      const ads = [];
+      const rows = productAdsData.values || [];
+      
+      if (rows.length < 2) return ads;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date');
+      const campaignIdx = headers.indexOf('campaign name');
+      const spendIdx = headers.indexOf('spend');
+      const skuIdx = headers.indexOf('sku');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr || !row[skuIdx]) continue;
+        
+        // Parse date (handle Excel serial or ISO format)
+        let date = null;
+        if (typeof dateStr === 'number') {
+          // Excel serial date
+          const days = Math.floor(dateStr);
+          const adjustedDays = days > 59 ? days - 1 : days;
+          const epochDate = Date.UTC(1899, 11, 30);
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+          const d = new Date(targetTime);
+          const year = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          date = `${year}-${month}-${day}`;
+        } else {
+          date = dateStr.split('T')[0]; // ISO format
+        }
+        
+        if (!date) continue;
+        
+        ads.push({
+          date: date,
+          campaign: row[campaignIdx] || '',
+          sku: row[skuIdx],
+          spend: parseFloat(row[spendIdx]) || 0
+        });
+      }
+      
+      return ads;
+    }
+    
+    function parseBrandAds(brandAdsData) {
+      const ads = [];
+      const rows = brandAdsData.values || [];
+      
+      if (rows.length < 2) return ads;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date');
+      const campaignIdx = headers.indexOf('campaign name');
+      const spendIdx = headers.indexOf('spend');
+      const brandIdx = headers.indexOf('brand');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr || !row[brandIdx]) continue;
+        
+        // Parse date (handle Excel serial or ISO format)
+        let date = null;
+        if (typeof dateStr === 'number') {
+          // Excel serial date
+          const days = Math.floor(dateStr);
+          const adjustedDays = days > 59 ? days - 1 : days;
+          const epochDate = Date.UTC(1899, 11, 30);
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+          const d = new Date(targetTime);
+          const year = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          date = `${year}-${month}-${day}`;
+        } else {
+          date = dateStr.split('T')[0]; // ISO format
+        }
+        
+        if (!date) continue;
+        
+        ads.push({
+          date: date,
+          campaign: row[campaignIdx] || '',
+          brand: row[brandIdx],
+          spend: parseFloat(row[spendIdx]) || 0
+        });
+      }
+      
+      return ads;
+    }
+    
+    function parseShippingCosts(shippingData) {
+      const costs = [];
+      const rows = shippingData.values || [];
+      
+      if (rows.length < 2) return costs;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date');
+      const skuIdx = headers.indexOf('sku');
+      const costIdx = headers.indexOf('cost');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr || !row[skuIdx]) continue;
+        
+        // Parse date (handle Excel serial or ISO format)
+        let date = null;
+        if (typeof dateStr === 'number') {
+          // Excel serial date
+          const days = Math.floor(dateStr);
+          const adjustedDays = days > 59 ? days - 1 : days;
+          const epochDate = Date.UTC(1899, 11, 30);
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+          const d = new Date(targetTime);
+          const year = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          date = `${year}-${month}-${day}`;
+        } else {
+          date = dateStr.split('T')[0]; // ISO format
+        }
+        
+        if (!date) continue;
+        
+        costs.push({
+          date: date,
+          sku: row[skuIdx],
+          cost: parseFloat(row[costIdx]) || 0
+        });
+      }
+      
+      return costs;
+    }
+    
     // Load and calculate brand/product data
     async function loadBrandProductData(startDate, endDate, brandFilter) {
       if (!accessToken) {
