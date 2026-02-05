@@ -3743,23 +3743,31 @@
         
         if (!dateStr) continue;
         
-        // Parse date (handle format: "Dec 1, 2025 12:07:15 AM PST")
+        // Parse date - handle multiple formats
         let date = null;
-        const textMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
-        if (textMatch) {
-          const monthStr = textMatch[1];
-          const day = textMatch[2].padStart(2, '0');
-          const year = textMatch[3];
-          
-          const months = {
-            'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
-            'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
-            'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
-          };
-          
-          const month = months[monthStr.toLowerCase().substring(0, 3)];
-          if (month) {
-            date = `${year}-${month}-${day}`;
+        
+        // Format 1: YYYY-MM-DD (already ISO format)
+        if (dateStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+          date = dateStr.substring(0, 10); // Take first 10 chars (YYYY-MM-DD)
+        }
+        // Format 2: "Dec 1, 2025 12:07:15 AM PST"
+        else {
+          const textMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+          if (textMatch) {
+            const monthStr = textMatch[1];
+            const day = textMatch[2].padStart(2, '0');
+            const year = textMatch[3];
+            
+            const months = {
+              'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+              'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+              'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+            };
+            
+            const month = months[monthStr.toLowerCase().substring(0, 3)];
+            if (month) {
+              date = `${year}-${month}-${day}`;
+            }
           }
         }
         
@@ -3967,13 +3975,25 @@
         shippingRes.json()
       ]);
       
+      // Debug: Show raw transaction data
+      if (transactionsData.values && transactionsData.values.length > 1) {
+        console.log('BP: Raw transaction sample:', transactionsData.values[1]);
+      }
+      
       // Parse products
       const products = parseProducts(productsData);
       console.log('BP: Parsed products:', products.length);
       if (products.length > 0) console.log('BP: Sample product:', products[0]);
       
       // Parse transactions and filter by date
-      const transactions = parseTransactions(transactionsData).filter(t => 
+      const allTransactions = parseTransactions(transactionsData);
+      console.log('BP: Total transactions parsed:', allTransactions.length);
+      if (allTransactions.length > 0) {
+        const dates = allTransactions.map(t => t.date).filter(d => d).sort();
+        console.log('BP: Transaction date range:', dates[0], 'to', dates[dates.length - 1]);
+      }
+      
+      const transactions = allTransactions.filter(t => 
         t.date >= startDate && t.date <= endDate
       );
       console.log('BP: Filtered transactions:', transactions.length, 'between', startDate, 'and', endDate);
