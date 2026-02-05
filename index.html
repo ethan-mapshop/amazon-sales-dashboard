@@ -766,10 +766,18 @@
       min-width: 200px;
     }
     
+    .bp-table thead tr:nth-child(2) th {
+      /* Second header row - all should be right-aligned */
+      text-align: right !important;
+      position: relative;
+      left: auto;
+      min-width: auto;
+    }
+    
     .bp-table .header-group {
       background: var(--bg-secondary);
       font-weight: 700;
-      text-align: center;
+      text-align: center !important;
       font-size: 0.8rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -1571,6 +1579,10 @@
     function initializeGoogleAuth() {
       if (!config.clientId) return;
       
+      // Show sign-in button immediately
+      const signInBtn = document.getElementById('signInBtn');
+      if (signInBtn) signInBtn.style.display = 'inline-flex';
+      
       // Check for saved token
       const savedToken = localStorage.getItem('googleAccessToken');
       const tokenExpiry = localStorage.getItem('tokenExpiry');
@@ -1579,40 +1591,45 @@
         accessToken = savedToken;
         displayUserInfo(null);
         enableUpload();
+        return; // Already signed in
       }
       
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: config.clientId,
-        scope: 'https://www.googleapis.com/auth/spreadsheets',
-        callback: (response) => {
-          if (response.access_token) {
-            accessToken = response.access_token;
-            // Save token (expires in 1 hour)
-            localStorage.setItem('googleAccessToken', accessToken);
-            localStorage.setItem('tokenExpiry', Date.now() + 3600000); // 1 hour
-            // Show signed in state
-            displayUserInfo(null);
-            enableUpload();
-          } else {
-            showAuthError('Failed to get access token');
-          }
-        },
-      });
-      
-      document.getElementById('signInBtn').style.display = 'inline-flex';
+      // Only initialize token client if google.accounts is available
+      if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: config.clientId,
+          scope: 'https://www.googleapis.com/auth/spreadsheets',
+          callback: (response) => {
+            if (response.access_token) {
+              accessToken = response.access_token;
+              // Save token (expires in 1 hour)
+              localStorage.setItem('googleAccessToken', accessToken);
+              localStorage.setItem('tokenExpiry', Date.now() + 3600000); // 1 hour
+              // Show signed in state
+              displayUserInfo(null);
+              enableUpload();
+            } else {
+              showAuthError('Failed to get access token');
+            }
+          },
+        });
+      }
     }
     
-    // Initialize immediately when script loads
-    if (typeof google !== 'undefined' && google.accounts) {
+    // Try to initialize on DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', () => {
       initializeGoogleAuth();
-    } else {
-      // Wait for Google API to load
-      window.addEventListener('load', () => {
-        setTimeout(() => {
-          if (config.clientId) initializeGoogleAuth();
-        }, 100);
-      });
-    }
+    });
+    
+    // Also try on window load as backup
+    window.addEventListener('load', () => {
+      // Wait a bit for Google API to be ready
+      setTimeout(() => {
+        if (!tokenClient && config.clientId) {
+          initializeGoogleAuth();
+        }
+      }, 200);
+    });
     
     function updateAuthUI() {
       if (config.clientId && !tokenClient) initializeGoogleAuth();
