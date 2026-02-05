@@ -974,11 +974,11 @@
         <h2 class="section-title">Financial Overview</h2>
         
         <!-- Tabs -->
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem; border-bottom: 2px solid var(--border);">
-          <button id="ytd-tab" class="btn" onclick="showYTD()" style="padding: 0.75rem 1.5rem; border-radius: 6px 6px 0 0; border-bottom: none; background: var(--primary); color: white;">
+        <div class="tabs">
+          <button id="ytd-tab" class="tab active" onclick="showYTD()">
             Year-to-Date Profitability
           </button>
-          <button id="monthly-tab" class="btn" onclick="showMonthly()" style="padding: 0.75rem 1.5rem; border-radius: 6px 6px 0 0; border-bottom: none;">
+          <button id="monthly-tab" class="tab" onclick="showMonthly()">
             Monthly Profitability
           </button>
         </div>
@@ -2578,10 +2578,8 @@
     function showYTD() {
       document.getElementById('ytd-view').style.display = 'block';
       document.getElementById('monthly-view').style.display = 'none';
-      document.getElementById('ytd-tab').style.background = 'var(--primary)';
-      document.getElementById('ytd-tab').style.color = 'white';
-      document.getElementById('monthly-tab').style.removeProperty('background');
-      document.getElementById('monthly-tab').style.removeProperty('color');
+      document.getElementById('ytd-tab').classList.add('active');
+      document.getElementById('monthly-tab').classList.remove('active');
       
       // Initialize year dropdown if not already done
       initializeYearDropdown();
@@ -2590,10 +2588,8 @@
     function showMonthly() {
       document.getElementById('ytd-view').style.display = 'none';
       document.getElementById('monthly-view').style.display = 'block';
-      document.getElementById('ytd-tab').style.removeProperty('background');
-      document.getElementById('ytd-tab').style.removeProperty('color');
-      document.getElementById('monthly-tab').style.background = 'var(--primary)';
-      document.getElementById('monthly-tab').style.color = 'white';
+      document.getElementById('ytd-tab').classList.remove('active');
+      document.getElementById('monthly-tab').classList.add('active');
       
       // Initialize dropdowns if not already done
       initializeMonthlyDropdowns();
