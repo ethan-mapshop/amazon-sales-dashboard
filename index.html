@@ -2682,19 +2682,35 @@
         const selectedYear = parseInt(year);
         const isCurrentYear = selectedYear === today.getFullYear();
         
-        // For current year: Jan 1 to today
+        // For current year: Jan 1 to end of last complete month
         // For past years: Jan 1 to Dec 31
         const startDate = `${year}-01-01`;
-        const endDate = isCurrentYear 
-          ? today.toISOString().split('T')[0]
-          : `${year}-12-31`;
+        let endDate;
         
-        // Previous year comparison - same date range
+        if (isCurrentYear) {
+          // Get last complete month (if today is Feb 5, use Jan 31)
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+          const endOfLastMonth = new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0);
+          endDate = endOfLastMonth.toISOString().split('T')[0];
+        } else {
+          endDate = `${year}-12-31`;
+        }
+        
+        // Previous year comparison - same month range
         const prevYear = selectedYear - 1;
         const prevStartDate = `${prevYear}-01-01`;
-        const prevEndDate = isCurrentYear
-          ? new Date(prevYear, today.getMonth(), today.getDate()).toISOString().split('T')[0]
-          : `${prevYear}-12-31`;
+        let prevEndDate;
+        
+        if (isCurrentYear) {
+          // Same last complete month in previous year
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const prevLastCompleteMonthYear = today.getMonth() === 0 ? prevYear - 1 : prevYear;
+          const prevEndOfLastMonth = new Date(prevLastCompleteMonthYear, lastCompleteMonth + 1, 0);
+          prevEndDate = prevEndOfLastMonth.toISOString().split('T')[0];
+        } else {
+          prevEndDate = `${prevYear}-12-31`;
+        }
         
         // Load both periods
         const [currentData, prevData] = await Promise.all([
