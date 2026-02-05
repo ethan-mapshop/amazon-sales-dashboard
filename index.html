@@ -3969,12 +3969,15 @@
       
       // Parse products
       const products = parseProducts(productsData);
+      console.log('BP: Parsed products:', products.length);
+      if (products.length > 0) console.log('BP: Sample product:', products[0]);
       
       // Parse transactions and filter by date
       const transactions = parseTransactions(transactionsData).filter(t => 
         t.date >= startDate && t.date <= endDate
       );
-      
+      console.log('BP: Filtered transactions:', transactions.length, 'between', startDate, 'and', endDate);
+      if (transactions.length > 0) console.log('BP: Sample transaction:', transactions[0]);
       // Parse ad spend
       const productAds = parseProductAds(productAdsData).filter(a => 
         a.date >= startDate && a.date <= endDate
@@ -4033,10 +4036,15 @@
           const fbmSkus = product.skus.filter(s => s.fulfillmentType === 'FBM').map(s => s.sku);
           const fbaSkus = product.skus.filter(s => s.fulfillmentType === 'FBA').map(s => s.sku);
           
+          console.log(`BP: Product "${product.productName}" - FBM SKUs:`, fbmSkus, 'FBA SKUs:', fbaSkus);
+          
           // Calculate FBM metrics
           if (fbmSkus.length > 0) {
             const fbmTransactions = transactions.filter(t => fbmSkus.includes(t.sku));
             const fbmShipping = shippingCosts.filter(s => fbmSkus.includes(s.sku));
+            
+            console.log(`BP: Product "${product.productName}" FBM - Found ${fbmTransactions.length} transactions`);
+            if (fbmTransactions.length > 0) console.log('BP: Sample FBM transaction:', fbmTransactions[0]);
             
             // Income (using transaction columns like Overview does)
             product.fbm.income = fbmTransactions.reduce((sum, t) => {
