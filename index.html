@@ -2672,10 +2672,81 @@
         console.error('No year selected');
         return;
       }
-      const startDate = `${year}-01-01`;
-      const endDate = `${year}-12-31`;
       
-      await loadOverviewData(startDate, endDate, 'ytd-content');
+      const container = document.getElementById('ytd-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        // Calculate YTD date range
+        const today = new Date();
+        const selectedYear = parseInt(year);
+        const isCurrentYear = selectedYear === today.getFullYear();
+        
+        // For current year: Jan 1 to today
+        // For past years: Jan 1 to Dec 31
+        const startDate = `${year}-01-01`;
+        const endDate = isCurrentYear 
+          ? today.toISOString().split('T')[0]
+          : `${year}-12-31`;
+        
+        // Previous year comparison - same date range
+        const prevYear = selectedYear - 1;
+        const prevStartDate = `${prevYear}-01-01`;
+        const prevEndDate = isCurrentYear
+          ? new Date(prevYear, today.getMonth(), today.getDate()).toISOString().split('T')[0]
+          : `${prevYear}-12-31`;
+        
+        // Load both periods
+        const [currentData, prevData] = await Promise.all([
+          loadOverviewData(startDate, endDate, 'ytd-content', true),
+          loadOverviewData(prevStartDate, prevEndDate, 'ytd-content', true)
+        ]);
+        
+        // Calculate YoY comparisons
+        const comparisons = calculateYTDComparisons(currentData, prevData);
+        
+        // Now load current data again but render it with comparisons
+        await loadOverviewData(startDate, endDate, 'ytd-content', false, comparisons);
+        
+      } catch (error) {
+        console.error('Error generating YTD report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // Calculate YTD YoY comparisons
+    function calculateYTDComparisons(current, previous) {
+      const calcChange = (curr, prev) => {
+        if (!prev || prev === 0) return null;
+        return ((curr - prev) / Math.abs(prev)) * 100;
+      };
+      
+      return {
+        fbm: {
+          income: { yoy: calcChange(current.fbm.income, previous.fbm.income) },
+          opex: { yoy: calcChange(current.fbm.opex, previous.fbm.opex) },
+          productCosts: { yoy: calcChange(current.fbm.productCosts, previous.fbm.productCosts) },
+          adSpend: { yoy: calcChange(current.fbm.adSpend, previous.fbm.adSpend) },
+          profit: { yoy: calcChange(current.fbm.profit, previous.fbm.profit) },
+          margin: { yoy: calcChange(current.fbm.margin, previous.fbm.margin) }
+        },
+        fba: {
+          income: { yoy: calcChange(current.fba.income, previous.fba.income) },
+          opex: { yoy: calcChange(current.fba.opex, previous.fba.opex) },
+          productCosts: { yoy: calcChange(current.fba.productCosts, previous.fba.productCosts) },
+          adSpend: { yoy: calcChange(current.fba.adSpend, previous.fba.adSpend) },
+          profit: { yoy: calcChange(current.fba.profit, previous.fba.profit) },
+          margin: { yoy: calcChange(current.fba.margin, previous.fba.margin) }
+        },
+        total: {
+          income: { yoy: calcChange(current.total.income, previous.total.income) },
+          opex: { yoy: calcChange(current.total.opex, previous.total.opex) },
+          productCosts: { yoy: calcChange(current.total.productCosts, previous.total.productCosts) },
+          adSpend: { yoy: calcChange(current.total.adSpend, previous.total.adSpend) },
+          profit: { yoy: calcChange(current.total.profit, previous.total.profit) },
+          margin: { yoy: calcChange(current.total.margin, previous.total.margin) }
+        }
+      };
     }
     
     // Generate Monthly report
@@ -3546,10 +3617,10 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 46%;' : 'width: 50%;'}">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 27%;' : 'width: 50%;'} min-width: 140px;">Total</th>
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">YoY</th>' : ''}
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 27%;' : 'width: 35%;') : 'width: 50%;'} min-width: 140px;">Total</th>
+                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ' + (comparisons.fbm.income.mom !== undefined ? 'width: 13.5%;' : 'width: 15%;') + ' min-width: 80px;">YoY</th>' : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
                   </tr>
                 </thead>
                 <tbody>
@@ -3557,37 +3628,37 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbmIncome >= 0 ? '$' + formatNumber(fbmIncome) : '-$' + formatNumber(Math.abs(fbmIncome))}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.income.mom, false)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmExpensesExcludingCostAndAd)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmProductCosts)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
                     ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.profit.mom, false)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fbm.margin.mom, false)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
@@ -3599,10 +3670,10 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 46%;' : 'width: 50%;'}">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 27%;' : 'width: 50%;'} min-width: 140px;">Total</th>
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">YoY</th>' : ''}
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 27%;' : 'width: 35%;') : 'width: 50%;'} min-width: 140px;">Total</th>
+                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ' + (comparisons.fbm.income.mom !== undefined ? 'width: 13.5%;' : 'width: 15%;') + ' min-width: 80px;">YoY</th>' : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
                   </tr>
                 </thead>
                 <tbody>
@@ -3610,37 +3681,37 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${fbaIncome >= 0 ? '$' + formatNumber(fbaIncome) : '-$' + formatNumber(Math.abs(fbaIncome))}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.income.mom, false)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaExpensesExcludingCostAndAd)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaProductCosts)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.productCosts.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.productCosts.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.productCosts.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
                     ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.profit.mom, false)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.fba.margin.mom, false)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
@@ -3652,10 +3723,10 @@
               <table style="width: 100%;">
                 <thead>
                   <tr>
-                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 46%;' : 'width: 50%;'}">Category</th>
-                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? 'width: 27%;' : 'width: 50%;'} min-width: 140px;">Total</th>
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">YoY</th>' : ''}
-                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 27%;' : 'width: 35%;') : 'width: 50%;'} min-width: 140px;">Total</th>
+                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ' + (comparisons.fbm.income.mom !== undefined ? 'width: 13.5%;' : 'width: 15%;') + ' min-width: 80px;">YoY</th>' : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
                   </tr>
                 </thead>
                 <tbody>
@@ -3663,37 +3734,37 @@
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${totalIncome >= 0 ? '$' + formatNumber(totalIncome) : '-$' + formatNumber(Math.abs(totalIncome))}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.income.mom, false)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalExpensesExcludingCostAndAd)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.opex.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalProductCosts)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.productCosts.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.productCosts.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.productCosts.mom, true)}</td>` : ''}
                   </tr>
                   <tr>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.yoy, true)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.mom, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.adSpend.mom, true)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.75rem;">Profit</td>
                     <td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
                     ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.profit.mom, false)}</td>` : ''}
                   </tr>
                   <tr style="font-weight: 700; background: var(--bg-secondary);">
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
                     <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
                     ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.yoy, false)}</td>` : ''}
-                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.mom, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'IBM Plex Mono', monospace;">${formatComparison(comparisons.total.margin.mom, false)}</td>` : ''}
                   </tr>
                 </tbody>
               </table>
