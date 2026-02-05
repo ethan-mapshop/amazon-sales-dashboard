@@ -729,6 +729,159 @@
       color: var(--warning);
     }
 
+    /* Brand & Product Table Styles */
+    .bp-table-wrapper {
+      overflow-x: auto;
+      margin-top: 2rem;
+    }
+    
+    .bp-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    
+    .bp-table thead {
+      position: sticky;
+      top: 0;
+      background: var(--bg-primary);
+      z-index: 10;
+    }
+    
+    .bp-table th {
+      padding: 0.75rem 0.5rem;
+      text-align: right;
+      font-weight: 600;
+      border-bottom: 2px solid var(--border);
+      white-space: nowrap;
+    }
+    
+    .bp-table th:first-child {
+      text-align: left;
+      position: sticky;
+      left: 0;
+      background: var(--bg-primary);
+      z-index: 11;
+      min-width: 200px;
+    }
+    
+    .bp-table .header-group {
+      background: var(--bg-secondary);
+      font-weight: 700;
+      text-align: center;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .bp-table .header-group.fbm {
+      color: var(--accent-blue);
+    }
+    
+    .bp-table .header-group.fba {
+      color: var(--accent-orange);
+    }
+    
+    .bp-table .header-group.total {
+      color: var(--accent-green);
+    }
+    
+    .bp-table tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.2s;
+    }
+    
+    .bp-table tbody tr:hover {
+      background: var(--bg-secondary);
+    }
+    
+    .bp-table tbody tr.brand-row {
+      font-weight: 600;
+      background: var(--bg-card);
+      cursor: pointer;
+    }
+    
+    .bp-table tbody tr.brand-row:hover {
+      background: var(--bg-secondary);
+    }
+    
+    .bp-table tbody tr.product-row {
+      background: var(--bg-primary);
+    }
+    
+    .bp-table tbody tr.product-row td:first-child {
+      padding-left: 2rem;
+      color: var(--text-secondary);
+    }
+    
+    .bp-table td {
+      padding: 0.75rem 0.5rem;
+      text-align: right;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    
+    .bp-table td:first-child {
+      text-align: left;
+      font-family: 'Work Sans', sans-serif;
+      position: sticky;
+      left: 0;
+      background: inherit;
+      z-index: 5;
+    }
+    
+    .bp-table .brand-name {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .bp-table .expand-icon {
+      font-size: 0.75rem;
+      opacity: 0.6;
+      transition: transform 0.2s;
+    }
+    
+    .bp-table tr.brand-row.expanded .expand-icon {
+      transform: rotate(90deg);
+    }
+    
+    .bp-table .positive {
+      color: var(--success);
+    }
+    
+    .bp-table .negative {
+      color: var(--error);
+    }
+    
+    .bp-table .neutral {
+      color: var(--text-secondary);
+    }
+    
+    .bp-filter-bar {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      padding: 1rem;
+      background: var(--bg-secondary);
+      border-radius: 6px;
+    }
+    
+    .bp-filter-bar label {
+      font-weight: 600;
+    }
+    
+    .bp-filter-bar select {
+      padding: 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg-card);
+      color: var(--text-primary);
+      min-width: 200px;
+    }
+
     @media (max-width: 1024px) {
       .mapping-layout {
         grid-template-columns: 1fr;
@@ -793,9 +946,10 @@
           </div>
         </div>
         <div class="nav-buttons">
-          <button class="nav-btn active" onclick="showPage('upload')">Data Upload</button>
           <button class="nav-btn" onclick="showPage('overview')">Overview</button>
+          <button class="nav-btn" onclick="showPage('brandproduct')">Brand & Product</button>
           <button class="nav-btn" onclick="showPage('mapping')">Campaign Mapping</button>
+          <button class="nav-btn active" onclick="showPage('upload')">Data Upload</button>
         </div>
       </div>
     </header>
@@ -1048,6 +1202,88 @@
       </div>
     </div>
 
+    <!-- BRAND & PRODUCT PAGE -->
+    <div id="brandproduct-page" class="page">
+      <div class="card">
+        <h2 class="section-title">Brand & Product Profitability</h2>
+        
+        <!-- Tabs -->
+        <div class="tabs">
+          <button id="bp-ytd-tab" class="tab active" onclick="showBPYTD()">
+            Year-to-Date
+          </button>
+          <button id="bp-monthly-tab" class="tab" onclick="showBPMonthly()">
+            Monthly
+          </button>
+        </div>
+        
+        <!-- Year-to-Date View -->
+        <div id="bp-ytd-view">
+          <!-- Filter Bar -->
+          <div class="bp-filter-bar">
+            <label>Brand:</label>
+            <select id="bp-ytd-brand-select" onchange="generateBPYTDReport()">
+              <option value="all">All Brands</option>
+            </select>
+            <label style="margin-left: auto;">Year:</label>
+            <select id="bp-ytd-year-select" onchange="generateBPYTDReport()">
+            </select>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn" onclick="setBPYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+              <button class="btn" onclick="setBPYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+            </div>
+          </div>
+
+          <div id="bp-ytd-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a year to view brand & product profitability</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Monthly View -->
+        <div id="bp-monthly-view" style="display: none;">
+          <!-- Filter Bar -->
+          <div class="bp-filter-bar">
+            <label>Brand:</label>
+            <select id="bp-monthly-brand-select" onchange="generateBPMonthlyReport()">
+              <option value="all">All Brands</option>
+            </select>
+            <label style="margin-left: auto;">Month:</label>
+            <select id="bp-monthly-month-select" onchange="generateBPMonthlyReport()" style="min-width: 140px;">
+              <option value="0">January</option>
+              <option value="1">February</option>
+              <option value="2">March</option>
+              <option value="3">April</option>
+              <option value="4">May</option>
+              <option value="5">June</option>
+              <option value="6">July</option>
+              <option value="7">August</option>
+              <option value="8">September</option>
+              <option value="9">October</option>
+              <option value="10">November</option>
+              <option value="11">December</option>
+            </select>
+            <label>Year:</label>
+            <select id="bp-monthly-year-select" onchange="generateBPMonthlyReport()">
+            </select>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="btn" onclick="setBPMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
+              <button class="btn" onclick="setBPMonthlyDate('thisMonth')" style="padding: 0.5rem 1rem;">This Month</button>
+            </div>
+          </div>
+
+          <div id="bp-monthly-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a month and year to view brand & product profitability</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- MAPPING PAGE -->
     <div id="mapping-page" class="page">
       <div class="card">
@@ -1240,6 +1476,7 @@
         const btnText = btn.textContent.toLowerCase();
         if ((pageName === 'upload' && btnText.includes('upload')) ||
             (pageName === 'overview' && btnText.includes('overview')) ||
+            (pageName === 'brandproduct' && btnText.includes('brand')) ||
             (pageName === 'mapping' && btnText.includes('mapping'))) {
           btn.classList.add('active');
         }
@@ -3217,6 +3454,611 @@
       } catch (error) {
         console.error('Error loading overview:', error);
         container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    
+    // ============================================
+    // BRAND & PRODUCT PROFITABILITY FUNCTIONS
+    // ============================================
+    
+    // Tab switching for Brand & Product page
+    function showBPYTD() {
+      document.getElementById('bp-ytd-view').style.display = 'block';
+      document.getElementById('bp-monthly-view').style.display = 'none';
+      document.getElementById('bp-ytd-tab').classList.add('active');
+      document.getElementById('bp-monthly-tab').classList.remove('active');
+      
+      initializeBPYTDDropdowns();
+    }
+    
+    function showBPMonthly() {
+      document.getElementById('bp-ytd-view').style.display = 'none';
+      document.getElementById('bp-monthly-view').style.display = 'block';
+      document.getElementById('bp-ytd-tab').classList.remove('active');
+      document.getElementById('bp-monthly-tab').classList.add('active');
+      
+      initializeBPMonthlyDropdowns();
+    }
+    
+    // Initialize dropdowns for BP YTD
+    async function initializeBPYTDDropdowns() {
+      // Initialize year dropdown
+      const yearSelect = document.getElementById('bp-ytd-year-select');
+      if (yearSelect.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear; year >= currentYear - 5; year--) {
+          const option = document.createElement('option');
+          option.value = year;
+          option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
+          yearSelect.appendChild(option);
+        }
+      }
+      
+      // Initialize brand dropdown
+      await initializeBrandDropdown('bp-ytd-brand-select');
+    }
+    
+    // Initialize dropdowns for BP Monthly
+    async function initializeBPMonthlyDropdowns() {
+      // Initialize year dropdown
+      const yearSelect = document.getElementById('bp-monthly-year-select');
+      if (yearSelect.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear; year >= currentYear - 5; year--) {
+          const option = document.createElement('option');
+          option.value = year;
+          option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
+          yearSelect.appendChild(option);
+        }
+      }
+      
+      // Set to current month
+      const now = new Date();
+      document.getElementById('bp-monthly-month-select').value = now.getMonth();
+      
+      // Initialize brand dropdown
+      await initializeBrandDropdown('bp-monthly-brand-select');
+    }
+    
+    // Initialize brand dropdown from Products sheet
+    async function initializeBrandDropdown(selectId) {
+      if (!accessToken) return;
+      
+      const select = document.getElementById(selectId);
+      if (select.options.length > 1) return; // Already initialized
+      
+      try {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        const rows = data.values || [];
+        if (rows.length < 2) return;
+        
+        const headers = rows[0];
+        const brandIdx = headers.findIndex(h => h.toLowerCase() === 'brand');
+        
+        if (brandIdx === -1) return;
+        
+        // Get unique brands
+        const brands = new Set();
+        for (let i = 1; i < rows.length; i++) {
+          const brand = rows[i][brandIdx];
+          if (brand && brand.trim()) {
+            brands.add(brand.trim());
+          }
+        }
+        
+        // Add brand options
+        const sortedBrands = Array.from(brands).sort();
+        sortedBrands.forEach(brand => {
+          const option = document.createElement('option');
+          option.value = brand;
+          option.text = brand;
+          select.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error loading brands:', error);
+      }
+    }
+    
+    // Quick date setters for BP YTD
+    function setBPYTDYear(preset) {
+      const yearSelect = document.getElementById('bp-ytd-year-select');
+      const currentYear = new Date().getFullYear();
+      
+      if (preset === 'thisYear') {
+        yearSelect.value = currentYear;
+      } else if (preset === 'lastYear') {
+        yearSelect.value = currentYear - 1;
+      }
+      
+      generateBPYTDReport();
+    }
+    
+    // Quick date setters for BP Monthly
+    function setBPMonthlyDate(preset) {
+      const monthSelect = document.getElementById('bp-monthly-month-select');
+      const yearSelect = document.getElementById('bp-monthly-year-select');
+      const now = new Date();
+      
+      if (preset === 'thisMonth') {
+        monthSelect.value = now.getMonth();
+        yearSelect.value = now.getFullYear();
+      } else if (preset === 'lastMonth') {
+        const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        monthSelect.value = lastMonth.getMonth();
+        yearSelect.value = lastMonth.getFullYear();
+      }
+      
+      generateBPMonthlyReport();
+    }
+    
+    // Generate BP YTD Report
+    async function generateBPYTDReport() {
+      const year = parseInt(document.getElementById('bp-ytd-year-select').value);
+      const brandFilter = document.getElementById('bp-ytd-brand-select').value;
+      
+      if (isNaN(year)) {
+        console.error('Invalid year');
+        return;
+      }
+      
+      const container = document.getElementById('bp-ytd-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        const today = new Date();
+        const currentYear = today.getFullYear();
+        const isCurrentYear = year === currentYear;
+        
+        let startDate = `${year}-01-01`;
+        let endDate;
+        
+        if (isCurrentYear) {
+          // End at last complete month
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? year - 1 : year;
+          const endOfLastMonth = new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0);
+          endDate = endOfLastMonth.toISOString().split('T')[0];
+        } else {
+          endDate = `${year}-12-31`;
+        }
+        
+        // Load brand/product data
+        const brandProductData = await loadBrandProductData(startDate, endDate, brandFilter);
+        
+        // Render the table
+        renderBrandProductTable(brandProductData, 'bp-ytd-content');
+        
+      } catch (error) {
+        console.error('Error generating BP YTD report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // Generate BP Monthly Report
+    async function generateBPMonthlyReport() {
+      const month = parseInt(document.getElementById('bp-monthly-month-select').value);
+      const year = parseInt(document.getElementById('bp-monthly-year-select').value);
+      const brandFilter = document.getElementById('bp-monthly-brand-select').value;
+      
+      if (isNaN(month) || isNaN(year)) {
+        console.error('Invalid month or year');
+        return;
+      }
+      
+      const container = document.getElementById('bp-monthly-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        const startDate = new Date(year, month, 1).toISOString().split('T')[0];
+        const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
+        
+        // Load brand/product data
+        const brandProductData = await loadBrandProductData(startDate, endDate, brandFilter);
+        
+        // Render the table
+        renderBrandProductTable(brandProductData, 'bp-monthly-content');
+        
+      } catch (error) {
+        console.error('Error generating BP monthly report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // Load and calculate brand/product data
+    async function loadBrandProductData(startDate, endDate, brandFilter) {
+      if (!accessToken) {
+        throw new Error('Please sign in first');
+      }
+      
+      // Load all required data
+      const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes] = await Promise.all([
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        })
+      ]);
+      
+      if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+      
+      const [transactionsData, productsData, productAdsData, brandAdsData, shippingData] = await Promise.all([
+        transactionsRes.json(),
+        productsRes.json(),
+        productAdsRes.json(),
+        brandAdsRes.json(),
+        shippingRes.json()
+      ]);
+      
+      // Parse products
+      const products = parseProducts(productsData);
+      
+      // Parse transactions and filter by date
+      const transactions = parseTransactions(transactionsData).filter(t => 
+        t.date >= startDate && t.date <= endDate
+      );
+      
+      // Parse ad spend
+      const productAds = parseProductAds(productAdsData).filter(a => 
+        a.date >= startDate && a.date <= endDate
+      );
+      const brandAds = parseBrandAds(brandAdsData).filter(a => 
+        a.date >= startDate && a.date <= endDate
+      );
+      
+      // Parse shipping costs
+      const shippingCosts = parseShippingCosts(shippingData).filter(s => 
+        s.date >= startDate && s.date <= endDate
+      );
+      
+      // Build brand/product structure
+      const brandData = {};
+      
+      // Group products by brand
+      products.forEach(product => {
+        if (brandFilter !== 'all' && product.brand !== brandFilter) return;
+        
+        if (!brandData[product.brand]) {
+          brandData[product.brand] = {
+            brandName: product.brand,
+            products: []
+          };
+        }
+        
+        // Find existing product (by name, since FBA/FBM versions have same name)
+        let existingProduct = brandData[product.brand].products.find(p => p.productName === product.name);
+        
+        if (!existingProduct) {
+          existingProduct = {
+            productName: product.name,
+            skus: [],
+            fbm: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 },
+            fba: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 },
+            total: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 }
+          };
+          brandData[product.brand].products.push(existingProduct);
+        }
+        
+        existingProduct.skus.push({
+          sku: product.sku,
+          fulfillmentType: product.fulfillmentType,
+          cost: product.cost
+        });
+      });
+      
+      // Calculate metrics for each product
+      Object.values(brandData).forEach(brand => {
+        brand.fbm = { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 };
+        brand.fba = { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 };
+        brand.total = { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 };
+        
+        brand.products.forEach(product => {
+          const fbmSkus = product.skus.filter(s => s.fulfillmentType === 'FBM').map(s => s.sku);
+          const fbaSkus = product.skus.filter(s => s.fulfillmentType === 'FBA').map(s => s.sku);
+          
+          // Calculate FBM metrics
+          if (fbmSkus.length > 0) {
+            const fbmTransactions = transactions.filter(t => fbmSkus.includes(t.sku));
+            const fbmShipping = shippingCosts.filter(s => fbmSkus.includes(s.sku));
+            
+            // Income
+            product.fbm.income = fbmTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.description === 'Principal') return sum + t.amount;
+              if (t.type === 'Refund' && t.description === 'Principal') return sum + t.amount;
+              if (t.type === 'Order' && t.description === 'Shipping') return sum + t.amount;
+              return sum;
+            }, 0);
+            
+            // OpEx (fees, excluding product costs and shipping)
+            product.fbm.opex = fbmTransactions.reduce((sum, t) => {
+              if (t.description === 'FBA Per Unit Fulfillment Fee') return sum + Math.abs(t.amount);
+              if (t.description === 'Selling Fees') return sum + Math.abs(t.amount);
+              if (t.description === 'FBA Weight Based Fee') return sum + Math.abs(t.amount);
+              if (t.description === 'Adjustment') return sum + Math.abs(t.amount);
+              if (t.description === 'FBA Inventory Fee') return sum + Math.abs(t.amount);
+              if (t.description === 'Service Fee') return sum + Math.abs(t.amount);
+              if (t.description === 'Shipping Services') return sum + Math.abs(t.amount);
+              return sum;
+            }, 0);
+            
+            // Add shipping costs to opex
+            product.fbm.opex += fbmShipping.reduce((sum, s) => sum + s.cost, 0);
+            
+            // Product costs (COGS)
+            const fbmCostMap = {};
+            product.skus.filter(s => s.fulfillmentType === 'FBM').forEach(s => {
+              fbmCostMap[s.sku] = s.cost;
+            });
+            
+            product.fbm.productCosts = fbmTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.description === 'Principal' && fbmCostMap[t.sku]) {
+                return sum + (fbmCostMap[t.sku] * Math.abs(t.quantity || 1));
+              }
+              return sum;
+            }, 0);
+            
+            // Ad spend
+            product.fbm.adSpend = productAds.reduce((sum, ad) => {
+              if (fbmSkus.includes(ad.sku)) return sum + ad.spend;
+              return sum;
+            }, 0);
+            
+            // Profit & margin
+            product.fbm.profit = product.fbm.income - product.fbm.opex - product.fbm.productCosts - product.fbm.adSpend;
+            product.fbm.margin = product.fbm.income > 0 ? (product.fbm.profit / product.fbm.income) * 100 : 0;
+          }
+          
+          // Calculate FBA metrics
+          if (fbaSkus.length > 0) {
+            const fbaTransactions = transactions.filter(t => fbaSkus.includes(t.sku));
+            
+            // Income
+            product.fba.income = fbaTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.description === 'Principal') return sum + t.amount;
+              if (t.type === 'Refund' && t.description === 'Principal') return sum + t.amount;
+              if (t.type === 'Order' && t.description === 'Shipping') return sum + t.amount;
+              return sum;
+            }, 0);
+            
+            // OpEx (fees, excluding unallocable expenses per requirements)
+            product.fba.opex = fbaTransactions.reduce((sum, t) => {
+              if (t.description === 'FBA Per Unit Fulfillment Fee') return sum + Math.abs(t.amount);
+              if (t.description === 'Selling Fees') return sum + Math.abs(t.amount);
+              if (t.description === 'FBA Weight Based Fee') return sum + Math.abs(t.amount);
+              if (t.description === 'Adjustment') return sum + Math.abs(t.amount);
+              if (t.description === 'Service Fee') return sum + Math.abs(t.amount);
+              return sum;
+            }, 0);
+            
+            // Product costs (COGS)
+            const fbaCostMap = {};
+            product.skus.filter(s => s.fulfillmentType === 'FBA').forEach(s => {
+              fbaCostMap[s.sku] = s.cost;
+            });
+            
+            product.fba.productCosts = fbaTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.description === 'Principal' && fbaCostMap[t.sku]) {
+                return sum + (fbaCostMap[t.sku] * Math.abs(t.quantity || 1));
+              }
+              return sum;
+            }, 0);
+            
+            // Ad spend
+            product.fba.adSpend = productAds.reduce((sum, ad) => {
+              if (fbaSkus.includes(ad.sku)) return sum + ad.spend;
+              return sum;
+            }, 0);
+            
+            // Profit & margin
+            product.fba.profit = product.fba.income - product.fba.opex - product.fba.productCosts - product.fba.adSpend;
+            product.fba.margin = product.fba.income > 0 ? (product.fba.profit / product.fba.income) * 100 : 0;
+          }
+          
+          // Calculate total metrics
+          product.total.income = product.fbm.income + product.fba.income;
+          product.total.opex = product.fbm.opex + product.fba.opex;
+          product.total.productCosts = product.fbm.productCosts + product.fba.productCosts;
+          product.total.adSpend = product.fbm.adSpend + product.fba.adSpend;
+          product.total.profit = product.total.income - product.total.opex - product.total.productCosts - product.total.adSpend;
+          product.total.margin = product.total.income > 0 ? (product.total.profit / product.total.income) * 100 : 0;
+          
+          // Aggregate to brand
+          brand.fbm.income += product.fbm.income;
+          brand.fbm.opex += product.fbm.opex;
+          brand.fbm.productCosts += product.fbm.productCosts;
+          brand.fbm.adSpend += product.fbm.adSpend;
+          
+          brand.fba.income += product.fba.income;
+          brand.fba.opex += product.fba.opex;
+          brand.fba.productCosts += product.fba.productCosts;
+          brand.fba.adSpend += product.fba.adSpend;
+          
+          brand.total.income += product.total.income;
+          brand.total.opex += product.total.opex;
+          brand.total.productCosts += product.total.productCosts;
+          brand.total.adSpend += product.total.adSpend;
+        });
+        
+        // Calculate brand profit and margins
+        brand.fbm.profit = brand.fbm.income - brand.fbm.opex - brand.fbm.productCosts - brand.fbm.adSpend;
+        brand.fbm.margin = brand.fbm.income > 0 ? (brand.fbm.profit / brand.fbm.income) * 100 : 0;
+        
+        brand.fba.profit = brand.fba.income - brand.fba.opex - brand.fba.productCosts - brand.fba.adSpend;
+        brand.fba.margin = brand.fba.income > 0 ? (brand.fba.profit / brand.fba.income) * 100 : 0;
+        
+        brand.total.profit = brand.total.income - brand.total.opex - brand.total.productCosts - brand.total.adSpend;
+        brand.total.margin = brand.total.income > 0 ? (brand.total.profit / brand.total.income) * 100 : 0;
+        
+        // Add brand ad spend
+        const brandAdSpend = brandAds.filter(a => a.brand === brand.brandName).reduce((sum, a) => sum + a.spend, 0);
+        if (brandAdSpend > 0) {
+          // Allocate brand ad spend proportionally across FBM/FBA based on income
+          const totalIncome = brand.total.income;
+          if (totalIncome > 0) {
+            const fbmRatio = brand.fbm.income / totalIncome;
+            const fbaRatio = brand.fba.income / totalIncome;
+            
+            brand.fbm.adSpend += brandAdSpend * fbmRatio;
+            brand.fba.adSpend += brandAdSpend * fbaRatio;
+            brand.total.adSpend += brandAdSpend;
+            
+            // Recalculate profit and margin with brand ad spend
+            brand.fbm.profit = brand.fbm.income - brand.fbm.opex - brand.fbm.productCosts - brand.fbm.adSpend;
+            brand.fbm.margin = brand.fbm.income > 0 ? (brand.fbm.profit / brand.fbm.income) * 100 : 0;
+            
+            brand.fba.profit = brand.fba.income - brand.fba.opex - brand.fba.productCosts - brand.fba.adSpend;
+            brand.fba.margin = brand.fba.income > 0 ? (brand.fba.profit / brand.fba.income) * 100 : 0;
+            
+            brand.total.profit = brand.total.income - brand.total.opex - brand.total.productCosts - brand.total.adSpend;
+            brand.total.margin = brand.total.income > 0 ? (brand.total.profit / brand.total.income) * 100 : 0;
+          }
+        }
+      });
+      
+      return Object.values(brandData).sort((a, b) => a.brandName.localeCompare(b.brandName));
+    }
+    
+    // Render the brand/product table
+    function renderBrandProductTable(brandData, containerId) {
+      const container = document.getElementById(containerId);
+      
+      if (!brandData || brandData.length === 0) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">No data available for this period</div>';
+        return;
+      }
+      
+      let html = `
+        <div class="bp-table-wrapper">
+          <table class="bp-table">
+            <thead>
+              <tr>
+                <th rowspan="2">Brand / Product</th>
+                <th colspan="6" class="header-group fbm">FBM</th>
+                <th colspan="6" class="header-group fba">FBA</th>
+                <th colspan="6" class="header-group total">Total</th>
+              </tr>
+              <tr>
+                <th>Income</th>
+                <th>OpEx</th>
+                <th>Costs</th>
+                <th>Ads</th>
+                <th>Profit</th>
+                <th>Margin</th>
+                <th>Income</th>
+                <th>OpEx</th>
+                <th>Costs</th>
+                <th>Ads</th>
+                <th>Profit</th>
+                <th>Margin</th>
+                <th>Income</th>
+                <th>OpEx</th>
+                <th>Costs</th>
+                <th>Ads</th>
+                <th>Profit</th>
+                <th>Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      
+      brandData.forEach(brand => {
+        const brandId = brand.brandName.replace(/\s+/g, '-');
+        
+        // Brand row
+        html += `
+          <tr class="brand-row" onclick="toggleBrand('${brandId}')">
+            <td>
+              <div class="brand-name">
+                <span class="expand-icon">▶</span>
+                <strong>${brand.brandName}</strong>
+              </div>
+            </td>
+            ${renderMetricsCells(brand.fbm)}
+            ${renderMetricsCells(brand.fba)}
+            ${renderMetricsCells(brand.total)}
+          </tr>
+        `;
+        
+        // Product rows (initially hidden)
+        brand.products.forEach(product => {
+          html += `
+            <tr class="product-row" data-brand="${brandId}" style="display: none;">
+              <td>${product.productName}</td>
+              ${renderMetricsCells(product.fbm, product.skus.some(s => s.fulfillmentType === 'FBM'))}
+              ${renderMetricsCells(product.fba, product.skus.some(s => s.fulfillmentType === 'FBA'))}
+              ${renderMetricsCells(product.total)}
+            </tr>
+          `;
+        });
+      });
+      
+      html += `
+            </tbody>
+          </table>
+        </div>
+      `;
+      
+      container.innerHTML = html;
+    }
+    
+    // Helper to render metrics cells
+    function renderMetricsCells(metrics, hasData = true) {
+      if (!hasData) {
+        return '<td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td>';
+      }
+      
+      const formatMoney = (val) => {
+        if (val === 0) return '$0.00';
+        return val >= 0 ? `$${val.toFixed(2)}` : `-$${Math.abs(val).toFixed(2)}`;
+      };
+      
+      const profitClass = metrics.profit >= 0 ? 'positive' : 'negative';
+      const marginClass = metrics.margin >= 0 ? 'positive' : 'negative';
+      
+      return `
+        <td>${formatMoney(metrics.income)}</td>
+        <td>${formatMoney(metrics.opex)}</td>
+        <td>${formatMoney(metrics.productCosts)}</td>
+        <td>${formatMoney(metrics.adSpend)}</td>
+        <td class="${profitClass}">${formatMoney(metrics.profit)}</td>
+        <td class="${marginClass}">${metrics.margin.toFixed(1)}%</td>
+      `;
+    }
+    
+    // Toggle brand expansion
+    function toggleBrand(brandId) {
+      const brandRow = event.currentTarget;
+      const isExpanded = brandRow.classList.contains('expanded');
+      const productRows = document.querySelectorAll(`tr.product-row[data-brand="${brandId}"]`);
+      
+      if (isExpanded) {
+        brandRow.classList.remove('expanded');
+        productRows.forEach(row => row.style.display = 'none');
+      } else {
+        brandRow.classList.add('expanded');
+        productRows.forEach(row => row.style.display = 'table-row');
       }
     }
     
