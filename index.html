@@ -908,10 +908,18 @@
       padding: 1rem;
       background: var(--bg-secondary);
       border-radius: 6px;
+      flex-wrap: wrap;
     }
     
     .bp-filter-bar label {
       font-weight: 600;
+      margin: 0;
+      line-height: 1;
+    }
+    
+    .bp-filter-bar select,
+    .bp-filter-bar .btn {
+      margin: 0;
     }
     
     .bp-filter-bar select {
@@ -1280,13 +1288,11 @@
             <select id="bp-ytd-brand-select" onchange="generateBPYTDReport()">
               <option value="all">All Brands</option>
             </select>
-            <label style="margin-left: auto;">Year:</label>
+            <label>Year:</label>
             <select id="bp-ytd-year-select" onchange="generateBPYTDReport()">
             </select>
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="btn" onclick="setBPYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
-              <button class="btn" onclick="setBPYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-            </div>
+            <button class="btn" onclick="setBPYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+            <button class="btn" onclick="setBPYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
           </div>
 
           <div id="bp-ytd-content">
@@ -1305,8 +1311,8 @@
             <select id="bp-monthly-brand-select" onchange="generateBPMonthlyReport()">
               <option value="all">All Brands</option>
             </select>
-            <label style="margin-left: auto;">Month:</label>
-            <select id="bp-monthly-month-select" onchange="generateBPMonthlyReport()" style="min-width: 140px;">
+            <label>Month:</label>
+            <select id="bp-monthly-month-select" onchange="generateBPMonthlyReport()">
               <option value="0">January</option>
               <option value="1">February</option>
               <option value="2">March</option>
@@ -1323,9 +1329,7 @@
             <label>Year:</label>
             <select id="bp-monthly-year-select" onchange="generateBPMonthlyReport()">
             </select>
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="btn" onclick="setBPMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-            </div>
+            <button class="btn" onclick="setBPMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
           </div>
 
           <div id="bp-monthly-content">
