@@ -5332,6 +5332,11 @@
           fba: { income: fbaIncome, profit: fbaProfit }
         });
         
+        console.log(`Chart data for ${startDate} to ${endDate}:`, {
+          fbm: { income: fbmIncome, profit: fbmProfit },
+          fba: { income: fbaIncome, profit: fbaProfit }
+        });
+        
         // Calculate brand-level data
         const brandData = {};
         const targetBrands = ['BrightWay Educational', 'Hubbard Scientific', 'South of Kings', 'MapShop State Maps'];
