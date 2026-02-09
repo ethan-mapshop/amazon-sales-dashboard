@@ -5540,7 +5540,7 @@
           
           // Add delay between requests to avoid rate limiting
           if (i < months.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
           }
         }
         
