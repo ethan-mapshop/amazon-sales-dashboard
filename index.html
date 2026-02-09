@@ -1670,6 +1670,8 @@
     // Try to initialize on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', () => {
       initializeGoogleAuth();
+      // Initialize Overview YTD since it's the default page
+      showYTD();
     });
     
     // Also try on window load as backup
