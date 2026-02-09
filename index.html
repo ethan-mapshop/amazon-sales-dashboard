@@ -1672,6 +1672,12 @@
       initializeGoogleAuth();
       // Initialize Overview YTD since it's the default page
       showYTD();
+      // Auto-load YTD data if signed in (small delay to ensure accessToken is set)
+      setTimeout(() => {
+        if (accessToken) {
+          generateYTDReport();
+        }
+      }, 100);
     });
     
     // Also try on window load as backup
