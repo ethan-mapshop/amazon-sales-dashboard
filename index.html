@@ -6,6 +6,7 @@
   <title>Amazon Sales Dashboard</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;600&display=swap');
     
@@ -1012,6 +1013,7 @@
         <div class="nav-buttons">
           <button class="nav-btn active" onclick="showPage('overview')">Overview</button>
           <button class="nav-btn" onclick="showPage('brandproduct')">Brand & Product</button>
+          <button class="nav-btn" onclick="showPage('charts')">Charts</button>
           <button class="nav-btn" onclick="showPage('mapping')">Campaign Mapping</button>
           <button class="nav-btn" onclick="showPage('upload')">Data Upload</button>
         </div>
@@ -1342,6 +1344,59 @@
       </div>
     </div>
 
+    <!-- CHARTS PAGE -->
+    <div id="charts-page" class="page">
+      <div class="card">
+        <h2 class="section-title">Performance Charts</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 2rem;">12-month rolling trends</p>
+        
+        <!-- Overall Charts -->
+        <div style="margin-bottom: 3rem;">
+          <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">Overall Performance</h3>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
+            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+              <h4 style="margin-bottom: 1rem;">Revenue Trend (12 Months)</h4>
+              <canvas id="revenueChart"></canvas>
+            </div>
+            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+              <h4 style="margin-bottom: 1rem;">Profitability Trend (12 Months)</h4>
+              <canvas id="profitChart"></canvas>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Channel Breakdown -->
+        <div style="margin-bottom: 3rem;">
+          <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">By Channel (FBM vs FBA)</h3>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
+            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+              <h4 style="margin-bottom: 1rem;">Revenue by Channel</h4>
+              <canvas id="revenueChannelChart"></canvas>
+            </div>
+            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+              <h4 style="margin-bottom: 1rem;">Profit by Channel</h4>
+              <canvas id="profitChannelChart"></canvas>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Brand Breakdown -->
+        <div style="margin-bottom: 3rem;">
+          <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">By Brand</h3>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
+            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+              <h4 style="margin-bottom: 1rem;">Revenue by Brand</h4>
+              <canvas id="revenueBrandChart"></canvas>
+            </div>
+            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+              <h4 style="margin-bottom: 1rem;">Profit by Brand</h4>
+              <canvas id="profitBrandChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- MAPPING PAGE -->
     <div id="mapping-page" class="page">
       <div class="card">
@@ -1535,6 +1590,7 @@
         if ((pageName === 'upload' && btnText.includes('upload')) ||
             (pageName === 'overview' && btnText.includes('overview')) ||
             (pageName === 'brandproduct' && btnText.includes('brand')) ||
+            (pageName === 'charts' && btnText.includes('charts')) ||
             (pageName === 'mapping' && btnText.includes('mapping'))) {
           btn.classList.add('active');
         }
@@ -1550,6 +1606,10 @@
       
       if (pageName === 'brandproduct') {
         showBPYTD(); // Default to YTD view and initialize dropdowns
+      }
+      
+      if (pageName === 'charts' && accessToken) {
+        loadChartsData(); // Load chart data
       }
     }
     
@@ -5172,6 +5232,286 @@
       `;
       
       container.innerHTML = html;
+    }
+    
+    // CHARTS PAGE
+    let chartsInstances = {}; // Store chart instances for cleanup
+    
+    async function loadChartsData() {
+      if (!accessToken) {
+        alert('Please sign in to view charts');
+        return;
+      }
+      
+      try {
+        // Calculate 12-month date range
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setMonth(startDate.getMonth() - 12);
+        
+        // Generate monthly data for the past 12 months
+        const months = [];
+        const currentDate = new Date(startDate);
+        
+        while (currentDate <= endDate) {
+          months.push({
+            label: currentDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+            year: currentDate.getFullYear(),
+            month: currentDate.getMonth()
+          });
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        }
+        
+        // Fetch data for each month
+        const monthlyData = await Promise.all(months.map(async (m) => {
+          const monthStart = `${m.year}-${String(m.month + 1).padStart(2, '0')}-01`;
+          const monthEnd = new Date(m.year, m.month + 1, 0);
+          const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
+          
+          try {
+            const overallData = await loadYTDData(monthStart, monthEndStr, true);
+            const brandData = await loadBrandProductData(monthStart, monthEndStr, 'all');
+            return { ...m, data: overallData, brands: brandData };
+          } catch (e) {
+            console.error('Error loading month', m.label, e);
+            return { ...m, data: null, brands: [] };
+          }
+        }));
+        
+        // Render all charts
+        renderCharts(monthlyData);
+        
+      } catch (error) {
+        console.error('Error loading charts data:', error);
+        alert('Error loading chart data. Please try again.');
+      }
+    }
+    
+    function renderCharts(monthlyData) {
+      const labels = monthlyData.map(m => m.label);
+      
+      // Destroy existing charts
+      Object.values(chartsInstances).forEach(chart => chart.destroy());
+      chartsInstances = {};
+      
+      // Overall Revenue Trend
+      const revenueData = monthlyData.map(m => m.data ? (m.data.fbmIncome + m.data.fbaIncome) : 0);
+      chartsInstances.revenue = new Chart(document.getElementById('revenueChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Revenue',
+            data: revenueData,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Overall Profitability Trend
+      const profitData = monthlyData.map(m => m.data ? (m.data.fbmProfit + m.data.fbaProfit) : 0);
+      chartsInstances.profit = new Chart(document.getElementById('profitChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Profit',
+            data: profitData,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Revenue by Channel
+      const fbmRevenueData = monthlyData.map(m => m.data ? m.data.fbmIncome : 0);
+      const fbaRevenueData = monthlyData.map(m => m.data ? m.data.fbaIncome : 0);
+      chartsInstances.revenueChannel = new Chart(document.getElementById('revenueChannelChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'FBM',
+              data: fbmRevenueData,
+              borderColor: '#60a5fa',
+              backgroundColor: 'rgba(96, 165, 250, 0.1)',
+              tension: 0.4
+            },
+            {
+              label: 'FBA',
+              data: fbaRevenueData,
+              borderColor: '#f97316',
+              backgroundColor: 'rgba(249, 115, 22, 0.1)',
+              tension: 0.4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Profit by Channel
+      const fbmProfitData = monthlyData.map(m => m.data ? m.data.fbmProfit : 0);
+      const fbaProfitData = monthlyData.map(m => m.data ? m.data.fbaProfit : 0);
+      chartsInstances.profitChannel = new Chart(document.getElementById('profitChannelChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'FBM',
+              data: fbmProfitData,
+              borderColor: '#60a5fa',
+              backgroundColor: 'rgba(96, 165, 250, 0.1)',
+              tension: 0.4
+            },
+            {
+              label: 'FBA',
+              data: fbaProfitData,
+              borderColor: '#f97316',
+              backgroundColor: 'rgba(249, 115, 22, 0.1)',
+              tension: 0.4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Revenue by Brand
+      const targetBrands = ['BrightWay Educational', 'Hubbard Scientific', 'South of Kings', 'MapShop State Maps'];
+      const brandColors = ['#10b981', '#3b82f6', '#f59e0b', '#ec4899'];
+      
+      const brandRevenueDatasets = targetBrands.map((brandName, idx) => ({
+        label: brandName,
+        data: monthlyData.map(m => {
+          const brand = m.brands?.find(b => b.brandName === brandName);
+          return brand ? brand.total.income : 0;
+        }),
+        borderColor: brandColors[idx],
+        tension: 0.4
+      }));
+      
+      chartsInstances.revenueBrand = new Chart(document.getElementById('revenueBrandChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: brandRevenueDatasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Profit by Brand
+      const brandProfitDatasets = targetBrands.map((brandName, idx) => ({
+        label: brandName,
+        data: monthlyData.map(m => {
+          const brand = m.brands?.find(b => b.brandName === brandName);
+          return brand ? brand.total.profit : 0;
+        }),
+        borderColor: brandColors[idx],
+        tension: 0.4
+      }));
+      
+      chartsInstances.profitBrand = new Chart(document.getElementById('profitBrandChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: brandProfitDatasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      console.log('Charts rendered successfully');
     }
   </script>
 </body>
