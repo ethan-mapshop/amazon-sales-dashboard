@@ -4246,16 +4246,8 @@
               return sum;
             }, 0);
             
-            // Ad spend (using product campaign mappings)
-            product.fbm.adSpend = productAds.reduce((sum, ad) => {
-              const mappedSkus = productCampaignToSkus[ad.campaign] || [];
-              if (mappedSkus.some(sku => fbmSkus.includes(sku))) {
-                return sum + ad.spend;
-              }
-              return sum;
-            }, 0);
             
-            // Profit & margin
+            // Profit & margin (will recalculate after ad spend is allocated)
             product.fbm.profit = product.fbm.income - product.fbm.opex - product.fbm.productCosts - product.fbm.adSpend;
             product.fbm.margin = product.fbm.income > 0 ? (product.fbm.profit / product.fbm.income) * 100 : 0;
           }
@@ -4307,19 +4299,52 @@
               return sum;
             }, 0);
             
-            // Ad spend (using product campaign mappings)
-            product.fba.adSpend = productAds.reduce((sum, ad) => {
-              const mappedSkus = productCampaignToSkus[ad.campaign] || [];
-              if (mappedSkus.some(sku => fbaSkus.includes(sku))) {
-                return sum + ad.spend;
-              }
-              return sum;
-            }, 0);
-            
-            // Profit & margin
+            // Profit & margin (will recalculate after ad spend is allocated)
             product.fba.profit = product.fba.income - product.fba.opex - product.fba.productCosts - product.fba.adSpend;
             product.fba.margin = product.fba.income > 0 ? (product.fba.profit / product.fba.income) * 100 : 0;
           }
+          
+          // Calculate product ad spend AFTER both FBM and FBA income are known
+          // This prevents double-counting when campaigns are mapped to both FBM and FBA SKUs
+          const productAdSpendByChannel = { fbm: 0, fba: 0 };
+          
+          productAds.forEach(ad => {
+            const mappedSkus = productCampaignToSkus[ad.campaign] || [];
+            const hasFbm = mappedSkus.some(sku => fbmSkus.includes(sku));
+            const hasFba = mappedSkus.some(sku => fbaSkus.includes(sku));
+            
+            if (hasFbm && hasFba) {
+              // Campaign mapped to both FBM and FBA SKUs - split proportionally by income
+              const fbmIncome = product.fbm.income || 0;
+              const fbaIncome = product.fba.income || 0;
+              const totalIncome = fbmIncome + fbaIncome;
+              
+              if (totalIncome > 0) {
+                productAdSpendByChannel.fbm += ad.spend * (fbmIncome / totalIncome);
+                productAdSpendByChannel.fba += ad.spend * (fbaIncome / totalIncome);
+              } else {
+                // No income - split 50/50
+                productAdSpendByChannel.fbm += ad.spend * 0.5;
+                productAdSpendByChannel.fba += ad.spend * 0.5;
+              }
+            } else if (hasFbm) {
+              // Only FBM
+              productAdSpendByChannel.fbm += ad.spend;
+            } else if (hasFba) {
+              // Only FBA
+              productAdSpendByChannel.fba += ad.spend;
+            }
+          });
+          
+          product.fbm.adSpend = productAdSpendByChannel.fbm;
+          product.fba.adSpend = productAdSpendByChannel.fba;
+          
+          // Recalculate profit and margin with correct ad spend
+          product.fbm.profit = product.fbm.income - product.fbm.opex - product.fbm.productCosts - product.fbm.adSpend;
+          product.fbm.margin = product.fbm.income > 0 ? (product.fbm.profit / product.fbm.income) * 100 : 0;
+          
+          product.fba.profit = product.fba.income - product.fba.opex - product.fba.productCosts - product.fba.adSpend;
+          product.fba.margin = product.fba.income > 0 ? (product.fba.profit / product.fba.income) * 100 : 0;
           
           // Calculate total metrics
           product.total.income = product.fbm.income + product.fba.income;
