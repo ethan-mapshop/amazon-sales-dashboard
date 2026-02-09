@@ -2959,9 +2959,11 @@
         }
       }
       
-      // Set to current month
+      // Set to last month
       const now = new Date();
-      document.getElementById('monthly-month-select').value = now.getMonth();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      document.getElementById('monthly-month-select').value = lastMonth.getMonth();
+      document.getElementById('monthly-year-select').value = lastMonth.getFullYear();
     }
     
     // YTD preset buttons
@@ -3613,9 +3615,11 @@
         }
       }
       
-      // Set to current month
+      // Set to last month
       const now = new Date();
-      document.getElementById('bp-monthly-month-select').value = now.getMonth();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      document.getElementById('bp-monthly-month-select').value = lastMonth.getMonth();
+      document.getElementById('bp-monthly-year-select').value = lastMonth.getFullYear();
       
       // Initialize brand dropdown
       await initializeBrandDropdown('bp-monthly-brand-select');
