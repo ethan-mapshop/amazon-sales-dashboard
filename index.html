@@ -5240,6 +5240,98 @@
     // CHARTS PAGE
     let chartsInstances = {}; // Store chart instances for cleanup
     
+    // Simplified data fetching for charts (doesn't need a container)
+    async function fetchMonthData(startDate, endDate) {
+      if (!accessToken) return null;
+      
+      try {
+        // This is a simplified version that just fetches and returns data
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+        
+        const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
+          transactionsRes.json(),
+          productsRes.json(),
+          productAdsRes.json(),
+          brandAdsRes.json(),
+          shippingRes.json(),
+          productMappingRes.json(),
+          brandMappingRes.json()
+        ]);
+        
+        // Parse mappings
+        const productCampaignToSkus = {};
+        if (productMappingData.values && productMappingData.values.length > 1) {
+          const headers = productMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const skuIdx = headers.indexOf('sku');
+          
+          for (let i = 1; i < productMappingData.values.length; i++) {
+            const row = productMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const sku = row[skuIdx];
+            
+            if (campaign && sku) {
+              if (!productCampaignToSkus[campaign]) {
+                productCampaignToSkus[campaign] = [];
+              }
+              productCampaignToSkus[campaign].push(sku);
+            }
+          }
+        }
+        
+        const brandCampaignToBrand = {};
+        if (brandMappingData.values && brandMappingData.values.length > 1) {
+          const headers = brandMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const brandIdx = headers.indexOf('brand');
+          
+          for (let i = 1; i < brandMappingData.values.length; i++) {
+            const row = brandMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const brand = row[brandIdx];
+            
+            if (campaign && brand) {
+              brandCampaignToBrand[campaign] = brand;
+            }
+          }
+        }
+        
+        // Get overview metrics
+        const overallData = await loadOverviewData(startDate, endDate, 'charts-loading-container', true);
+        
+        // Get brand data
+        const brandData = await loadBrandProductData(startDate, endDate, 'all');
+        
+        return { data: overallData, brands: brandData };
+        
+      } catch (error) {
+        console.error('Error fetching month data:', error);
+        return null;
+      }
+    }
+    
     async function loadChartsData() {
       if (!accessToken) {
         alert('Please sign in to view charts');
@@ -5272,9 +5364,8 @@
           const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
           
           try {
-            const overallData = await loadOverviewData(monthStart, monthEndStr, 'charts-loading-container', true);
-            const brandData = await loadBrandProductData(monthStart, monthEndStr, 'all');
-            return { ...m, data: overallData, brands: brandData };
+            const result = await fetchMonthData(monthStart, monthEndStr);
+            return { ...m, ...result };
           } catch (e) {
             console.error('Error loading month', m.label, e);
             return { ...m, data: null, brands: [] };
