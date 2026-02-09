@@ -5542,7 +5542,7 @@
       chartsInstances = {};
       
       // Overall Revenue Trend
-      const revenueData = monthlyData.map(m => m.data ? (m.data.fbmIncome + m.data.fbaIncome) : 0);
+      const revenueData = monthlyData.map(m => m.data ? (m.data.fbm.income + m.data.fba.income) : 0);
       chartsInstances.revenue = new Chart(document.getElementById('revenueChart'), {
         type: 'line',
         data: {
@@ -5576,7 +5576,7 @@
       });
       
       // Overall Profitability Trend
-      const profitData = monthlyData.map(m => m.data ? (m.data.fbmProfit + m.data.fbaProfit) : 0);
+      const profitData = monthlyData.map(m => m.data ? (m.data.fbm.profit + m.data.fba.profit) : 0);
       chartsInstances.profit = new Chart(document.getElementById('profitChart'), {
         type: 'line',
         data: {
@@ -5610,8 +5610,8 @@
       });
       
       // Revenue by Channel
-      const fbmRevenueData = monthlyData.map(m => m.data ? m.data.fbmIncome : 0);
-      const fbaRevenueData = monthlyData.map(m => m.data ? m.data.fbaIncome : 0);
+      const fbmRevenueData = monthlyData.map(m => m.data ? m.data.fbm.income : 0);
+      const fbaRevenueData = monthlyData.map(m => m.data ? m.data.fba.income : 0);
       chartsInstances.revenueChannel = new Chart(document.getElementById('revenueChannelChart'), {
         type: 'line',
         data: {
@@ -5650,8 +5650,8 @@
       });
       
       // Profit by Channel
-      const fbmProfitData = monthlyData.map(m => m.data ? m.data.fbmProfit : 0);
-      const fbaProfitData = monthlyData.map(m => m.data ? m.data.fbaProfit : 0);
+      const fbmProfitData = monthlyData.map(m => m.data ? m.data.fbm.profit : 0);
+      const fbaProfitData = monthlyData.map(m => m.data ? m.data.fba.profit : 0);
       chartsInstances.profitChannel = new Chart(document.getElementById('profitChannelChart'), {
         type: 'line',
         data: {
