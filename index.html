@@ -5242,30 +5242,28 @@
       if (!accessToken) return null;
       
       try {
-        // Fetch all data in parallel
-        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          })
-        ]);
+        // Fetch data SEQUENTIALLY to respect rate limits (60 req/min = 1 req/sec)
+        const headers = { 'Authorization': `Bearer ${accessToken}` };
+        
+        const transactionsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, { headers });
+        await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
+        
+        const productsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, { headers });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const productAdsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, { headers });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const brandAdsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, { headers });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const shippingRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, { headers });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const productMappingRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, { headers });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const brandMappingRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, { headers });
         
         if (!transactionsRes.ok) throw new Error('Failed to load transactions');
         
@@ -5538,10 +5536,7 @@
             monthlyData.push({ ...m, data: null, brands: [] });
           }
           
-          // Add delay between requests to avoid rate limiting
-          if (i < months.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
-          }
+          // No delay needed between months since we're already delaying within each month fetch
         }
         
         // Render all charts
