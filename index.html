@@ -3372,6 +3372,8 @@
         let fbaAdSpend = 0;
         let fbmAdSpend = 0;
         let unallocatedAdSpend = 0;
+        const unallocatedProductCampaigns = {}; // Track which campaigns are unallocated
+        const unallocatedBrandCampaigns = {}; // Track which campaigns are unallocated
         
         if (productAdsRes.ok) {
           const productAdsData = await productAdsRes.json();
@@ -3394,6 +3396,10 @@
                 if (campaignSkus.length === 0) {
                   // No mapping - unallocated
                   unallocatedAdSpend += spend;
+                  if (!unallocatedProductCampaigns[campaign || '(blank)']) {
+                    unallocatedProductCampaigns[campaign || '(blank)'] = 0;
+                  }
+                  unallocatedProductCampaigns[campaign || '(blank)'] += spend;
                 } else {
                   // Calculate FBA/FBM split based on sales
                   let totalFba = 0;
@@ -3411,6 +3417,10 @@
                   if (totalSales === 0) {
                     // Campaign has mapping but no sales - unallocated
                     unallocatedAdSpend += spend;
+                    if (!unallocatedProductCampaigns[campaign || '(blank)']) {
+                      unallocatedProductCampaigns[campaign || '(blank)'] = 0;
+                    }
+                    unallocatedProductCampaigns[campaign || '(blank)'] += spend;
                   } else {
                     // Allocate proportionally
                     const fbaPercent = totalFba / totalSales;
@@ -3446,6 +3456,10 @@
                 if (!brand) {
                   // No mapping - unallocated
                   unallocatedAdSpend += spend;
+                  if (!unallocatedBrandCampaigns[campaign || '(blank)']) {
+                    unallocatedBrandCampaigns[campaign || '(blank)'] = 0;
+                  }
+                  unallocatedBrandCampaigns[campaign || '(blank)'] += spend;
                 } else {
                   // Get all SKUs for this brand
                   const brandSkus = brandToSkus[brand] || [];
@@ -3453,6 +3467,10 @@
                   if (brandSkus.length === 0) {
                     // Brand has no SKUs - unallocated
                     unallocatedAdSpend += spend;
+                    if (!unallocatedBrandCampaigns[campaign || '(blank)']) {
+                      unallocatedBrandCampaigns[campaign || '(blank)'] = 0;
+                    }
+                    unallocatedBrandCampaigns[campaign || '(blank)'] += spend;
                   } else {
                     // Calculate FBA/FBM split based on sales across all brand SKUs
                     let totalFba = 0;
@@ -3470,6 +3488,10 @@
                     if (totalSales === 0) {
                       // Brand has SKUs but no sales - unallocated
                       unallocatedAdSpend += spend;
+                      if (!unallocatedBrandCampaigns[campaign || '(blank)']) {
+                        unallocatedBrandCampaigns[campaign || '(blank)'] = 0;
+                      }
+                      unallocatedBrandCampaigns[campaign || '(blank)'] += spend;
                     } else {
                       // Allocate proportionally
                       const fbaPercent = totalFba / totalSales;
@@ -3491,6 +3513,35 @@
           Unallocated: unallocatedAdSpend.toFixed(2),
           Total: (fbaAdSpend + fbmAdSpend + unallocatedAdSpend).toFixed(2)
         });
+        
+        // Log detailed breakdown of unallocated campaigns
+        if (unallocatedAdSpend > 0) {
+          console.log('\n=== UNALLOCATED AD SPEND BREAKDOWN ===');
+          
+          const productCampaignCount = Object.keys(unallocatedProductCampaigns).length;
+          const brandCampaignCount = Object.keys(unallocatedBrandCampaigns).length;
+          
+          if (productCampaignCount > 0) {
+            console.log('\nProduct Campaigns (no mapping or no sales):');
+            Object.entries(unallocatedProductCampaigns)
+              .sort((a, b) => b[1] - a[1]) // Sort by spend descending
+              .forEach(([campaign, spend]) => {
+                console.log(`  - ${campaign}: $${spend.toFixed(2)}`);
+              });
+          }
+          
+          if (brandCampaignCount > 0) {
+            console.log('\nBrand Campaigns (no mapping or no sales):');
+            Object.entries(unallocatedBrandCampaigns)
+              .sort((a, b) => b[1] - a[1]) // Sort by spend descending
+              .forEach(([campaign, spend]) => {
+                console.log(`  - ${campaign}: $${spend.toFixed(2)}`);
+              });
+          }
+          
+          console.log(`\nTotal Unallocated: $${unallocatedAdSpend.toFixed(2)}`);
+          console.log('=====================================\n');
+        }
         
         // Parse shipping costs data
         let totalShippingCosts = 0;
