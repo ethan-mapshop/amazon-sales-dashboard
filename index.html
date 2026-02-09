@@ -1002,7 +1002,12 @@
         <p class="subtitle">Data Management & Campaign Mapping</p>
       </div>
       <div style="display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-end;">
-        <!-- Row 1: Sign in + Main navigation -->
+        <!-- Row 1: Secondary navigation -->
+        <div class="nav-buttons">
+          <button class="nav-btn" onclick="showPage('mapping')">Campaign Mapping</button>
+          <button class="nav-btn" onclick="showPage('upload')">Data Upload</button>
+        </div>
+        <!-- Row 2: Sign in + Main navigation -->
         <div style="display: flex; gap: 1rem; align-items: center;">
           <div id="authSection">
             <div class="auth-section" style="padding: 0.5rem;">
@@ -1017,11 +1022,6 @@
             <button class="nav-btn" onclick="showPage('brandproduct')">Brand & Product</button>
             <button class="nav-btn" onclick="showPage('charts')">Charts</button>
           </div>
-        </div>
-        <!-- Row 2: Secondary navigation -->
-        <div class="nav-buttons">
-          <button class="nav-btn" onclick="showPage('mapping')">Campaign Mapping</button>
-          <button class="nav-btn" onclick="showPage('upload')">Data Upload</button>
         </div>
       </div>
     </header>
@@ -1619,11 +1619,17 @@
       }
       
       if (pageName === 'overview') {
-        showYTD(); // Default to YTD view
+        showMonthly(); // Default to Monthly view
+        if (accessToken) {
+          generateMonthlyReport(); // Auto-load last month's data
+        }
       }
       
       if (pageName === 'brandproduct') {
-        showBPYTD(); // Default to YTD view and initialize dropdowns
+        showBPMonthly(); // Default to Monthly view
+        if (accessToken) {
+          generateBPMonthlyReport(); // Auto-load last month's data
+        }
       }
       
       if (pageName === 'charts' && accessToken) {
@@ -1748,12 +1754,12 @@
     // Try to initialize on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', () => {
       initializeGoogleAuth();
-      // Initialize Overview YTD since it's the default page
-      showYTD();
-      // Auto-load YTD data if signed in (small delay to ensure accessToken is set)
+      // Initialize Overview Monthly since it's the default page and view
+      showMonthly();
+      // Auto-load Monthly data if signed in (small delay to ensure accessToken is set)
       setTimeout(() => {
         if (accessToken) {
-          generateYTDReport();
+          generateMonthlyReport();
         }
       }, 100);
     });
