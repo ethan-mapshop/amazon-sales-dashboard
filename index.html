@@ -5237,87 +5237,9 @@
     // CHARTS PAGE
     let chartsInstances = {}; // Store chart instances for cleanup
     
-    // Standalone data fetching for charts - completely independent from other pages
-    async function fetchChartMonthData(startDate, endDate) {
-      if (!accessToken) return null;
-      
+    // Process cached data for a specific month (no API calls)
+    function processMonthData(startDate, endDate, transactions, products, productAds, brandAds, shippingCosts, productCampaignToSkus, brandCampaignToBrand) {
       try {
-        // Fetch data SEQUENTIALLY to respect rate limits (60 req/min = 1 req/sec)
-        const headers = { 'Authorization': `Bearer ${accessToken}` };
-        
-        const transactionsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, { headers });
-        await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
-        
-        const productsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, { headers });
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        const productAdsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, { headers });
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        const brandAdsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, { headers });
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        const shippingRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, { headers });
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        const productMappingRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, { headers });
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        const brandMappingRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, { headers });
-        
-        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
-        
-        const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
-          transactionsRes.json(),
-          productsRes.json(),
-          productAdsRes.json(),
-          brandAdsRes.json(),
-          shippingRes.json(),
-          productMappingRes.json(),
-          brandMappingRes.json()
-        ]);
-        
-        // Parse transactions
-        const transactions = parseTransactions(transactionsData);
-        const products = parseProducts(productsData);
-        const productAds = parseProductAds(productAdsData);
-        const brandAds = parseBrandAds(brandAdsData);
-        const shippingCosts = parseShippingCosts(shippingData);
-        
-        // Parse mappings
-        const productCampaignToSkus = {};
-        if (productMappingData.values && productMappingData.values.length > 1) {
-          const headers = productMappingData.values[0].map(h => h.toLowerCase());
-          const campaignIdx = headers.indexOf('campaign name');
-          const skuIdx = headers.indexOf('sku');
-          
-          for (let i = 1; i < productMappingData.values.length; i++) {
-            const row = productMappingData.values[i];
-            const campaign = row[campaignIdx];
-            const sku = row[skuIdx];
-            if (campaign && sku) {
-              if (!productCampaignToSkus[campaign]) productCampaignToSkus[campaign] = [];
-              productCampaignToSkus[campaign].push(sku);
-            }
-          }
-        }
-        
-        const brandCampaignToBrand = {};
-        if (brandMappingData.values && brandMappingData.values.length > 1) {
-          const headers = brandMappingData.values[0].map(h => h.toLowerCase());
-          const campaignIdx = headers.indexOf('campaign name');
-          const brandIdx = headers.indexOf('brand');
-          
-          for (let i = 1; i < brandMappingData.values.length; i++) {
-            const row = brandMappingData.values[i];
-            const campaign = row[campaignIdx];
-            const brand = row[brandIdx];
-            if (campaign && brand) {
-              brandCampaignToBrand[campaign] = brand;
-            }
-          }
-        }
-        
         // Filter by date
         const filteredTransactions = transactions.filter(t => t.date >= startDate && t.date <= endDate);
         const filteredProductAds = productAds.filter(a => a.date >= startDate && a.date <= endDate);
@@ -5465,8 +5387,14 @@
         };
         
       } catch (error) {
-        console.error('Error fetching chart month data:', error);
-        return null;
+        console.error('Error processing month data:', error);
+        return {
+          data: {
+            fbm: { income: 0, profit: 0 },
+            fba: { income: 0, profit: 0 }
+          },
+          brands: []
+        };
       }
     }
     
@@ -5498,7 +5426,76 @@
         
         console.log('Loading charts for months:', months.map(m => m.label).join(', '));
         
-        // Fetch data for each month SEQUENTIALLY to avoid rate limiting
+        // CACHE: Fetch all sheets ONCE at the beginning
+        console.log('Fetching all sheet data (one-time load)...');
+        const headers = { 'Authorization': `Bearer ${accessToken}` };
+        
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, { headers })
+        ]);
+        
+        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+        
+        const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
+          transactionsRes.json(),
+          productsRes.json(),
+          productAdsRes.json(),
+          brandAdsRes.json(),
+          shippingRes.json(),
+          productMappingRes.json(),
+          brandMappingRes.json()
+        ]);
+        
+        console.log('All sheets loaded, processing 12 months...');
+        
+        // Parse once
+        const allTransactions = parseTransactions(transactionsData);
+        const products = parseProducts(productsData);
+        const productAds = parseProductAds(productAdsData);
+        const brandAds = parseBrandAds(brandAdsData);
+        const shippingCosts = parseShippingCosts(shippingData);
+        
+        // Parse mappings once
+        const productCampaignToSkus = {};
+        if (productMappingData.values && productMappingData.values.length > 1) {
+          const headers = productMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const skuIdx = headers.indexOf('sku');
+          
+          for (let i = 1; i < productMappingData.values.length; i++) {
+            const row = productMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const sku = row[skuIdx];
+            if (campaign && sku) {
+              if (!productCampaignToSkus[campaign]) productCampaignToSkus[campaign] = [];
+              productCampaignToSkus[campaign].push(sku);
+            }
+          }
+        }
+        
+        const brandCampaignToBrand = {};
+        if (brandMappingData.values && brandMappingData.values.length > 1) {
+          const headers = brandMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const brandIdx = headers.indexOf('brand');
+          
+          for (let i = 1; i < brandMappingData.values.length; i++) {
+            const row = brandMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const brand = row[brandIdx];
+            if (campaign && brand) {
+              brandCampaignToBrand[campaign] = brand;
+            }
+          }
+        }
+        
+        // Process each month using the cached data
         const monthlyData = [];
         for (let i = 0; i < months.length; i++) {
           const m = months[i];
@@ -5506,37 +5503,21 @@
           const monthEnd = new Date(m.year, m.month + 1, 0);
           const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
           
-          console.log(`Loading ${m.label} (${i + 1}/${months.length})...`);
+          console.log(`Processing ${m.label} (${i + 1}/${months.length})...`);
           
-          let retries = 0;
-          let result = null;
-          let success = false;
+          const result = processMonthData(
+            monthStart, 
+            monthEndStr, 
+            allTransactions, 
+            products, 
+            productAds, 
+            brandAds, 
+            shippingCosts,
+            productCampaignToSkus,
+            brandCampaignToBrand
+          );
           
-          while (retries < 3 && !success) {
-            try {
-              result = await fetchChartMonthData(monthStart, monthEndStr);
-              success = true; // Mark as successful
-            } catch (e) {
-              if (e.message.includes('429') || e.message.includes('Too Many Requests')) {
-                retries++;
-                console.warn(`Rate limited on ${m.label}, retry ${retries}/3 after 2s delay...`);
-                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
-              } else {
-                console.error('Error loading month', m.label, e);
-                break;
-              }
-            }
-          }
-          
-          // Push the result once, after all retries
-          if (success && result) {
-            monthlyData.push({ ...m, ...result });
-          } else {
-            console.error(`Failed to load ${m.label}`);
-            monthlyData.push({ ...m, data: null, brands: [] });
-          }
-          
-          // No delay needed between months since we're already delaying within each month fetch
+          monthlyData.push({ ...m, ...result });
         }
         
         // Render all charts
