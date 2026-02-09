@@ -5512,11 +5512,12 @@
           
           let retries = 0;
           let result = null;
+          let success = false;
           
-          while (retries < 3 && !result) {
+          while (retries < 3 && !success) {
             try {
               result = await fetchChartMonthData(monthStart, monthEndStr);
-              monthlyData.push({ ...m, ...result });
+              success = true; // Mark as successful
             } catch (e) {
               if (e.message.includes('429') || e.message.includes('Too Many Requests')) {
                 retries++;
@@ -5524,14 +5525,16 @@
                 await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
               } else {
                 console.error('Error loading month', m.label, e);
-                monthlyData.push({ ...m, data: null, brands: [] });
                 break;
               }
             }
           }
           
-          if (retries >= 3 && !result) {
-            console.error(`Failed to load ${m.label} after 3 retries`);
+          // Push the result once, after all retries
+          if (success && result) {
+            monthlyData.push({ ...m, ...result });
+          } else {
+            console.error(`Failed to load ${m.label}`);
             monthlyData.push({ ...m, data: null, brands: [] });
           }
           
