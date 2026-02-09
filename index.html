@@ -1350,6 +1350,9 @@
         <h2 class="section-title">Performance Charts</h2>
         <p style="color: var(--text-secondary); margin-bottom: 2rem;">12-month rolling trends</p>
         
+        <!-- Hidden loading container for data fetching -->
+        <div id="charts-loading-container" style="display: none;"></div>
+        
         <!-- Overall Charts -->
         <div style="margin-bottom: 3rem;">
           <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">Overall Performance</h3>
@@ -5269,7 +5272,7 @@
           const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
           
           try {
-            const overallData = await loadOverviewData(monthStart, monthEndStr, 'charts-page', true);
+            const overallData = await loadOverviewData(monthStart, monthEndStr, 'charts-loading-container', true);
             const brandData = await loadBrandProductData(monthStart, monthEndStr, 'all');
             return { ...m, data: overallData, brands: brandData };
           } catch (e) {
