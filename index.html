@@ -5237,19 +5237,234 @@
     // CHARTS PAGE
     let chartsInstances = {}; // Store chart instances for cleanup
     
-    // Simplified data fetching for charts (doesn't use existing functions to avoid conflicts)
-    async function fetchMonthData(startDate, endDate) {
+    // Standalone data fetching for charts - completely independent from other pages
+    async function fetchChartMonthData(startDate, endDate) {
       if (!accessToken) return null;
       
-      // For now, return dummy data since the full implementation is complex
-      // You can decide if you want to keep charts or remove them
-      return {
-        data: {
-          fbm: { income: 0, profit: 0 },
-          fba: { income: 0, profit: 0 }
-        },
-        brands: []
-      };
+      try {
+        // Fetch all data in parallel
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+        
+        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+        
+        const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
+          transactionsRes.json(),
+          productsRes.json(),
+          productAdsRes.json(),
+          brandAdsRes.json(),
+          shippingRes.json(),
+          productMappingRes.json(),
+          brandMappingRes.json()
+        ]);
+        
+        // Parse transactions
+        const transactions = parseTransactions(transactionsData);
+        const products = parseProducts(productsData);
+        const productAds = parseProductAds(productAdsData);
+        const brandAds = parseBrandAds(brandAdsData);
+        const shippingCosts = parseShippingCosts(shippingData);
+        
+        // Parse mappings
+        const productCampaignToSkus = {};
+        if (productMappingData.values && productMappingData.values.length > 1) {
+          const headers = productMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const skuIdx = headers.indexOf('sku');
+          
+          for (let i = 1; i < productMappingData.values.length; i++) {
+            const row = productMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const sku = row[skuIdx];
+            if (campaign && sku) {
+              if (!productCampaignToSkus[campaign]) productCampaignToSkus[campaign] = [];
+              productCampaignToSkus[campaign].push(sku);
+            }
+          }
+        }
+        
+        const brandCampaignToBrand = {};
+        if (brandMappingData.values && brandMappingData.values.length > 1) {
+          const headers = brandMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const brandIdx = headers.indexOf('brand');
+          
+          for (let i = 1; i < brandMappingData.values.length; i++) {
+            const row = brandMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const brand = row[brandIdx];
+            if (campaign && brand) {
+              brandCampaignToBrand[campaign] = brand;
+            }
+          }
+        }
+        
+        // Filter by date
+        const filteredTransactions = transactions.filter(t => t.date >= startDate && t.date <= endDate);
+        const filteredProductAds = productAds.filter(a => a.date >= startDate && a.date <= endDate);
+        const filteredBrandAds = brandAds.filter(a => a.date >= startDate && a.date <= endDate);
+        const filteredShipping = shippingCosts.filter(s => s.date >= startDate && s.date <= endDate);
+        
+        // Calculate overall FBM/FBA metrics
+        let fbmIncome = 0, fbmOpEx = 0, fbmProductCosts = 0, fbmAdSpend = 0;
+        let fbaIncome = 0, fbaOpEx = 0, fbaProductCosts = 0, fbaAdSpend = 0;
+        
+        // Group by SKU for cost lookup
+        const productCostMap = {};
+        products.forEach(p => {
+          productCostMap[p.sku] = p.cost;
+        });
+        
+        // Process transactions
+        filteredTransactions.forEach(t => {
+          const isFBM = t.fulfillment === 'Seller';
+          const isFBA = t.fulfillment === 'Amazon';
+          
+          if (t.type === 'Order' || t.type === 'Refund') {
+            const income = (t['product sales'] || 0) + (t['shipping credits'] || 0) + (t['gift wrap credits'] || 0) + (t['promotional rebates'] || 0);
+            const fees = Math.abs(t['selling fees'] || 0) + Math.abs(t['fba fees'] || 0);
+            const cost = (productCostMap[t.sku] || 0) * Math.abs(t.quantity || 1);
+            
+            if (isFBM && t.type === 'Order') {
+              fbmIncome += income;
+              fbmOpEx += fees;
+              fbmProductCosts += cost;
+            } else if (isFBA && t.type === 'Order') {
+              fbaIncome += income;
+              fbaOpEx += fees;
+              fbaProductCosts += cost;
+            } else if (isFBM && t.type === 'Refund') {
+              fbmIncome += income; // Refunds are negative
+              fbmOpEx += fees;
+            } else if (isFBA && t.type === 'Refund') {
+              fbaIncome += income; // Refunds are negative
+              fbaOpEx += fees;
+            }
+          }
+        });
+        
+        // Add shipping costs to FBM OpEx
+        fbmOpEx += filteredShipping.reduce((sum, s) => sum + s.cost, 0);
+        
+        // Calculate ad spend (simplified - allocate product ads by SKU sales, brand ads proportionally)
+        const skuSales = {};
+        filteredTransactions.forEach(t => {
+          if (t.type === 'Order' && t.sku) {
+            if (!skuSales[t.sku]) skuSales[t.sku] = { fbm: 0, fba: 0 };
+            const sales = t['product sales'] || 0;
+            if (t.fulfillment === 'Seller') skuSales[t.sku].fbm += sales;
+            if (t.fulfillment === 'Amazon') skuSales[t.sku].fba += sales;
+          }
+        });
+        
+        // Allocate product ad spend
+        filteredProductAds.forEach(ad => {
+          const skus = productCampaignToSkus[ad.campaign] || [];
+          let totalFbm = 0, totalFba = 0;
+          skus.forEach(sku => {
+            if (skuSales[sku]) {
+              totalFbm += skuSales[sku].fbm;
+              totalFba += skuSales[sku].fba;
+            }
+          });
+          const total = totalFbm + totalFba;
+          if (total > 0) {
+            fbmAdSpend += ad.spend * (totalFbm / total);
+            fbaAdSpend += ad.spend * (totalFba / total);
+          }
+        });
+        
+        // Allocate brand ad spend proportionally
+        const totalIncome = fbmIncome + fbaIncome;
+        if (totalIncome > 0) {
+          const brandAdTotal = filteredBrandAds.reduce((sum, ad) => sum + ad.spend, 0);
+          fbmAdSpend += brandAdTotal * (fbmIncome / totalIncome);
+          fbaAdSpend += brandAdTotal * (fbaIncome / totalIncome);
+        }
+        
+        // Calculate profits
+        const fbmProfit = fbmIncome - fbmOpEx - fbmProductCosts - fbmAdSpend;
+        const fbaProfit = fbaIncome - fbaOpEx - fbaProductCosts - fbaAdSpend;
+        
+        // Calculate brand-level data
+        const brandData = {};
+        const targetBrands = ['BrightWay Educational', 'Hubbard Scientific', 'South of Kings', 'MapShop State Maps'];
+        
+        targetBrands.forEach(brandName => {
+          const brandProducts = products.filter(p => p.brand === brandName);
+          const brandSkus = brandProducts.map(p => p.sku);
+          
+          let income = 0, opex = 0, costs = 0, adSpend = 0;
+          
+          filteredTransactions.forEach(t => {
+            if (brandSkus.includes(t.sku) && (t.type === 'Order' || t.type === 'Refund')) {
+              income += (t['product sales'] || 0) + (t['shipping credits'] || 0) + (t['gift wrap credits'] || 0) + (t['promotional rebates'] || 0);
+              opex += Math.abs(t['selling fees'] || 0) + Math.abs(t['fba fees'] || 0);
+              costs += (productCostMap[t.sku] || 0) * Math.abs(t.quantity || 1);
+            }
+          });
+          
+          // Add brand's share of shipping
+          const brandFbmSkus = brandProducts.filter(p => p.fulfillmentType === 'FBM').map(p => p.sku);
+          opex += filteredShipping.filter(s => brandFbmSkus.includes(s.sku)).reduce((sum, s) => sum + s.cost, 0);
+          
+          // Allocate ad spend for this brand
+          filteredProductAds.forEach(ad => {
+            const skus = productCampaignToSkus[ad.campaign] || [];
+            const overlap = skus.filter(s => brandSkus.includes(s));
+            if (overlap.length > 0) {
+              adSpend += ad.spend * (overlap.length / skus.length); // Simple split
+            }
+          });
+          
+          filteredBrandAds.forEach(ad => {
+            if (brandCampaignToBrand[ad.campaign] === brandName) {
+              adSpend += ad.spend;
+            }
+          });
+          
+          brandData[brandName] = {
+            income,
+            profit: income - opex - costs - adSpend
+          };
+        });
+        
+        return {
+          data: {
+            fbm: { income: fbmIncome, profit: fbmProfit },
+            fba: { income: fbaIncome, profit: fbaProfit }
+          },
+          brands: targetBrands.map(name => ({
+            brandName: name,
+            total: brandData[name]
+          }))
+        };
+        
+      } catch (error) {
+        console.error('Error fetching chart month data:', error);
+        return null;
+      }
     }
     
     async function loadChartsData() {
@@ -5284,7 +5499,7 @@
           const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
           
           try {
-            const result = await fetchMonthData(monthStart, monthEndStr);
+            const result = await fetchChartMonthData(monthStart, monthEndStr);
             return { ...m, ...result };
           } catch (e) {
             console.error('Error loading month', m.label, e);
