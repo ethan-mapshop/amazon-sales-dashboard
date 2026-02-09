@@ -5269,7 +5269,7 @@
           const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
           
           try {
-            const overallData = await loadYTDData(monthStart, monthEndStr, true);
+            const overallData = await loadOverviewData(monthStart, monthEndStr, 'charts-page', true);
             const brandData = await loadBrandProductData(monthStart, monthEndStr, 'all');
             return { ...m, data: overallData, brands: brandData };
           } catch (e) {
