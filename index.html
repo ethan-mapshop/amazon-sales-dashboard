@@ -2857,7 +2857,7 @@
         }
       });
       
-      // Always write back at least the headers
+      
       const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping?valueInputOption=RAW`;
       await fetch(updateUrl, {
         method: 'PUT',
