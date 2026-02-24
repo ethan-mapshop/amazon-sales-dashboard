@@ -6021,7 +6021,7 @@
         products.forEach(p => {
           skuMap[p.sku] = {
             brand: p.brand,
-            productName: p.productName
+            productName: p.name  // parseProducts returns "name" not "productName"
           };
         });
         
@@ -6116,7 +6116,7 @@
         products.forEach(p => {
           skuToInfo[p.sku] = {
             brand: p.brand,
-            productName: p.productName
+            productName: p.name  // parseProducts returns "name" not "productName"
           };
         });
         
