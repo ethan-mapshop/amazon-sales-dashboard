@@ -5993,72 +5993,77 @@
       }
       
       try {
-        // Load products and price changes to populate filter dropdowns
-        const [productsRes, priceChangesRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/PriceChanges`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          })
-        ]);
+        // Fetch all required data
+        const productsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
         
-        if (productsRes.ok && priceChangesRes.ok) {
-          const productsData = await productsRes.json();
-          const priceChangesData = await priceChangesRes.json();
-          
-          const products = parseProducts(productsData);
-          const priceChanges = parsePriceChanges(priceChangesData);
-          
-          // Build SKU to product info lookup
-          const skuToInfo = {};
-          products.forEach(p => {
-            skuToInfo[p.sku] = {
-              brand: p.brand,
-              productName: p.productName
-            };
-          });
-          
-          // Get unique brands that have price changes
-          const brandsWithChanges = [...new Set(
-            priceChanges
-              .map(pc => skuToInfo[pc.sku]?.brand)
-              .filter(brand => brand) // Filter out undefined/null
-          )].sort();
-          
-          // Populate brand filter
-          const brandSelect = document.getElementById('price-filter-brand');
-          brandSelect.innerHTML = '<option value="all">All Brands</option>';
-          
-          brandsWithChanges.forEach(brand => {
-            const option = document.createElement('option');
-            option.value = brand;
-            option.text = brand;
-            brandSelect.appendChild(option);
-          });
-          
-          // Get unique products that have price changes
-          const productsWithChanges = [...new Set(
-            priceChanges
-              .map(pc => skuToInfo[pc.sku]?.productName)
-              .filter(name => name) // Filter out undefined/null
-          )].sort();
-          
-          console.log('Products with price changes:', productsWithChanges);
-          
-          // Populate product filter
-          const productSelect = document.getElementById('price-filter-product');
-          productSelect.innerHTML = '<option value="all">All Products</option>';
-          
-          productsWithChanges.forEach(productName => {
-            const option = document.createElement('option');
-            option.value = productName;
-            option.text = productName;
-            productSelect.appendChild(option);
-          });
+        const priceChangesRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/PriceChanges`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!productsRes.ok || !priceChangesRes.ok) {
+          console.error('Failed to fetch data');
+          return;
         }
         
-        // Load price analysis
+        const productsData = await productsRes.json();
+        const priceChangesData = await priceChangesRes.json();
+        
+        // Parse products
+        const products = parseProducts(productsData);
+        
+        // Parse price changes
+        const priceChanges = parsePriceChanges(priceChangesData);
+        
+        // Create lookup map
+        const skuMap = {};
+        products.forEach(p => {
+          skuMap[p.sku] = {
+            brand: p.brand,
+            productName: p.productName
+          };
+        });
+        
+        // Get unique brands
+        const brands = new Set();
+        priceChanges.forEach(pc => {
+          const info = skuMap[pc.sku];
+          if (info && info.brand) {
+            brands.add(info.brand);
+          }
+        });
+        
+        // Get unique products
+        const productNames = new Set();
+        priceChanges.forEach(pc => {
+          const info = skuMap[pc.sku];
+          if (info && info.productName) {
+            productNames.add(info.productName);
+          }
+        });
+        
+        // Populate brand dropdown
+        const brandSelect = document.getElementById('price-filter-brand');
+        brandSelect.innerHTML = '<option value="all">All Brands</option>';
+        Array.from(brands).sort().forEach(brand => {
+          const option = document.createElement('option');
+          option.value = brand;
+          option.textContent = brand;
+          brandSelect.appendChild(option);
+        });
+        
+        // Populate product dropdown
+        const productSelect = document.getElementById('price-filter-product');
+        productSelect.innerHTML = '<option value="all">All Products</option>';
+        Array.from(productNames).sort().forEach(productName => {
+          const option = document.createElement('option');
+          option.value = productName;
+          option.textContent = productName;
+          productSelect.appendChild(option);
+        });
+        
+        // Load the analysis
         await loadPriceAnalysis();
         
       } catch (error) {
