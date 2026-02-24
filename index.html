@@ -1004,7 +1004,7 @@
       <div style="display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-end;">
         <!-- Row 1: Secondary navigation -->
         <div class="nav-buttons">
-          <button class="nav-btn" onclick="showPage('priceanalysis')">Price Analysis</button>
+          <button class="nav-btn" onclick="showPage('priceanalysis')">Price Changes</button>
           <button class="nav-btn" onclick="showPage('mapping')">Campaign Mapping</button>
           <button class="nav-btn" onclick="showPage('upload')">Data Upload</button>
         </div>
@@ -6160,51 +6160,64 @@
           <table class="data-table" style="width: 100%; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">
             <thead>
               <tr>
-                <th style="text-align: left; padding: 0.75rem; white-space: nowrap;">Date</th>
-                <th style="text-align: left; padding: 0.75rem;">Product</th>
-                <th style="text-align: right; padding: 0.75rem; white-space: nowrap;">Old Price</th>
-                <th style="text-align: right; padding: 0.75rem; white-space: nowrap;">New Price</th>
-                <th style="text-align: right; padding: 0.75rem; white-space: nowrap;">Change %</th>
-                <th colspan="4" style="text-align: center; padding: 0.75rem; border-left: 2px solid var(--border);">Before (${windowDays}d)</th>
-                <th colspan="4" style="text-align: center; padding: 0.75rem; border-left: 2px solid var(--border);">After (${windowDays}d)</th>
-                <th style="text-align: center; padding: 0.75rem; border-left: 2px solid var(--border);">Impact</th>
+                <th colspan="5" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">Price Change Log</th>
+                <th colspan="4" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">Before (${windowDays}d)</th>
+                <th colspan="4" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">After (${windowDays}d)</th>
+                <th colspan="3" style="text-align: center; padding: 0.75rem;">Impact</th>
               </tr>
               <tr style="background: var(--bg-secondary);">
-                <th colspan="5"></th>
-                <th style="text-align: right; padding: 0.5rem; border-left: 2px solid var(--border);">Revenue</th>
-                <th style="text-align: right; padding: 0.5rem;">Units</th>
-                <th style="text-align: right; padding: 0.5rem;">Margin</th>
-                <th style="text-align: right; padding: 0.5rem;">Profit</th>
-                <th style="text-align: right; padding: 0.5rem; border-left: 2px solid var(--border);">Revenue</th>
-                <th style="text-align: right; padding: 0.5rem;">Units</th>
-                <th style="text-align: right; padding: 0.5rem;">Margin</th>
-                <th style="text-align: right; padding: 0.5rem;">Profit</th>
-                <th style="text-align: center; padding: 0.5rem; border-left: 2px solid var(--border);">Profit Chg</th>
+                <th style="text-align: center; padding: 0.5rem;">Date</th>
+                <th style="text-align: center; padding: 0.5rem;">Product</th>
+                <th style="text-align: center; padding: 0.5rem;">Old Price</th>
+                <th style="text-align: center; padding: 0.5rem;">New Price</th>
+                <th style="text-align: center; padding: 0.5rem; border-right: 2px solid var(--border);">Change %</th>
+                <th style="text-align: center; padding: 0.5rem;">Revenue</th>
+                <th style="text-align: center; padding: 0.5rem;">Units</th>
+                <th style="text-align: center; padding: 0.5rem;">Margin</th>
+                <th style="text-align: center; padding: 0.5rem; border-right: 2px solid var(--border);">Profit</th>
+                <th style="text-align: center; padding: 0.5rem;">Revenue</th>
+                <th style="text-align: center; padding: 0.5rem;">Units</th>
+                <th style="text-align: center; padding: 0.5rem;">Margin</th>
+                <th style="text-align: center; padding: 0.5rem; border-right: 2px solid var(--border);">Profit</th>
+                <th style="text-align: center; padding: 0.5rem;">Revenue</th>
+                <th style="text-align: center; padding: 0.5rem;">Volume</th>
+                <th style="text-align: center; padding: 0.5rem;">Profit</th>
               </tr>
             </thead>
             <tbody>
       `;
       
       results.forEach(r => {
+        const revenueChange = r.before.revenue !== 0 ? ((r.after.revenue - r.before.revenue) / Math.abs(r.before.revenue) * 100) : 0;
+        const volumeChange = r.before.units !== 0 ? ((r.after.units - r.before.units) / Math.abs(r.before.units) * 100) : 0;
         const profitChange = r.before.profit !== 0 ? ((r.after.profit - r.before.profit) / Math.abs(r.before.profit) * 100) : 0;
+        
+        const revenueColor = revenueChange > 0 ? '#10b981' : revenueChange < 0 ? '#ef4444' : 'inherit';
+        const volumeColor = volumeChange > 0 ? '#10b981' : volumeChange < 0 ? '#ef4444' : 'inherit';
         const profitColor = profitChange > 0 ? '#10b981' : profitChange < 0 ? '#ef4444' : 'inherit';
         
         html += `
           <tr>
-            <td style="padding: 0.75rem; white-space: nowrap;">${r.date}</td>
-            <td style="padding: 0.75rem;">${r.productName}</td>
-            <td style="text-align: right; padding: 0.75rem;">$${r.oldPrice.toFixed(2)}</td>
-            <td style="text-align: right; padding: 0.75rem;">$${r.newPrice.toFixed(2)}</td>
-            <td style="text-align: right; padding: 0.75rem;">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
-            <td style="text-align: right; padding: 0.75rem; border-left: 2px solid var(--border);">$${formatNumber(r.before.revenue)}</td>
-            <td style="text-align: right; padding: 0.75rem;">${r.before.units}</td>
-            <td style="text-align: right; padding: 0.75rem;">${r.before.margin.toFixed(1)}%</td>
-            <td style="text-align: right; padding: 0.75rem;">$${formatNumber(r.before.profit)}</td>
-            <td style="text-align: right; padding: 0.75rem; border-left: 2px solid var(--border);">$${formatNumber(r.after.revenue)}</td>
-            <td style="text-align: right; padding: 0.75rem;">${r.after.units}</td>
-            <td style="text-align: right; padding: 0.75rem;">${r.after.margin.toFixed(1)}%</td>
-            <td style="text-align: right; padding: 0.75rem;">$${formatNumber(r.after.profit)}</td>
-            <td style="text-align: center; padding: 0.75rem; border-left: 2px solid var(--border); color: ${profitColor}; font-weight: 500;">
+            <td style="text-align: center; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
+            <td style="text-align: center; padding: 0.75rem;">${r.productName}</td>
+            <td style="text-align: center; padding: 0.75rem;">$${r.oldPrice.toFixed(2)}</td>
+            <td style="text-align: center; padding: 0.75rem;">$${r.newPrice.toFixed(2)}</td>
+            <td style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
+            <td style="text-align: center; padding: 0.75rem;">$${formatNumber(r.before.revenue)}</td>
+            <td style="text-align: center; padding: 0.75rem;">${r.before.units}</td>
+            <td style="text-align: center; padding: 0.75rem;">${r.before.margin.toFixed(1)}%</td>
+            <td style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">$${formatNumber(r.before.profit)}</td>
+            <td style="text-align: center; padding: 0.75rem;">$${formatNumber(r.after.revenue)}</td>
+            <td style="text-align: center; padding: 0.75rem;">${r.after.units}</td>
+            <td style="text-align: center; padding: 0.75rem;">${r.after.margin.toFixed(1)}%</td>
+            <td style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">$${formatNumber(r.after.profit)}</td>
+            <td style="text-align: center; padding: 0.75rem; color: ${revenueColor}; font-weight: 500;">
+              ${revenueChange > 0 ? '+' : ''}${revenueChange.toFixed(1)}%
+            </td>
+            <td style="text-align: center; padding: 0.75rem; color: ${volumeColor}; font-weight: 500;">
+              ${volumeChange > 0 ? '+' : ''}${volumeChange.toFixed(1)}%
+            </td>
+            <td style="text-align: center; padding: 0.75rem; color: ${profitColor}; font-weight: 500;">
               ${profitChange > 0 ? '+' : ''}${profitChange.toFixed(1)}%
             </td>
           </tr>
