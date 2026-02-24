@@ -1424,6 +1424,12 @@
         <!-- Filters -->
         <div style="display: flex; gap: 1rem; margin-bottom: 2rem; align-items: center;">
           <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <label style="font-size: 0.9rem; color: var(--text-secondary);">Brand:</label>
+            <select id="price-filter-brand" onchange="loadPriceAnalysis()" style="padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font-size: 0.9rem; width: 150px;">
+              <option value="all">All Brands</option>
+            </select>
+          </div>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
             <label style="font-size: 0.9rem; color: var(--text-secondary);">Product:</label>
             <select id="price-filter-product" onchange="loadPriceAnalysis()" style="padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font-size: 0.9rem; width: 200px;">
               <option value="all">All Products</option>
@@ -5968,6 +5974,18 @@
     }
     
     // PRICE ANALYSIS PAGE
+    function shortenBrandName(brandName) {
+      const brandMap = {
+        'South of Kings': 'SOK',
+        'BrightWay Educational': 'BrightWay',
+        'Hubbard Scientific': 'Hubbard',
+        'MapShop State Maps': 'State Maps',
+        'Kappa': 'Kappa',
+        'Other': 'Other'
+      };
+      return brandMap[brandName] || brandName;
+    }
+    
     async function initializePriceAnalysis() {
       if (!accessToken) {
         alert('Please sign in to view price analysis');
@@ -5975,7 +5993,7 @@
       }
       
       try {
-        // Load products and price changes to populate filter dropdown
+        // Load products and price changes to populate filter dropdowns
         const [productsRes, priceChangesRes] = await Promise.all([
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
@@ -5992,28 +6010,49 @@
           const products = parseProducts(productsData);
           const priceChanges = parsePriceChanges(priceChangesData);
           
-          // Build SKU to product name lookup
-          const skuToProduct = {};
+          // Build SKU to product info lookup
+          const skuToInfo = {};
           products.forEach(p => {
-            skuToProduct[p.sku] = p.productName;
+            skuToInfo[p.sku] = {
+              brand: p.brand,
+              productName: p.productName
+            };
+          });
+          
+          // Get unique brands that have price changes
+          const brandsWithChanges = [...new Set(
+            priceChanges
+              .map(pc => skuToInfo[pc.sku]?.brand)
+              .filter(brand => brand) // Filter out undefined/null
+          )].sort();
+          
+          // Populate brand filter
+          const brandSelect = document.getElementById('price-filter-brand');
+          brandSelect.innerHTML = '<option value="all">All Brands</option>';
+          
+          brandsWithChanges.forEach(brand => {
+            const option = document.createElement('option');
+            option.value = brand;
+            option.text = brand;
+            brandSelect.appendChild(option);
           });
           
           // Get unique products that have price changes
           const productsWithChanges = [...new Set(
             priceChanges
-              .map(pc => skuToProduct[pc.sku])
+              .map(pc => skuToInfo[pc.sku]?.productName)
               .filter(name => name) // Filter out undefined/null
           )].sort();
           
           // Populate product filter
-          const filterSelect = document.getElementById('price-filter-product');
-          filterSelect.innerHTML = '<option value="all">All Products</option>';
+          const productSelect = document.getElementById('price-filter-product');
+          productSelect.innerHTML = '<option value="all">All Products</option>';
           
           productsWithChanges.forEach(productName => {
             const option = document.createElement('option');
             option.value = productName;
             option.text = productName;
-            filterSelect.appendChild(option);
+            productSelect.appendChild(option);
           });
         }
         
@@ -6032,6 +6071,7 @@
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading price changes...</div>';
       
       try {
+        const brandFilter = document.getElementById('price-filter-brand').value;
         const productFilter = document.getElementById('price-filter-product').value;
         const windowDays = parseInt(document.getElementById('price-window').value);
         
@@ -6064,16 +6104,22 @@
         const transactions = parseTransactions(transactionsData);
         const products = parseProducts(productsData);
         
-        // Build product name lookup
-        const skuToProduct = {};
+        // Build SKU to product info lookup
+        const skuToInfo = {};
         products.forEach(p => {
-          skuToProduct[p.sku] = p.productName;
+          skuToInfo[p.sku] = {
+            brand: p.brand,
+            productName: p.productName
+          };
         });
         
         // Filter price changes
         let filteredChanges = priceChanges;
+        if (brandFilter !== 'all') {
+          filteredChanges = filteredChanges.filter(pc => skuToInfo[pc.sku]?.brand === brandFilter);
+        }
         if (productFilter !== 'all') {
-          filteredChanges = priceChanges.filter(pc => skuToProduct[pc.sku] === productFilter);
+          filteredChanges = filteredChanges.filter(pc => skuToInfo[pc.sku]?.productName === productFilter);
         }
         
         // Calculate before/after metrics for each price change
@@ -6097,13 +6143,21 @@
           return {
             date: pc.date,
             sku: pc.sku,
-            productName: skuToProduct[pc.sku] || pc.sku,
+            brand: skuToInfo[pc.sku]?.brand || 'Unknown',
+            productName: skuToInfo[pc.sku]?.productName || pc.sku,
             oldPrice: pc.oldPrice,
             newPrice: pc.newPrice,
             changePercent: ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100),
             before: beforeMetrics,
             after: afterMetrics
           };
+        });
+        
+        // Sort by Brand, then Product Name, then Date (all ascending)
+        analysisResults.sort((a, b) => {
+          if (a.brand !== b.brand) return a.brand.localeCompare(b.brand);
+          if (a.productName !== b.productName) return a.productName.localeCompare(b.productName);
+          return a.date.localeCompare(b.date);
         });
         
         // Render table
@@ -6180,14 +6234,15 @@
           <table class="data-table" style="width: 100%; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">
             <thead>
               <tr>
-                <th colspan="5" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">Price Change Log</th>
+                <th colspan="6" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">Price Change Log</th>
                 <th colspan="4" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">Before (${windowDays}d)</th>
                 <th colspan="4" style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">After (${windowDays}d)</th>
                 <th colspan="3" style="text-align: center; padding: 0.75rem;">Impact</th>
               </tr>
               <tr style="background: var(--bg-secondary);">
+                <th style="text-align: left; padding: 0.5rem;">Brand</th>
+                <th style="text-align: left; padding: 0.5rem;">Name</th>
                 <th style="text-align: left; padding: 0.5rem;">Date</th>
-                <th style="text-align: left; padding: 0.5rem;">Product</th>
                 <th style="text-align: center; padding: 0.5rem;">Old Price</th>
                 <th style="text-align: center; padding: 0.5rem;">New Price</th>
                 <th style="text-align: center; padding: 0.5rem; border-right: 2px solid var(--border);">Change %</th>
@@ -6218,8 +6273,9 @@
         
         html += `
           <tr>
-            <td style="text-align: left; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
+            <td style="text-align: left; padding: 0.75rem;">${shortenBrandName(r.brand)}</td>
             <td style="text-align: left; padding: 0.75rem;">${r.productName}</td>
+            <td style="text-align: left; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
             <td style="text-align: center; padding: 0.75rem;">$${r.oldPrice.toFixed(2)}</td>
             <td style="text-align: center; padding: 0.75rem;">$${r.newPrice.toFixed(2)}</td>
             <td style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
