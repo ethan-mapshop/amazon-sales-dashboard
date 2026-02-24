@@ -6044,6 +6044,8 @@
               .filter(name => name) // Filter out undefined/null
           )].sort();
           
+          console.log('Products with price changes:', productsWithChanges);
+          
           // Populate product filter
           const productSelect = document.getElementById('price-filter-product');
           productSelect.innerHTML = '<option value="all">All Products</option>';
@@ -6240,9 +6242,9 @@
                 <th colspan="3" style="text-align: center; padding: 0.75rem;">Impact</th>
               </tr>
               <tr style="background: var(--bg-secondary);">
-                <th style="text-align: left; padding: 0.5rem;">Brand</th>
-                <th style="text-align: left; padding: 0.5rem;">Name</th>
                 <th style="text-align: left; padding: 0.5rem;">Date</th>
+                <th style="text-align: left; padding: 0.5rem;">Brand</th>
+                <th style="text-align: left; padding: 0.5rem;">Product</th>
                 <th style="text-align: center; padding: 0.5rem;">Old Price</th>
                 <th style="text-align: center; padding: 0.5rem;">New Price</th>
                 <th style="text-align: center; padding: 0.5rem; border-right: 2px solid var(--border);">Change %</th>
@@ -6273,9 +6275,9 @@
         
         html += `
           <tr>
+            <td style="text-align: left; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
             <td style="text-align: left; padding: 0.75rem;">${shortenBrandName(r.brand)}</td>
             <td style="text-align: left; padding: 0.75rem;">${r.productName}</td>
-            <td style="text-align: left; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
             <td style="text-align: center; padding: 0.75rem;">$${r.oldPrice.toFixed(2)}</td>
             <td style="text-align: center; padding: 0.75rem;">$${r.newPrice.toFixed(2)}</td>
             <td style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
