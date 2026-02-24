@@ -5975,21 +5975,41 @@
       }
       
       try {
-        // Load products to populate filter dropdown
-        const productsRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
+        // Load products and price changes to populate filter dropdown
+        const [productsRes, priceChangesRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/PriceChanges`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
         
-        if (productsRes.ok) {
+        if (productsRes.ok && priceChangesRes.ok) {
           const productsData = await productsRes.json();
+          const priceChangesData = await priceChangesRes.json();
+          
           const products = parseProducts(productsData);
+          const priceChanges = parsePriceChanges(priceChangesData);
+          
+          // Build SKU to product name lookup
+          const skuToProduct = {};
+          products.forEach(p => {
+            skuToProduct[p.sku] = p.productName;
+          });
+          
+          // Get unique products that have price changes
+          const productsWithChanges = [...new Set(
+            priceChanges
+              .map(pc => skuToProduct[pc.sku])
+              .filter(name => name) // Filter out undefined/null
+          )].sort();
           
           // Populate product filter
           const filterSelect = document.getElementById('price-filter-product');
           filterSelect.innerHTML = '<option value="all">All Products</option>';
           
-          const uniqueProducts = [...new Set(products.map(p => p.productName))].sort();
-          uniqueProducts.forEach(productName => {
+          productsWithChanges.forEach(productName => {
             const option = document.createElement('option');
             option.value = productName;
             option.text = productName;
@@ -6166,8 +6186,8 @@
                 <th colspan="3" style="text-align: center; padding: 0.75rem;">Impact</th>
               </tr>
               <tr style="background: var(--bg-secondary);">
-                <th style="text-align: center; padding: 0.5rem;">Date</th>
-                <th style="text-align: center; padding: 0.5rem;">Product</th>
+                <th style="text-align: left; padding: 0.5rem;">Date</th>
+                <th style="text-align: left; padding: 0.5rem;">Product</th>
                 <th style="text-align: center; padding: 0.5rem;">Old Price</th>
                 <th style="text-align: center; padding: 0.5rem;">New Price</th>
                 <th style="text-align: center; padding: 0.5rem; border-right: 2px solid var(--border);">Change %</th>
@@ -6198,8 +6218,8 @@
         
         html += `
           <tr>
-            <td style="text-align: center; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
-            <td style="text-align: center; padding: 0.75rem;">${r.productName}</td>
+            <td style="text-align: left; padding: 0.75rem; white-space: nowrap;">${r.date}</td>
+            <td style="text-align: left; padding: 0.75rem;">${r.productName}</td>
             <td style="text-align: center; padding: 0.75rem;">$${r.oldPrice.toFixed(2)}</td>
             <td style="text-align: center; padding: 0.75rem;">$${r.newPrice.toFixed(2)}</td>
             <td style="text-align: center; padding: 0.75rem; border-right: 2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
