@@ -6144,8 +6144,8 @@
           const afterEnd = new Date(changeDate);
           afterEnd.setDate(afterEnd.getDate() + windowDays - 1);
           
-          const beforeMetrics = calculatePeriodMetrics(transactions, pc.sku, beforeStart, beforeEnd);
-          const afterMetrics = calculatePeriodMetrics(transactions, pc.sku, afterStart, afterEnd);
+          const beforeMetrics = calculatePeriodMetrics(transactions, products, pc.sku, beforeStart, beforeEnd);
+          const afterMetrics = calculatePeriodMetrics(transactions, products, pc.sku, afterStart, afterEnd);
           
           return {
             date: pc.date,
@@ -6199,7 +6199,11 @@
       return changes.sort((a, b) => new Date(b.date) - new Date(a.date)); // Most recent first
     }
     
-    function calculatePeriodMetrics(transactions, sku, startDate, endDate) {
+    function calculatePeriodMetrics(transactions, products, sku, startDate, endDate) {
+      // Find the product cost
+      const product = products.find(p => p.sku === sku);
+      const unitCost = product ? product.cost : 0;
+      
       const filtered = transactions.filter(t => {
         if (t.sku !== sku) return false;
         if (t.type !== 'Order') return false;
@@ -6209,17 +6213,19 @@
       
       let revenue = 0;
       let units = 0;
-      let productSales = 0;
+      let opex = 0;
+      let productCosts = 0;
       
       filtered.forEach(t => {
         revenue += (t['product sales'] || 0) + (t['shipping credits'] || 0) + (t['gift wrap credits'] || 0) + (t['promotional rebates'] || 0);
-        units += Math.abs(t.quantity || 0);
-        productSales += (t['product sales'] || 0);
+        const qty = Math.abs(t.quantity || 0);
+        units += qty;
+        opex += Math.abs(t['selling fees'] || 0) + Math.abs(t['fba fees'] || 0) + Math.abs(t['other transaction fees'] || 0);
+        productCosts += unitCost * qty;
       });
       
-      // Calculate margin (simplified - revenue minus fees)
-      const fees = filtered.reduce((sum, t) => sum + Math.abs(t['selling fees'] || 0) + Math.abs(t['fba fees'] || 0), 0);
-      const profit = revenue - fees; // Simplified - not including COGS or ad spend
+      // Calculate profit (excluding ad spend for simplicity in this view)
+      const profit = revenue - opex - productCosts;
       const margin = revenue > 0 ? (profit / revenue * 100) : 0;
       
       return {
