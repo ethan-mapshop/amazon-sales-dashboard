@@ -2,10 +2,9 @@
   "name": "mapshop-dashboard",
   "version": "1.0.0",
   "description": "Amazon Sales Dashboard for Map Shop",
+  "type": "module",
   "dependencies": {
-    "amazon-sp-api": "^0.13.0",
-    "@aws-sdk/client-sts": "^3.0.0",
-    "node-fetch": "^3.0.0",
-    "@vercel/kv": "^1.0.0"
+    "amazon-sp-api": "^2.4.2",
+    "@vercel/kv": "^2.0.0"
   }
 }
