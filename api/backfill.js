@@ -209,12 +209,67 @@ async function downloadAndParseReport(url) {
     return [];
   }
 
-  console.log(`\n📋 First line (headers):\n${lines[0]}`);
+  console.log(`\n📋 First line (headers):\n${lines[0].substring(0, 500)}`);
   if (lines.length > 1) {
-    console.log(`\n📋 Second line (first data row):\n${lines[1]}`);
+    console.log(`\n📋 Second line (first data row):\n${lines[1].substring(0, 500)}`);
   }
   
-  return []; // Stop here - just return empty so we can see the logs
+  // Parse TSV (tab-separated values)
+  const headers = lines[0].split('\t').map(h => h.trim());
+  const transactions = [];
+
+  // Create column index map
+  const colIndex = {};
+  headers.forEach((header, index) => {
+    colIndex[header.toLowerCase()] = index;
+  });
+
+  console.log(`🔍 Column indexes - date/time: ${colIndex['date/time']}, order id: ${colIndex['order id']}, sku: ${colIndex['sku']}`);
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split('\t');
+    
+    // Parse date/time to YYYY-MM-DD format
+    const dateTime = values[colIndex['date/time']] || '';
+    let date = '';
+    if (dateTime) {
+      // Parse "Mar 1, 2026 12:52:57 AM PST" format
+      const datePart = dateTime.split(' ').slice(0, 3).join(' '); // "Mar 1, 2026"
+      const parsed = new Date(datePart);
+      if (!isNaN(parsed)) {
+        date = parsed.toISOString().split('T')[0]; // "2026-03-01"
+      }
+    }
+    
+    if (!date) continue;
+
+    const transaction = {
+      'date': date,
+      'order-id': values[colIndex['order id']] || '',
+      'sku': values[colIndex['sku']] || '',
+      'asin': '', // Not in this report
+      'type': values[colIndex['type']] || 'Order',
+      'fulfillment': values[colIndex['fulfillment']] || 'Seller',
+      'quantity': parseFloat(values[colIndex['quantity']]) || 0,
+      'product sales': parseFloat(values[colIndex['product sales']]) || 0,
+      'shipping credits': parseFloat(values[colIndex['shipping credits']]) || 0,
+      'gift wrap credits': parseFloat(values[colIndex['gift wrap credits']]) || 0,
+      'promotional rebates': parseFloat(values[colIndex['promotional rebates']]) || 0,
+      'sales tax collected': (parseFloat(values[colIndex['product sales tax']]) || 0) + (parseFloat(values[colIndex['shipping credits tax']]) || 0),
+      'selling fees': parseFloat(values[colIndex['selling fees']]) || 0,
+      'fba fees': parseFloat(values[colIndex['fba fees']]) || 0,
+      'other transaction fees': parseFloat(values[colIndex['other transaction fees']]) || 0,
+      'other': parseFloat(values[colIndex['other']]) || 0,
+      'total': parseFloat(values[colIndex['total']]) || 0
+    };
+
+    if (transaction['order-id'] && transaction['sku']) {
+      transactions.push(transaction);
+    }
+  }
+
+  console.log(`✅ Parsed ${transactions.length} transactions`);
+  return transactions;
 }
 
 // ==================== SHIPSTATION ====================
