@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Migration Tool</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 600px;
+      margin: 2rem auto;
+      padding: 2rem;
+      background: #0f1419;
+      color: #f7f7f2;
+    }
+    .card {
+      background: #232936;
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid #3a4556;
+    }
+    h1 { margin-top: 0; color: #ff6b35; }
+    label {
+      display: block;
+      margin-top: 1rem;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+    input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #3a4556;
+      border-radius: 4px;
+      background: #1a1f29;
+      color: #f7f7f2;
+      font-size: 0.9rem;
+    }
+    button {
+      margin-top: 1.5rem;
+      padding: 0.75rem 1.5rem;
+      background: #ff6b35;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:hover {
+      background: #ff8555;
+    }
+    button:disabled {
+      background: #555;
+      cursor: not-allowed;
+    }
+    #status {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border-radius: 4px;
+      display: none;
+    }
+    .success {
+      background: rgba(6, 214, 160, 0.1);
+      border: 1px solid #06d6a0;
+      color: #06d6a0;
+    }
+    .error {
+      background: rgba(239, 71, 111, 0.1);
+      border: 1px solid #ef476f;
+      color: #ef476f;
+    }
+    .progress {
+      background: rgba(255, 190, 11, 0.1);
+      border: 1px solid #ffbe0b;
+      color: #ffbe0b;
+    }
+    pre {
+      background: #1a1f29;
+      padding: 1rem;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔄 Data Migration Tool</h1>
+    <p>This will migrate all historical data from Google Sheets to Vercel KV.</p>
+    <p><strong>⚠️ Run this only once!</strong></p>
+
+    <label>Admin Token:</label>
+    <input type="password" id="adminToken" placeholder="Enter ADMIN_TOKEN from Vercel env vars">
+
+    <label>Google Access Token:</label>
+    <input type="text" id="accessToken" placeholder="Get from dashboard after signing in">
+    <small style="color: #9ca3af;">Sign into the dashboard, open browser console, type: <code>accessToken</code></small>
+
+    <label>Spreadsheet ID:</label>
+    <input type="text" id="spreadsheetId" value="10EDxzRhOdmu2ldvYHpoVSI0iuJoucy7OZFjM8sfgs80">
+
+    <button onclick="runMigration()" id="migrateBtn">Start Migration</button>
+
+    <div id="status"></div>
+  </div>
+
+  <script>
+    async function runMigration() {
+      const statusDiv = document.getElementById('status');
+      const btn = document.getElementById('migrateBtn');
+      
+      const adminToken = document.getElementById('adminToken').value;
+      const accessToken = document.getElementById('accessToken').value;
+      const spreadsheetId = document.getElementById('spreadsheetId').value;
+
+      if (!adminToken || !accessToken || !spreadsheetId) {
+        statusDiv.className = 'error';
+        statusDiv.style.display = 'block';
+        statusDiv.textContent = 'Please fill in all fields';
+        return;
+      }
+
+      btn.disabled = true;
+      statusDiv.className = 'progress';
+      statusDiv.style.display = 'block';
+      statusDiv.textContent = '⏳ Migration in progress... This may take 1-2 minutes.';
+
+      try {
+        const response = await fetch('/api/migrate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-admin-token': adminToken
+          },
+          body: JSON.stringify({
+            accessToken,
+            spreadsheetId
+          })
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+          statusDiv.className = 'success';
+          statusDiv.innerHTML = `
+            <strong>✅ Migration Complete!</strong>
+            <pre>${JSON.stringify(result, null, 2)}</pre>
+          `;
+        } else {
+          throw new Error(result.message || result.error);
+        }
+      } catch (error) {
+        statusDiv.className = 'error';
+        statusDiv.innerHTML = `
+          <strong>❌ Migration Failed</strong>
+          <p>${error.message}</p>
+        `;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
