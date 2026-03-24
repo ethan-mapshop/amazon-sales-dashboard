@@ -195,12 +195,16 @@ async function downloadAndParseReport(url) {
   const text = await response.text();
   const lines = text.split('\n').filter(line => line.trim());
   
+  console.log(`📄 Report has ${lines.length} lines`);
+  
   if (lines.length < 2) {
     return [];
   }
 
   // Parse TSV (tab-separated values)
   const headers = lines[0].split('\t').map(h => h.trim());
+  console.log(`📋 Headers: ${headers.slice(0, 10).join(', ')}...`);
+  
   const transactions = [];
 
   // Create column index map
@@ -208,6 +212,9 @@ async function downloadAndParseReport(url) {
   headers.forEach((header, index) => {
     colIndex[header.toLowerCase()] = index;
   });
+
+  console.log(`🔍 Looking for 'date/time' column at index: ${colIndex['date/time']}`);
+  console.log(`🔍 Looking for 'order id' column at index: ${colIndex['order id']}`);
 
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i].split('\t');
@@ -221,10 +228,17 @@ async function downloadAndParseReport(url) {
       const parsed = new Date(datePart);
       if (!isNaN(parsed)) {
         date = parsed.toISOString().split('T')[0]; // "2026-03-01"
+      } else {
+        if (i === 1) console.log(`⚠️ Failed to parse date: "${dateTime}" -> "${datePart}"`);
       }
+    } else {
+      if (i === 1) console.log(`⚠️ No date/time value found in row ${i}`);
     }
     
-    if (!date) continue; // Skip rows without valid date
+    if (!date) {
+      if (i <= 3) console.log(`⚠️ Skipping row ${i} - no valid date`);
+      continue; // Skip rows without valid date
+    }
 
     const transaction = {
       'date': date,
@@ -249,9 +263,13 @@ async function downloadAndParseReport(url) {
     // Only include if it has required fields
     if (transaction['order-id'] && transaction['sku']) {
       transactions.push(transaction);
+      if (i === 1) console.log(`✅ First transaction parsed: ${transaction['order-id']}, $${transaction['product sales']}`);
+    } else {
+      if (i <= 3) console.log(`⚠️ Skipping row ${i} - missing order-id or sku`);
     }
   }
 
+  console.log(`✅ Parsed ${transactions.length} transactions total`);
   return transactions;
 }
 
