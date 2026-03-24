@@ -3527,6 +3527,12 @@
       };
     }
     
+    // Helper: Find header index case-insensitively
+    function findHeaderIndex(headers, searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      return headers.findIndex(h => h && h.toLowerCase() === lowerSearch);
+    }
+    
     // Load Overview Data - Updated to use KV for transactions/shipping/ads
     async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null) {
       if (!accessToken) {
@@ -3598,9 +3604,9 @@
         const productsRows = productsData.values || [];
         if (productsRows.length > 1) {
           const productsHeaders = productsRows[0];
-          const skuIndex = productsHeaders.indexOf('sku');
-          const costIndex = productsHeaders.indexOf('cost');
-          const brandIndex = productsHeaders.indexOf('brand');
+          const skuIndex = findHeaderIndex(productsHeaders, 'sku');
+          const costIndex = findHeaderIndex(productsHeaders, 'cost');
+          const brandIndex = findHeaderIndex(productsHeaders, 'brand');
             
             for (let i = 1; i < productsRows.length; i++) {
               const sku = productsRows[i][skuIndex];
@@ -3716,9 +3722,9 @@
         const productAdsRows = productAdsData.values || [];
         if (productAdsRows.length > 1) {
           const adsHeaders = productAdsRows[0];
-          const dateIndex = adsHeaders.indexOf('Date');
-          const campaignIndex = adsHeaders.indexOf('Campaign Name');
-          const spendIndex = adsHeaders.indexOf('Spend');
+          const dateIndex = findHeaderIndex(adsHeaders, 'Date');
+          const campaignIndex = findHeaderIndex(adsHeaders, 'Campaign Name');
+          const spendIndex = findHeaderIndex(adsHeaders, 'Spend');
             
             for (let i = 1; i < productAdsRows.length; i++) {
               const adDate = new Date(productAdsRows[i][dateIndex]);
@@ -3774,9 +3780,9 @@
         const brandAdsRows = brandAdsData.values || [];
         if (brandAdsRows.length > 1) {
           const adsHeaders = brandAdsRows[0];
-          const dateIndex = adsHeaders.indexOf('Date');
-          const campaignIndex = adsHeaders.indexOf('Campaign Name');
-          const spendIndex = adsHeaders.indexOf('Spend');
+          const dateIndex = findHeaderIndex(adsHeaders, 'Date');
+          const campaignIndex = findHeaderIndex(adsHeaders, 'Campaign Name');
+          const spendIndex = findHeaderIndex(adsHeaders, 'Spend');
             
             for (let i = 1; i < brandAdsRows.length; i++) {
               const adDate = new Date(brandAdsRows[i][dateIndex]);
@@ -3883,8 +3889,8 @@
         const shippingRows = shippingData.values || [];
         if (shippingRows.length > 1) {
           const shippingHeaders = shippingRows[0];
-          const shipDateIndex = shippingHeaders.indexOf('Ship Date');
-          const shippingCostIndex = shippingHeaders.indexOf('Shipping Cost');
+          const shipDateIndex = findHeaderIndex(shippingHeaders, 'Ship Date');
+          const shippingCostIndex = findHeaderIndex(shippingHeaders, 'Shipping Cost');
             
             for (let i = 1; i < shippingRows.length; i++) {
               const shipDate = new Date(shippingRows[i][shipDateIndex]);
