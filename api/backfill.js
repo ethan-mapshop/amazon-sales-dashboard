@@ -200,20 +200,55 @@ async function downloadAndParseReport(url) {
   }
 
   // Parse TSV (tab-separated values)
-  const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
+  const headers = lines[0].split('\t').map(h => h.trim());
   const transactions = [];
+
+  // Create column index map
+  const colIndex = {};
+  headers.forEach((header, index) => {
+    colIndex[header.toLowerCase()] = index;
+  });
 
   for (let i = 1; i < lines.length; i++) {
     const values = lines[i].split('\t');
-    const row = {};
     
-    headers.forEach((header, index) => {
-      row[header] = values[index] || '';
-    });
+    // Parse date/time to YYYY-MM-DD format
+    const dateTime = values[colIndex['date/time']] || '';
+    let date = '';
+    if (dateTime) {
+      // Parse "Mar 1, 2026 12:52:57 AM PST" format
+      const datePart = dateTime.split(' ').slice(0, 3).join(' '); // "Mar 1, 2026"
+      const parsed = new Date(datePart);
+      if (!isNaN(parsed)) {
+        date = parsed.toISOString().split('T')[0]; // "2026-03-01"
+      }
+    }
+    
+    if (!date) continue; // Skip rows without valid date
+
+    const transaction = {
+      'date': date,
+      'order-id': values[colIndex['order id']] || '',
+      'sku': values[colIndex['sku']] || '',
+      'asin': '', // Not in this report
+      'type': values[colIndex['type']] || 'Order',
+      'fulfillment': values[colIndex['fulfillment']] || 'Seller',
+      'quantity': parseFloat(values[colIndex['quantity']]) || 0,
+      'product sales': parseFloat(values[colIndex['product sales']]) || 0,
+      'shipping credits': parseFloat(values[colIndex['shipping credits']]) || 0,
+      'gift wrap credits': parseFloat(values[colIndex['gift wrap credits']]) || 0,
+      'promotional rebates': parseFloat(values[colIndex['promotional rebates']]) || 0,
+      'sales tax collected': (parseFloat(values[colIndex['product sales tax']]) || 0) + (parseFloat(values[colIndex['shipping credits tax']]) || 0),
+      'selling fees': parseFloat(values[colIndex['selling fees']]) || 0,
+      'fba fees': parseFloat(values[colIndex['fba fees']]) || 0,
+      'other transaction fees': parseFloat(values[colIndex['other transaction fees']]) || 0,
+      'other': parseFloat(values[colIndex['other']]) || 0,
+      'total': parseFloat(values[colIndex['total']]) || 0
+    };
 
     // Only include if it has required fields
-    if (row['amazon-order-id'] && row['sku']) {
-      transactions.push(row);
+    if (transaction['order-id'] && transaction['sku']) {
+      transactions.push(transaction);
     }
   }
 
@@ -266,8 +301,7 @@ async function writeTransactionsToKV(transactions) {
   const byMonth = {};
   
   transactions.forEach(t => {
-    const date = t['purchase-date'] || t['order-date'] || '';
-    const month = date.substring(0, 7); // YYYY-MM
+    const month = t.date.substring(0, 7); // YYYY-MM
     
     if (!month || month.length !== 7) return;
     
@@ -275,31 +309,31 @@ async function writeTransactionsToKV(transactions) {
       byMonth[month] = [];
     }
     
-    // Map Amazon report columns to our format
+    // Convert transaction object to array format matching your Transactions sheet
     const row = [
-      date.split('T')[0], // date
-      t['amazon-order-id'] || '', // order-id
-      t['sku'] || '', // sku
-      t['asin'] || '', // asin
-      t['item-status'] || 'Order', // type
-      t['is-business-order'] === 'true' ? 'Amazon' : (t['fulfillment-channel'] || 'Seller'), // fulfillment
-      parseFloat(t['quantity-purchased'] || 0), // quantity
-      parseFloat(t['item-price'] || 0), // product sales
-      parseFloat(t['shipping-price'] || 0), // shipping credits
-      parseFloat(t['gift-wrap-price'] || 0), // gift wrap credits
-      parseFloat(t['item-promotion-discount'] || 0) * -1, // promotional rebates
-      parseFloat(t['item-tax'] || 0), // sales tax collected
-      parseFloat(t['commission'] || 0) * -1, // selling fees
-      0, // fba fees (not in this report, will need to fetch separately or estimate)
-      0, // other transaction fees
-      0, // other
-      parseFloat(t['item-price'] || 0) + parseFloat(t['shipping-price'] || 0) + parseFloat(t['gift-wrap-price'] || 0) // total
+      t.date,
+      t['order-id'],
+      t.sku,
+      t.asin,
+      t.type,
+      t.fulfillment,
+      t.quantity,
+      t['product sales'],
+      t['shipping credits'],
+      t['gift wrap credits'],
+      t['promotional rebates'],
+      t['sales tax collected'],
+      t['selling fees'],
+      t['fba fees'],
+      t['other transaction fees'],
+      t['other'],
+      t.total
     ];
     
     byMonth[month].push(row);
   });
 
-  // Write each month to KV (merge with existing data)
+  // Write each month to KV (overwrites existing data)
   const headers = ['date', 'order-id', 'sku', 'asin', 'type', 'fulfillment', 'quantity', 
                    'product sales', 'shipping credits', 'gift wrap credits', 'promotional rebates',
                    'sales tax collected', 'selling fees', 'fba fees', 'other transaction fees', 
@@ -311,24 +345,12 @@ async function writeTransactionsToKV(transactions) {
   for (const [month, newRows] of Object.entries(byMonth)) {
     const key = `transactions:${month}`;
     
-    // Get existing data for this month
-    const existing = await kv.get(key);
-    let existingRows = [];
-    
-    if (existing) {
-      const parsed = typeof existing === 'string' ? JSON.parse(existing) : existing;
-      existingRows = parsed.rows || [];
-    }
-    
-    // Merge (append new rows)
-    const allRows = [...existingRows, ...newRows];
-    
-    // Write back
-    await kv.set(key, JSON.stringify({ headers, rows: allRows }));
+    // Overwrite (not merge) - this replaces bad data with correct data
+    await kv.set(key, JSON.stringify({ headers, rows: newRows }));
     
     monthCounts[month] = newRows.length;
     totalRows += newRows.length;
-    console.log(`  ✓ Transactions ${month}: +${newRows.length} rows (total: ${allRows.length})`);
+    console.log(`  ✓ Transactions ${month}: ${newRows.length} rows`);
   }
 
   return { totalRows, byMonth: monthCounts };
