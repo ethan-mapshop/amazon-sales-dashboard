@@ -3500,6 +3500,34 @@
       };
     }
     
+    // HELPER FUNCTIONS FOR FETCHING FROM VERCEL KV API
+    
+    // Fetch data from Vercel KV via /api/data endpoint
+    async function fetchFromKV(type, startDate = null, endDate = null) {
+      let url = `/api/data?type=${type}`;
+      if (startDate && endDate) {
+        url += `&startDate=${startDate}&endDate=${endDate}`;
+      }
+      
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${type} from KV`);
+      }
+      
+      return await response.json();
+    }
+    
+    // Convert KV format (headers + rows arrays) to Google Sheets API format
+    function kvToSheetsFormat(kvData) {
+      if (!kvData || !kvData.headers || !kvData.rows) {
+        return { values: [] };
+      }
+      return {
+        values: [kvData.headers, ...kvData.rows]
+      };
+    }
+    
+    // Load Overview Data - Updated to use KV for transactions/shipping/ads
     async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null) {
       if (!accessToken) {
         alert('Please sign in first');
@@ -3522,28 +3550,26 @@
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
-        // Load all required data in parallel
-        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
+        // Load transaction data from KV API, config data from Google Sheets
+        const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes] = await Promise.all([
+          fetchFromKV('transactions', startDate, endDate),
+          fetchFromKV('shipping', startDate, endDate),
+          fetchFromKV('productads', startDate, endDate),
+          fetchFromKV('brandads', startDate, endDate),
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
         ]);
         
-        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+        // Convert KV format to Sheets format for existing parse functions
+        const transactionsData = kvToSheetsFormat(transactionsKV);
+        const shippingData = kvToSheetsFormat(shippingKV);
+        const productAdsData = kvToSheetsFormat(productAdsKV);
+        const brandAdsData = kvToSheetsFormat(brandAdsKV);
         
-        const transactionsData = await transactionsRes.json();
+        if (!productsRes.ok) throw new Error('Failed to load products');
+        const productsData = await productsRes.json();
+        
         const transactionsRows = transactionsData.values || [];
         
         if (transactionsRows.length <= 1) {
@@ -3688,14 +3714,13 @@
         const unallocatedProductCampaigns = {}; // Track which campaigns are unallocated
         const unallocatedBrandCampaigns = {}; // Track which campaigns are unallocated
         
-        if (productAdsRes.ok) {
-          const productAdsData = await productAdsRes.json();
-          const productAdsRows = productAdsData.values || [];
-          if (productAdsRows.length > 1) {
-            const adsHeaders = productAdsRows[0];
-            const dateIndex = adsHeaders.indexOf('Date');
-            const campaignIndex = adsHeaders.indexOf('Campaign Name');
-            const spendIndex = adsHeaders.indexOf('Spend');
+        // Product ads (already loaded from KV)
+        const productAdsRows = productAdsData.values || [];
+        if (productAdsRows.length > 1) {
+          const adsHeaders = productAdsRows[0];
+          const dateIndex = adsHeaders.indexOf('Date');
+          const campaignIndex = adsHeaders.indexOf('Campaign Name');
+          const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < productAdsRows.length; i++) {
               const adDate = new Date(productAdsRows[i][dateIndex]);
@@ -3746,16 +3771,15 @@
               }
             }
           }
-        }
+        } // End productAds parsing
         
-        if (brandAdsRes.ok) {
-          const brandAdsData = await brandAdsRes.json();
-          const brandAdsRows = brandAdsData.values || [];
-          if (brandAdsRows.length > 1) {
-            const adsHeaders = brandAdsRows[0];
-            const dateIndex = adsHeaders.indexOf('Date');
-            const campaignIndex = adsHeaders.indexOf('Campaign Name');
-            const spendIndex = adsHeaders.indexOf('Spend');
+        // Brand ads (already loaded from KV)
+        const brandAdsRows = brandAdsData.values || [];
+        if (brandAdsRows.length > 1) {
+          const adsHeaders = brandAdsRows[0];
+          const dateIndex = adsHeaders.indexOf('Date');
+          const campaignIndex = adsHeaders.indexOf('Campaign Name');
+          const spendIndex = adsHeaders.indexOf('Spend');
             
             for (let i = 1; i < brandAdsRows.length; i++) {
               const adDate = new Date(brandAdsRows[i][dateIndex]);
@@ -3859,13 +3883,12 @@
         // Parse shipping costs data
         let totalShippingCosts = 0;
         
-        if (shippingRes.ok) {
-          const shippingData = await shippingRes.json();
-          const shippingRows = shippingData.values || [];
-          if (shippingRows.length > 1) {
-            const shippingHeaders = shippingRows[0];
-            const shipDateIndex = shippingHeaders.indexOf('Ship Date');
-            const shippingCostIndex = shippingHeaders.indexOf('Shipping Cost');
+        // Shipping costs (already loaded from KV)
+        const shippingRows = shippingData.values || [];
+        if (shippingRows.length > 1) {
+          const shippingHeaders = shippingRows[0];
+          const shipDateIndex = shippingHeaders.indexOf('Ship Date');
+          const shippingCostIndex = shippingHeaders.indexOf('Shipping Cost');
             
             for (let i = 1; i < shippingRows.length; i++) {
               const shipDate = new Date(shippingRows[i][shipDateIndex]);
@@ -4400,21 +4423,13 @@
         throw new Error('Please sign in first');
       }
       
-      // Load all required data
-      const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
+      // Load transaction data from KV, config from Google Sheets
+      const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes, productMappingRes, brandMappingRes] = await Promise.all([
+        fetchFromKV('transactions', startDate, endDate),
+        fetchFromKV('shipping', startDate, endDate),
+        fetchFromKV('productads', startDate, endDate),
+        fetchFromKV('brandads', startDate, endDate),
         fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }),
         fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
@@ -4425,14 +4440,16 @@
         })
       ]);
       
-      if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+      // Convert KV format to Sheets format
+      const transactionsData = kvToSheetsFormat(transactionsKV);
+      const shippingData = kvToSheetsFormat(shippingKV);
+      const productAdsData = kvToSheetsFormat(productAdsKV);
+      const brandAdsData = kvToSheetsFormat(brandAdsKV);
       
-      const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
-        transactionsRes.json(),
+      if (!productsRes.ok) throw new Error('Failed to load products');
+      
+      const [productsData, productMappingData, brandMappingData] = await Promise.all([
         productsRes.json(),
-        productAdsRes.json(),
-        brandAdsRes.json(),
-        shippingRes.json(),
         productMappingRes.json(),
         brandMappingRes.json()
       ]);
@@ -5681,24 +5698,27 @@
         console.log('Fetching all sheet data (one-time load)...');
         const headers = { 'Authorization': `Bearer ${accessToken}` };
         
-        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, { headers }),
+        // Fetch transaction data from KV, config from Google Sheets
+        const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes, productMappingRes, brandMappingRes] = await Promise.all([
+          fetchFromKV('transactions'),
+          fetchFromKV('shipping'),
+          fetchFromKV('productads'),
+          fetchFromKV('brandads'),
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ShippingCosts`, { headers }),
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, { headers }),
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, { headers })
         ]);
         
-        if (!transactionsRes.ok) throw new Error('Failed to load transactions');
+        // Convert KV format to Sheets format
+        const transactionsData = kvToSheetsFormat(transactionsKV);
+        const shippingData = kvToSheetsFormat(shippingKV);
+        const productAdsData = kvToSheetsFormat(productAdsKV);
+        const brandAdsData = kvToSheetsFormat(brandAdsKV);
         
-        const [transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData] = await Promise.all([
-          transactionsRes.json(),
+        if (!productsRes.ok) throw new Error('Failed to load products');
+        
+        const [productsData, productMappingData, brandMappingData] = await Promise.all([
           productsRes.json(),
-          productAdsRes.json(),
-          brandAdsRes.json(),
-          shippingRes.json(),
           productMappingRes.json(),
           brandMappingRes.json()
         ]);
@@ -6259,14 +6279,12 @@
         const productFilter = document.getElementById('price-filter-product').value;
         const windowDays = parseInt(document.getElementById('price-window').value);
         
-        // Fetch required data
-        const [priceChangesRes, transactionsRes, productsRes] = await Promise.all([
+        // Fetch required data - transactions from KV, others from Sheets
+        const [priceChangesRes, transactionsKV, productsRes] = await Promise.all([
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/PriceChanges`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Transactions`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
+          fetchFromKV('transactions'),
           fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
@@ -6277,9 +6295,11 @@
           return;
         }
         
-        const [priceChangesData, transactionsData, productsData] = await Promise.all([
+        // Convert KV transactions to Sheets format
+        const transactionsData = kvToSheetsFormat(transactionsKV);
+        
+        const [priceChangesData, productsData] = await Promise.all([
           priceChangesRes.json(),
-          transactionsRes.json(),
           productsRes.json()
         ]);
         
