@@ -1,412 +1,192 @@
-// Backfill endpoint - fetch historical data using Reports API and write to KV
+// Backfill endpoint - fetch March data from Amazon SP-API Reports
 // POST /api/backfill with x-admin-token header
-// Body: { startDate: "2026-03-01", endDate: "2026-03-24" }
+// Body: { startDate: "2026-03-01", endDate: "2026-03-23" }
 
 import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Verify admin token
   const adminToken = req.headers['x-admin-token'];
   if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
-    return res.status(401).json({ error: 'Unauthorized - Invalid admin token' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
     const { startDate, endDate } = req.body;
     
     if (!startDate || !endDate) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: startDate, endDate (YYYY-MM-DD format)' 
-      });
+      return res.status(400).json({ error: 'Missing startDate or endDate' });
     }
 
-    console.log(`🔄 Starting backfill from ${startDate} to ${endDate}`);
-
-    // Get SP-API access token
-    const accessToken = await getAmazonAccessToken();
-
-    // Fetch data from all sources
-    const [transactions, shipping] = await Promise.all([
-      fetchAmazonTransactionsReport(accessToken, startDate, endDate),
-      fetchShipStationShipping(startDate, endDate)
-    ]);
-
-    console.log(`📊 Fetched: ${transactions.length} transactions, ${shipping.length} shipping records`);
-
-    // Write to KV (sharded by month)
-    const results = {
-      transactions: await writeTransactionsToKV(transactions),
-      shipping: await writeShippingToKV(shipping)
-    };
-
-    res.status(200).json({
-      success: true,
-      message: 'Backfill completed successfully',
-      dateRange: { startDate, endDate },
-      results
+    // Step 1: Get Amazon access token
+    const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: process.env.AMAZON_REFRESH_TOKEN,
+        client_id: process.env.AMAZON_LWA_CLIENT_ID,
+        client_secret: process.env.AMAZON_LWA_CLIENT_SECRET
+      })
     });
 
-  } catch (error) {
-    console.error('❌ Backfill failed:', error);
-    res.status(500).json({ 
-      error: 'Backfill failed', 
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-}
+    if (!tokenResponse.ok) {
+      return res.status(500).json({ error: 'Failed to get Amazon token' });
+    }
 
-// ==================== AMAZON SP-API REPORTS ====================
+    const { access_token } = await tokenResponse.json();
 
-async function getAmazonAccessToken() {
-  const response = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: process.env.AMAZON_REFRESH_TOKEN,
-      client_id: process.env.AMAZON_LWA_CLIENT_ID,
-      client_secret: process.env.AMAZON_LWA_CLIENT_SECRET
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to get Amazon access token: ${error}`);
-  }
-
-  const data = await response.json();
-  return data.access_token;
-}
-
-async function fetchAmazonTransactionsReport(accessToken, startDate, endDate) {
-  const marketplaceIds = [process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'];
-  
-  console.log('📋 Requesting transaction report from Amazon...');
-  
-  // Step 1: Request the report
-  const reportId = await requestTransactionReport(accessToken, marketplaceIds, startDate, endDate);
-  
-  console.log(`📋 Report requested, ID: ${reportId}`);
-  
-  // Step 2: Poll until report is ready (up to 5 minutes)
-  const reportDocumentId = await pollReportStatus(accessToken, reportId);
-  
-  console.log(`📄 Report ready, document ID: ${reportDocumentId}`);
-  
-  // Step 3: Get download URL
-  const downloadUrl = await getReportDocument(accessToken, reportDocumentId);
-  
-  console.log(`⬇️ Downloading report...`);
-  
-  // Step 4: Download and parse the report
-  const transactions = await downloadAndParseReport(downloadUrl);
-  
-  console.log(`✅ Parsed ${transactions.length} transactions`);
-  
-  return transactions;
-}
-
-async function requestTransactionReport(accessToken, marketplaceIds, startDate, endDate) {
-  // Convert dates to ISO format for API
-  const dataStartTime = new Date(startDate).toISOString();
-  const dataEndTime = new Date(endDate + 'T23:59:59').toISOString();
-  
-  const response = await fetch('https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports', {
-    method: 'POST',
-    headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
-      marketplaceIds: marketplaceIds,
-      dataStartTime: dataStartTime,
-      dataEndTime: dataEndTime
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to request report: ${error}`);
-  }
-
-  const data = await response.json();
-  return data.reportId;
-}
-
-async function pollReportStatus(accessToken, reportId, maxAttempts = 30) {
-  // Poll every 10 seconds, up to 5 minutes
-  for (let i = 0; i < maxAttempts; i++) {
-    const response = await fetch(`https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports/${reportId}`, {
+    // Step 2: Request report
+    const reportResponse = await fetch('https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports', {
+      method: 'POST',
       headers: {
-        'x-amz-access-token': accessToken
-      }
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to check report status: ${error}`);
-    }
-
-    const data = await response.json();
-    
-    if (data.processingStatus === 'DONE') {
-      return data.reportDocumentId;
-    } else if (data.processingStatus === 'FATAL' || data.processingStatus === 'CANCELLED') {
-      throw new Error(`Report processing failed with status: ${data.processingStatus}`);
-    }
-    
-    // Wait 10 seconds before next poll
-    await new Promise(resolve => setTimeout(resolve, 10000));
-  }
-  
-  throw new Error('Report generation timed out after 5 minutes');
-}
-
-async function getReportDocument(accessToken, reportDocumentId) {
-  const response = await fetch(`https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/documents/${reportDocumentId}`, {
-    headers: {
-      'x-amz-access-token': accessToken
-    }
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to get report document: ${error}`);
-  }
-
-  const data = await response.json();
-  return data.url;
-}
-
-async function downloadAndParseReport(url) {
-  const response = await fetch(url);
-  
-  if (!response.ok) {
-    throw new Error('Failed to download report');
-  }
-
-  const text = await response.text();
-  
-  // Log first 2000 characters to see actual format
-  console.log('═══════════════════════════════════════');
-  console.log('📄 RAW REPORT FROM AMAZON API (first 2000 chars):');
-  console.log(text.substring(0, 2000));
-  console.log('═══════════════════════════════════════');
-  
-  const lines = text.split('\n').filter(line => line.trim());
-  
-  console.log(`\n📊 Total lines: ${lines.length}`);
-  
-  if (lines.length < 2) {
-    console.log('❌ Report has fewer than 2 lines - cannot parse');
-    return [];
-  }
-
-  console.log(`\n📋 First line (headers):\n${lines[0].substring(0, 500)}`);
-  if (lines.length > 1) {
-    console.log(`\n📋 Second line (first data row):\n${lines[1].substring(0, 500)}`);
-  }
-  
-  // Parse TSV (tab-separated values)
-  const headers = lines[0].split('\t').map(h => h.trim());
-  const transactions = [];
-
-  // Create column index map
-  const colIndex = {};
-  headers.forEach((header, index) => {
-    colIndex[header.toLowerCase()] = index;
-  });
-
-  console.log(`🔍 Column indexes - date/time: ${colIndex['date/time']}, order id: ${colIndex['order id']}, sku: ${colIndex['sku']}`);
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split('\t');
-    
-    // Parse date/time to YYYY-MM-DD format
-    const dateTime = values[colIndex['date/time']] || '';
-    let date = '';
-    if (dateTime) {
-      // Parse "Mar 1, 2026 12:52:57 AM PST" format
-      const datePart = dateTime.split(' ').slice(0, 3).join(' '); // "Mar 1, 2026"
-      const parsed = new Date(datePart);
-      if (!isNaN(parsed)) {
-        date = parsed.toISOString().split('T')[0]; // "2026-03-01"
-      }
-    }
-    
-    if (!date) continue;
-
-    const transaction = {
-      'date': date,
-      'order-id': values[colIndex['order id']] || '',
-      'sku': values[colIndex['sku']] || '',
-      'asin': '', // Not in this report
-      'type': values[colIndex['type']] || 'Order',
-      'fulfillment': values[colIndex['fulfillment']] || 'Seller',
-      'quantity': parseFloat(values[colIndex['quantity']]) || 0,
-      'product sales': parseFloat(values[colIndex['product sales']]) || 0,
-      'shipping credits': parseFloat(values[colIndex['shipping credits']]) || 0,
-      'gift wrap credits': parseFloat(values[colIndex['gift wrap credits']]) || 0,
-      'promotional rebates': parseFloat(values[colIndex['promotional rebates']]) || 0,
-      'sales tax collected': (parseFloat(values[colIndex['product sales tax']]) || 0) + (parseFloat(values[colIndex['shipping credits tax']]) || 0),
-      'selling fees': parseFloat(values[colIndex['selling fees']]) || 0,
-      'fba fees': parseFloat(values[colIndex['fba fees']]) || 0,
-      'other transaction fees': parseFloat(values[colIndex['other transaction fees']]) || 0,
-      'other': parseFloat(values[colIndex['other']]) || 0,
-      'total': parseFloat(values[colIndex['total']]) || 0
-    };
-
-    if (transaction['order-id'] && transaction['sku']) {
-      transactions.push(transaction);
-    }
-  }
-
-  console.log(`✅ Parsed ${transactions.length} transactions`);
-  return transactions;
-}
-
-// ==================== SHIPSTATION ====================
-
-async function fetchShipStationShipping(startDate, endDate) {
-  try {
-    const authHeader = 'Basic ' + Buffer.from(
-      `${process.env.SHIPSTATION_API_KEY}:${process.env.SHIPSTATION_API_SECRET}`
-    ).toString('base64');
-    
-    const url = `https://ssapi.shipstation.com/shipments?shipDateStart=${startDate}&shipDateEnd=${endDate}`;
-    
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': authHeader,
+        'x-amz-access-token': access_token,
         'Content-Type': 'application/json'
-      }
+      },
+      body: JSON.stringify({
+        reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+        marketplaceIds: [process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'],
+        dataStartTime: new Date(startDate).toISOString(),
+        dataEndTime: new Date(endDate + 'T23:59:59').toISOString()
+      })
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to fetch ShipStation data: ${error}`);
+    if (!reportResponse.ok) {
+      const error = await reportResponse.text();
+      return res.status(500).json({ error: 'Failed to request report', details: error });
     }
 
-    const data = await response.json();
-    const shipments = data.shipments || [];
-    
-    // Transform to our shipping format
-    const shipping = shipments.map(s => ({
-      'ship date': s.shipDate?.split('T')[0] || startDate,
-      'order id': s.orderNumber,
-      'shipping cost': parseFloat(s.shipmentCost) || 0
-    }));
-    
-    return shipping;
+    const { reportId } = await reportResponse.json();
+
+    // Step 3: Poll for report completion (max 5 minutes)
+    let reportDocumentId = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+
+      const statusResponse = await fetch(
+        `https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports/${reportId}`,
+        { headers: { 'x-amz-access-token': access_token } }
+      );
+
+      if (!statusResponse.ok) {
+        return res.status(500).json({ error: 'Failed to check report status' });
+      }
+
+      const statusData = await statusResponse.json();
+
+      if (statusData.processingStatus === 'DONE') {
+        reportDocumentId = statusData.reportDocumentId;
+        break;
+      } else if (statusData.processingStatus === 'FATAL' || statusData.processingStatus === 'CANCELLED') {
+        return res.status(500).json({ error: `Report failed: ${statusData.processingStatus}` });
+      }
+    }
+
+    if (!reportDocumentId) {
+      return res.status(500).json({ error: 'Report generation timed out' });
+    }
+
+    // Step 4: Get download URL
+    const docResponse = await fetch(
+      `https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/documents/${reportDocumentId}`,
+      { headers: { 'x-amz-access-token': access_token } }
+    );
+
+    if (!docResponse.ok) {
+      return res.status(500).json({ error: 'Failed to get document URL' });
+    }
+
+    const { url: downloadUrl } = await docResponse.json();
+
+    // Step 5: Download report
+    const downloadResponse = await fetch(downloadUrl);
+    if (!downloadResponse.ok) {
+      return res.status(500).json({ error: 'Failed to download report' });
+    }
+
+    const reportText = await downloadResponse.text();
+    const lines = reportText.split('\n').filter(l => l.trim());
+
+    if (lines.length < 2) {
+      return res.status(500).json({ error: 'Empty report' });
+    }
+
+    // Step 6: Parse report
+    const headers = lines[0].split('\t');
+    const rows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split('\t');
+      const row = {};
+      headers.forEach((h, idx) => {
+        row[h] = values[idx] || '';
+      });
+      rows.push(row);
+    }
+
+    // Step 7: Transform and write to KV
+    const transactionsByMonth = {};
+
+    for (const row of rows) {
+      const dateTime = row['date/time'] || '';
+      if (!dateTime) continue;
+
+      // Parse "Mar 1, 2026 12:52:57 AM PST" to "2026-03-01"
+      const datePart = dateTime.split(' ').slice(0, 3).join(' ');
+      const parsed = new Date(datePart);
+      if (isNaN(parsed)) continue;
+
+      const date = parsed.toISOString().split('T')[0];
+      const month = date.substring(0, 7);
+
+      if (!transactionsByMonth[month]) {
+        transactionsByMonth[month] = [];
+      }
+
+      transactionsByMonth[month].push([
+        date,
+        row['order id'] || '',
+        row['sku'] || '',
+        '',
+        row['type'] || 'Order',
+        row['fulfillment'] || 'Seller',
+        parseFloat(row['quantity']) || 0,
+        parseFloat(row['product sales']) || 0,
+        parseFloat(row['shipping credits']) || 0,
+        parseFloat(row['gift wrap credits']) || 0,
+        parseFloat(row['promotional rebates']) || 0,
+        (parseFloat(row['product sales tax']) || 0) + (parseFloat(row['shipping credits tax']) || 0),
+        parseFloat(row['selling fees']) || 0,
+        parseFloat(row['fba fees']) || 0,
+        parseFloat(row['other transaction fees']) || 0,
+        parseFloat(row['other']) || 0,
+        parseFloat(row['total']) || 0
+      ]);
+    }
+
+    // Write to KV
+    const kvHeaders = ['date', 'order-id', 'sku', 'asin', 'type', 'fulfillment', 'quantity',
+      'product sales', 'shipping credits', 'gift wrap credits', 'promotional rebates',
+      'sales tax collected', 'selling fees', 'fba fees', 'other transaction fees',
+      'other', 'total'];
+
+    let totalRows = 0;
+    for (const [month, rows] of Object.entries(transactionsByMonth)) {
+      await kv.set(`transactions:${month}`, JSON.stringify({ headers: kvHeaders, rows }));
+      totalRows += rows.length;
+    }
+
+    res.json({
+      success: true,
+      totalRows,
+      months: Object.keys(transactionsByMonth)
+    });
+
   } catch (error) {
-    console.error('Error fetching ShipStation data:', error);
-    throw new Error(`ShipStation API error: ${error.message}`);
+    console.error('Backfill error:', error);
+    res.status(500).json({ error: error.message });
   }
-}
-
-// ==================== WRITE TO KV ====================
-
-async function writeTransactionsToKV(transactions) {
-  // Group by month
-  const byMonth = {};
-  
-  transactions.forEach(t => {
-    const month = t.date.substring(0, 7); // YYYY-MM
-    
-    if (!month || month.length !== 7) return;
-    
-    if (!byMonth[month]) {
-      byMonth[month] = [];
-    }
-    
-    // Convert transaction object to array format matching your Transactions sheet
-    const row = [
-      t.date,
-      t['order-id'],
-      t.sku,
-      t.asin,
-      t.type,
-      t.fulfillment,
-      t.quantity,
-      t['product sales'],
-      t['shipping credits'],
-      t['gift wrap credits'],
-      t['promotional rebates'],
-      t['sales tax collected'],
-      t['selling fees'],
-      t['fba fees'],
-      t['other transaction fees'],
-      t['other'],
-      t.total
-    ];
-    
-    byMonth[month].push(row);
-  });
-
-  // Write each month to KV (overwrites existing data)
-  const headers = ['date', 'order-id', 'sku', 'asin', 'type', 'fulfillment', 'quantity', 
-                   'product sales', 'shipping credits', 'gift wrap credits', 'promotional rebates',
-                   'sales tax collected', 'selling fees', 'fba fees', 'other transaction fees', 
-                   'other', 'total'];
-  
-  let totalRows = 0;
-  const monthCounts = {};
-  
-  for (const [month, newRows] of Object.entries(byMonth)) {
-    const key = `transactions:${month}`;
-    
-    // Overwrite (not merge) - this replaces bad data with correct data
-    await kv.set(key, JSON.stringify({ headers, rows: newRows }));
-    
-    monthCounts[month] = newRows.length;
-    totalRows += newRows.length;
-    console.log(`  ✓ Transactions ${month}: ${newRows.length} rows`);
-  }
-
-  return { totalRows, byMonth: monthCounts };
-}
-
-async function writeShippingToKV(shipping) {
-  // Group by month
-  const byMonth = {};
-  
-  shipping.forEach(s => {
-    const month = s['ship date'].substring(0, 7);
-    if (!byMonth[month]) {
-      byMonth[month] = [];
-    }
-    
-    const row = [
-      s['ship date'],
-      s['order id'],
-      s['shipping cost']
-    ];
-    
-    byMonth[month].push(row);
-  });
-
-  const headers = ['ship date', 'order id', 'shipping cost'];
-  
-  let totalRows = 0;
-  const monthCounts = {};
-  
-  for (const [month, newRows] of Object.entries(byMonth)) {
-    const key = `shipping:${month}`;
-    
-    // Overwrite (not merge) - replaces existing data
-    await kv.set(key, JSON.stringify({ headers, rows: newRows }));
-    
-    monthCounts[month] = newRows.length;
-    totalRows += newRows.length;
-    console.log(`  ✓ Shipping ${month}: ${newRows.length} rows`);
-  }
-
-  return { totalRows, byMonth: monthCounts };
 }
