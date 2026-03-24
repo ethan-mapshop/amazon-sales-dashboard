@@ -1,4 +1,4 @@
-// Backfill endpoint - fetch historical data and write to KV
+// Backfill endpoint - fetch historical data using Reports API and write to KV
 // POST /api/backfill with x-admin-token header
 // Body: { startDate: "2026-03-01", endDate: "2026-03-24" }
 
@@ -27,9 +27,12 @@ export default async function handler(req, res) {
 
     console.log(`🔄 Starting backfill from ${startDate} to ${endDate}`);
 
+    // Get SP-API access token
+    const accessToken = await getAmazonAccessToken();
+
     // Fetch data from all sources
     const [transactions, shipping] = await Promise.all([
-      fetchAmazonTransactions(startDate, endDate),
+      fetchAmazonTransactionsReport(accessToken, startDate, endDate),
       fetchShipStationShipping(startDate, endDate)
     ]);
 
@@ -58,52 +61,7 @@ export default async function handler(req, res) {
   }
 }
 
-// ==================== AMAZON SP-API ====================
-
-async function fetchAmazonTransactions(startDate, endDate) {
-  try {
-    // Get access token from LWA (Login with Amazon)
-    const accessToken = await getAmazonAccessToken();
-    
-    // Fetch orders from SP-API
-    const orders = await fetchAmazonOrders(accessToken, startDate, endDate);
-    
-    // Transform to our transaction format
-    const transactions = [];
-    
-    for (const order of orders) {
-      // Fetch order items
-      const items = await fetchOrderItems(accessToken, order.AmazonOrderId);
-      
-      for (const item of items) {
-        transactions.push({
-          date: order.PurchaseDate?.split('T')[0] || startDate,
-          'order-id': order.AmazonOrderId,
-          sku: item.SellerSKU,
-          asin: item.ASIN,
-          type: 'Order',
-          fulfillment: order.FulfillmentChannel === 'AFN' ? 'Amazon' : 'Seller',
-          quantity: parseInt(item.QuantityOrdered) || 1,
-          'product sales': parseFloat(item.ItemPrice?.Amount || 0),
-          'shipping credits': parseFloat(item.ShippingPrice?.Amount || 0),
-          'gift wrap credits': parseFloat(item.GiftWrapPrice?.Amount || 0),
-          'promotional rebates': parseFloat(item.PromotionDiscount?.Amount || 0) * -1,
-          'sales tax collected': parseFloat(item.ItemTax?.Amount || 0),
-          'selling fees': parseFloat(item.Commission?.Amount || 0) * -1,
-          'fba fees': order.FulfillmentChannel === 'AFN' ? parseFloat(item.ItemPrice?.Amount || 0) * 0.15 * -1 : 0, // Estimate
-          'other transaction fees': 0,
-          'other': 0,
-          total: parseFloat(item.ItemPrice?.Amount || 0)
-        });
-      }
-    }
-    
-    return transactions;
-  } catch (error) {
-    console.error('Error fetching Amazon transactions:', error);
-    throw new Error(`Amazon SP-API error: ${error.message}`);
-  }
-}
+// ==================== AMAZON SP-API REPORTS ====================
 
 async function getAmazonAccessToken() {
   const response = await fetch('https://api.amazon.com/auth/o2/token', {
@@ -126,49 +84,140 @@ async function getAmazonAccessToken() {
   return data.access_token;
 }
 
-async function fetchAmazonOrders(accessToken, startDate, endDate) {
-  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
+async function fetchAmazonTransactionsReport(accessToken, startDate, endDate) {
+  const marketplaceIds = [process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'];
   
-  // Convert dates to ISO format
-  const createdAfter = new Date(startDate).toISOString();
-  const createdBefore = new Date(endDate + 'T23:59:59').toISOString();
+  console.log('📋 Requesting transaction report from Amazon...');
   
-  const url = `https://sellingpartnerapi-na.amazon.com/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${createdAfter}&CreatedBefore=${createdBefore}`;
+  // Step 1: Request the report
+  const reportId = await requestTransactionReport(accessToken, marketplaceIds, startDate, endDate);
   
-  const response = await fetch(url, {
+  console.log(`📋 Report requested, ID: ${reportId}`);
+  
+  // Step 2: Poll until report is ready (up to 5 minutes)
+  const reportDocumentId = await pollReportStatus(accessToken, reportId);
+  
+  console.log(`📄 Report ready, document ID: ${reportDocumentId}`);
+  
+  // Step 3: Get download URL
+  const downloadUrl = await getReportDocument(accessToken, reportDocumentId);
+  
+  console.log(`⬇️ Downloading report...`);
+  
+  // Step 4: Download and parse the report
+  const transactions = await downloadAndParseReport(downloadUrl);
+  
+  console.log(`✅ Parsed ${transactions.length} transactions`);
+  
+  return transactions;
+}
+
+async function requestTransactionReport(accessToken, marketplaceIds, startDate, endDate) {
+  // Convert dates to ISO format for API
+  const dataStartTime = new Date(startDate).toISOString();
+  const dataEndTime = new Date(endDate + 'T23:59:59').toISOString();
+  
+  const response = await fetch('https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports', {
+    method: 'POST',
     headers: {
       'x-amz-access-token': accessToken,
       'Content-Type': 'application/json'
-    }
+    },
+    body: JSON.stringify({
+      reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+      marketplaceIds: marketplaceIds,
+      dataStartTime: dataStartTime,
+      dataEndTime: dataEndTime
+    })
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to fetch orders: ${error}`);
+    throw new Error(`Failed to request report: ${error}`);
   }
 
   const data = await response.json();
-  return data.payload?.Orders || [];
+  return data.reportId;
 }
 
-async function fetchOrderItems(accessToken, orderId) {
-  const url = `https://sellingpartnerapi-na.amazon.com/orders/v0/orders/${orderId}/orderItems`;
+async function pollReportStatus(accessToken, reportId, maxAttempts = 30) {
+  // Poll every 10 seconds, up to 5 minutes
+  for (let i = 0; i < maxAttempts; i++) {
+    const response = await fetch(`https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports/${reportId}`, {
+      headers: {
+        'x-amz-access-token': accessToken
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to check report status: ${error}`);
+    }
+
+    const data = await response.json();
+    
+    if (data.processingStatus === 'DONE') {
+      return data.reportDocumentId;
+    } else if (data.processingStatus === 'FATAL' || data.processingStatus === 'CANCELLED') {
+      throw new Error(`Report processing failed with status: ${data.processingStatus}`);
+    }
+    
+    // Wait 10 seconds before next poll
+    await new Promise(resolve => setTimeout(resolve, 10000));
+  }
   
-  const response = await fetch(url, {
+  throw new Error('Report generation timed out after 5 minutes');
+}
+
+async function getReportDocument(accessToken, reportDocumentId) {
+  const response = await fetch(`https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/documents/${reportDocumentId}`, {
     headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json'
+      'x-amz-access-token': accessToken
     }
   });
 
   if (!response.ok) {
     const error = await response.text();
-    console.warn(`Failed to fetch items for order ${orderId}:`, error);
+    throw new Error(`Failed to get report document: ${error}`);
+  }
+
+  const data = await response.json();
+  return data.url;
+}
+
+async function downloadAndParseReport(url) {
+  const response = await fetch(url);
+  
+  if (!response.ok) {
+    throw new Error('Failed to download report');
+  }
+
+  const text = await response.text();
+  const lines = text.split('\n').filter(line => line.trim());
+  
+  if (lines.length < 2) {
     return [];
   }
 
-  const data = await response.json();
-  return data.payload?.OrderItems || [];
+  // Parse TSV (tab-separated values)
+  const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
+  const transactions = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split('\t');
+    const row = {};
+    
+    headers.forEach((header, index) => {
+      row[header] = values[index] || '';
+    });
+
+    // Only include if it has required fields
+    if (row['amazon-order-id'] && row['sku']) {
+      transactions.push(row);
+    }
+  }
+
+  return transactions;
 }
 
 // ==================== SHIPSTATION ====================
@@ -217,30 +266,34 @@ async function writeTransactionsToKV(transactions) {
   const byMonth = {};
   
   transactions.forEach(t => {
-    const month = t.date.substring(0, 7); // YYYY-MM
+    const date = t['purchase-date'] || t['order-date'] || '';
+    const month = date.substring(0, 7); // YYYY-MM
+    
+    if (!month || month.length !== 7) return;
+    
     if (!byMonth[month]) {
       byMonth[month] = [];
     }
     
-    // Convert to array format
+    // Map Amazon report columns to our format
     const row = [
-      t.date,
-      t['order-id'],
-      t.sku,
-      t.asin,
-      t.type,
-      t.fulfillment,
-      t.quantity,
-      t['product sales'],
-      t['shipping credits'],
-      t['gift wrap credits'],
-      t['promotional rebates'],
-      t['sales tax collected'],
-      t['selling fees'],
-      t['fba fees'],
-      t['other transaction fees'],
-      t['other'],
-      t.total
+      date.split('T')[0], // date
+      t['amazon-order-id'] || '', // order-id
+      t['sku'] || '', // sku
+      t['asin'] || '', // asin
+      t['item-status'] || 'Order', // type
+      t['is-business-order'] === 'true' ? 'Amazon' : (t['fulfillment-channel'] || 'Seller'), // fulfillment
+      parseFloat(t['quantity-purchased'] || 0), // quantity
+      parseFloat(t['item-price'] || 0), // product sales
+      parseFloat(t['shipping-price'] || 0), // shipping credits
+      parseFloat(t['gift-wrap-price'] || 0), // gift wrap credits
+      parseFloat(t['item-promotion-discount'] || 0) * -1, // promotional rebates
+      parseFloat(t['item-tax'] || 0), // sales tax collected
+      parseFloat(t['commission'] || 0) * -1, // selling fees
+      0, // fba fees (not in this report, will need to fetch separately or estimate)
+      0, // other transaction fees
+      0, // other
+      parseFloat(t['item-price'] || 0) + parseFloat(t['shipping-price'] || 0) + parseFloat(t['gift-wrap-price'] || 0) // total
     ];
     
     byMonth[month].push(row);
