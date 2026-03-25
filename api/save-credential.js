@@ -1,129 +1,69 @@
-// Save credential endpoint - updates Vercel environment variables
-// POST /api/save-credential
-// Headers: Authorization: Bearer <google-token>
-// Body: { key: "AMAZON_LWA_CLIENT_ID", value: "..." }
+// Save encrypted credentials to Upstash
+// POST /api/save-credential-upstash
+// Body: { key: "AMAZON_LWA_CLIENT_ID", encryptedValue: "..." }
+
+import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Verify Google token from Authorization header
+  // Verify Google token
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized - No token provided' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   const token = authHeader.substring(7);
   
-  // Verify token with Google
   try {
     const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${token}`);
     if (!verifyResponse.ok) {
-      return res.status(401).json({ error: 'Unauthorized - Invalid token' });
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-  } catch (error) {
-    return res.status(401).json({ error: 'Unauthorized - Token verification failed' });
-  }
+    
+    const tokenInfo = await verifyResponse.json();
+    const userEmail = tokenInfo.email;
+    
+    if (!userEmail) {
+      return res.status(401).json({ error: 'No email in token' });
+    }
+    
+    const { key, encryptedValue } = req.body;
 
-  const { key, value } = req.body;
-
-  if (!key || !value) {
-    return res.status(400).json({ error: 'Missing key or value' });
-  }
-
-  // Allowlist of updatable keys - never allow arbitrary env var writes
-  const allowedKeys = [
-    'AMAZON_LWA_CLIENT_ID',
-    'AMAZON_LWA_CLIENT_SECRET',
-    'AMAZON_REFRESH_TOKEN',
-    'AMAZON_SELLER_ID',
-    'AMAZON_MARKETPLACE_ID',
-    'ADV_CLIENT_ID',
-    'ADV_CLIENT_SECRET',
-    'ADV_REFRESH_TOKEN',
-    'ADV_PROFILE_ID',
-    'SHIPSTATION_API_KEY',
-    'SHIPSTATION_API_SECRET',
-    'ANTHROPIC_API_KEY',
-    'GOOGLE_CLIENT_ID'
-  ];
-
-  if (!allowedKeys.includes(key)) {
-    return res.status(403).json({ error: 'Key not allowed' });
-  }
-
-  // Check if required Vercel env vars are set
-  if (!process.env.VERCEL_TOKEN || !process.env.VERCEL_PROJECT_ID) {
-    return res.status(500).json({ 
-      error: 'Server not configured',
-      message: 'VERCEL_TOKEN and VERCEL_PROJECT_ID environment variables must be set'
-    });
-  }
-
-  try {
-    // First, try to find existing env var with this key
-    const listResponse = await fetch(
-      `https://api.vercel.com/v9/projects/${process.env.VERCEL_PROJECT_ID}/env`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.VERCEL_TOKEN}`
-        }
-      }
-    );
-
-    if (listResponse.ok) {
-      const { envs } = await listResponse.json();
-      const existing = envs.find(e => e.key === key && e.target.includes('production'));
-      
-      // If exists, delete it first
-      if (existing) {
-        await fetch(
-          `https://api.vercel.com/v9/projects/${process.env.VERCEL_PROJECT_ID}/env/${existing.id}`,
-          {
-            method: 'DELETE',
-            headers: {
-              Authorization: `Bearer ${process.env.VERCEL_TOKEN}`
-            }
-          }
-        );
-      }
+    if (!key || !encryptedValue) {
+      return res.status(400).json({ error: 'Missing key or encryptedValue' });
     }
 
-    // Now create/update the env var
-    const response = await fetch(
-      `https://api.vercel.com/v10/projects/${process.env.VERCEL_PROJECT_ID}/env`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          key,
-          value,
-          type: 'encrypted',
-          target: ['production']
-        })
-      }
-    );
+    // Allowlist of credential keys
+    const allowedKeys = [
+      'AMAZON_LWA_CLIENT_ID',
+      'AMAZON_LWA_CLIENT_SECRET',
+      'AMAZON_REFRESH_TOKEN',
+      'AMAZON_SELLER_ID',
+      'AMAZON_MARKETPLACE_ID',
+      'ADV_CLIENT_ID',
+      'ADV_CLIENT_SECRET',
+      'ADV_REFRESH_TOKEN',
+      'ADV_PROFILE_ID',
+      'SHIPSTATION_API_KEY',
+      'SHIPSTATION_API_SECRET',
+      'ANTHROPIC_API_KEY',
+      'GOOGLE_CLIENT_ID'
+    ];
 
-    if (!response.ok) {
-      const error = await response.text();
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to update environment variable',
-        details: error
-      });
+    if (!allowedKeys.includes(key)) {
+      return res.status(403).json({ error: 'Key not allowed' });
     }
+
+    // Store in Upstash with user-specific key
+    const kvKey = `credential:${userEmail}:${key}`;
+    await kv.set(kvKey, encryptedValue);
 
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error saving credential:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    res.status(500).json({ error: error.message });
   }
 }
