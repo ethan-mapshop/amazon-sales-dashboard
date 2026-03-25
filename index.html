@@ -1165,6 +1165,14 @@
       border-color: var(--accent-orange);
     }
     
+    .credential-status {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      min-width: 120px;
+      white-space: nowrap;
+    }
+    
     .btn-icon {
       padding: 0.75rem;
       background: var(--bg-secondary);
@@ -1632,8 +1640,10 @@
         <div class="credential-row">
           <label>LWA Client ID</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_LWA_CLIENT_ID" readonly value="••••••••••••••">
+            <span id="AMAZON_LWA_CLIENT_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_LWA_CLIENT_ID" placeholder="Enter LWA Client ID" readonly>
             <button class="btn-icon" onclick="toggleReveal('AMAZON_LWA_CLIENT_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('AMAZON_LWA_CLIENT_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_LWA_CLIENT_ID')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1641,8 +1651,10 @@
         <div class="credential-row">
           <label>LWA Client Secret</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_LWA_CLIENT_SECRET" readonly value="••••••••••••••">
+            <span id="AMAZON_LWA_CLIENT_SECRET-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_LWA_CLIENT_SECRET" placeholder="Enter LWA Client Secret" readonly>
             <button class="btn-icon" onclick="toggleReveal('AMAZON_LWA_CLIENT_SECRET')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('AMAZON_LWA_CLIENT_SECRET')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_LWA_CLIENT_SECRET')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1650,8 +1662,10 @@
         <div class="credential-row">
           <label>Refresh Token</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_REFRESH_TOKEN" readonly value="••••••••••••••">
+            <span id="AMAZON_REFRESH_TOKEN-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_REFRESH_TOKEN" placeholder="Enter Refresh Token" readonly>
             <button class="btn-icon" onclick="toggleReveal('AMAZON_REFRESH_TOKEN')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('AMAZON_REFRESH_TOKEN')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_REFRESH_TOKEN')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1659,8 +1673,10 @@
         <div class="credential-row">
           <label>Seller ID</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_SELLER_ID" readonly value="••••••••••••••">
+            <span id="AMAZON_SELLER_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_SELLER_ID" placeholder="Enter Seller ID" readonly>
             <button class="btn-icon" onclick="toggleReveal('AMAZON_SELLER_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('AMAZON_SELLER_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_SELLER_ID')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1668,7 +1684,9 @@
         <div class="credential-row">
           <label>Marketplace ID</label>
           <div class="credential-input-group">
-            <input type="text" id="AMAZON_MARKETPLACE_ID" readonly value="ATVPDKIKX0DER">
+            <span id="AMAZON_MARKETPLACE_ID-status" class="credential-status">○ Not configured</span>
+            <input type="text" id="AMAZON_MARKETPLACE_ID" placeholder="ATVPDKIKX0DER" readonly>
+            <button class="btn-icon" onclick="copyToClipboard('AMAZON_MARKETPLACE_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_MARKETPLACE_ID')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1687,8 +1705,10 @@
         <div class="credential-row">
           <label>Client ID</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_CLIENT_ID" readonly value="••••••••••••••">
+            <span id="ADV_CLIENT_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_CLIENT_ID" placeholder="Enter Client ID" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_CLIENT_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('ADV_CLIENT_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_CLIENT_ID')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1696,8 +1716,10 @@
         <div class="credential-row">
           <label>Client Secret</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_CLIENT_SECRET" readonly value="••••••••••••••">
+            <span id="ADV_CLIENT_SECRET-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_CLIENT_SECRET" placeholder="Enter Client Secret" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_CLIENT_SECRET')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('ADV_CLIENT_SECRET')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_CLIENT_SECRET')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1705,8 +1727,10 @@
         <div class="credential-row">
           <label>Refresh Token</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_REFRESH_TOKEN" readonly value="••••••••••••••">
+            <span id="ADV_REFRESH_TOKEN-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_REFRESH_TOKEN" placeholder="Enter Refresh Token" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_REFRESH_TOKEN')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('ADV_REFRESH_TOKEN')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_REFRESH_TOKEN')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1714,8 +1738,10 @@
         <div class="credential-row">
           <label>Profile ID</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_PROFILE_ID" readonly value="••••••••••••••">
+            <span id="ADV_PROFILE_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_PROFILE_ID" placeholder="Enter Profile ID" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_PROFILE_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('ADV_PROFILE_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_PROFILE_ID')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1734,8 +1760,10 @@
         <div class="credential-row">
           <label>API Key</label>
           <div class="credential-input-group">
-            <input type="password" id="SHIPSTATION_API_KEY" readonly value="••••••••••••••">
+            <span id="SHIPSTATION_API_KEY-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="SHIPSTATION_API_KEY" placeholder="Enter API Key" readonly>
             <button class="btn-icon" onclick="toggleReveal('SHIPSTATION_API_KEY')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('SHIPSTATION_API_KEY')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('SHIPSTATION_API_KEY')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1743,8 +1771,10 @@
         <div class="credential-row">
           <label>API Secret</label>
           <div class="credential-input-group">
-            <input type="password" id="SHIPSTATION_API_SECRET" readonly value="••••••••••••••">
+            <span id="SHIPSTATION_API_SECRET-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="SHIPSTATION_API_SECRET" placeholder="Enter API Secret" readonly>
             <button class="btn-icon" onclick="toggleReveal('SHIPSTATION_API_SECRET')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('SHIPSTATION_API_SECRET')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('SHIPSTATION_API_SECRET')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1763,8 +1793,10 @@
         <div class="credential-row">
           <label>API Key</label>
           <div class="credential-input-group">
-            <input type="password" id="ANTHROPIC_API_KEY" readonly value="••••••••••••••">
+            <span id="ANTHROPIC_API_KEY-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ANTHROPIC_API_KEY" placeholder="Enter API Key" readonly>
             <button class="btn-icon" onclick="toggleReveal('ANTHROPIC_API_KEY')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="copyToClipboard('ANTHROPIC_API_KEY')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ANTHROPIC_API_KEY')" title="Edit">✏️</button>
           </div>
         </div>
@@ -1783,7 +1815,9 @@
         <div class="credential-row">
           <label>Client ID</label>
           <div class="credential-input-group">
-            <input type="text" id="GOOGLE_CLIENT_ID" readonly value="Default client configured">
+            <span id="GOOGLE_CLIENT_ID-status" class="credential-status">● Connected</span>
+            <input type="text" id="GOOGLE_CLIENT_ID" placeholder="Using default client" readonly>
+            <button class="btn-icon" onclick="copyToClipboard('GOOGLE_CLIENT_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('GOOGLE_CLIENT_ID')" title="Edit">✏️</button>
           </div>
         </div>
@@ -6417,22 +6451,23 @@
         if (response.ok) {
           const { credentials } = await response.json();
           
-          // Update status indicators and input values
+          // Update each individual credential status
           Object.keys(credentials).forEach(key => {
             const isConfigured = credentials[key];
-            const input = document.getElementById(key);
+            const statusSpan = document.getElementById(`${key}-status`);
             
-            if (input) {
+            if (statusSpan) {
               if (isConfigured) {
-                input.value = '***REDACTED***';
+                statusSpan.textContent = '● Connected';
+                statusSpan.style.color = 'var(--success)';
               } else {
-                input.value = '';
-                input.placeholder = 'Not configured';
+                statusSpan.textContent = '○ Not configured';
+                statusSpan.style.color = 'var(--text-secondary)';
               }
             }
           });
           
-          // Update status dots for each integration
+          // Update card-level status indicators
           updateIntegrationStatus('amazon', [
             credentials.AMAZON_LWA_CLIENT_ID,
             credentials.AMAZON_LWA_CLIENT_SECRET,
@@ -6499,6 +6534,30 @@
       }
     }
     
+    function copyToClipboard(key) {
+      const input = document.getElementById(key);
+      const value = input.value;
+      
+      if (!value || value.trim() === '') {
+        alert('Nothing to copy');
+        return;
+      }
+      
+      navigator.clipboard.writeText(value).then(() => {
+        // Visual feedback
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = '✓';
+        btn.style.background = 'var(--success)';
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.style.background = '';
+        }, 1500);
+      }).catch(err => {
+        alert('Failed to copy to clipboard');
+      });
+    }
+    
     function enableEdit(key) {
       const input = document.getElementById(key);
       
@@ -6516,6 +6575,10 @@
       const editBtn = group.querySelector('button[onclick*="enableEdit"]');
       
       if (editBtn) {
+        // Determine if this field has a reveal button (password fields)
+        const hasReveal = input.type === 'password' || input.type === 'text';
+        const revealBtn = hasReveal ? `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>` : '';
+        
         editBtn.outerHTML = `
           <button class="btn-icon" onclick="saveCredential('${key}')" title="Save" style="background: var(--success);">💾</button>
           <button class="btn-icon" onclick="cancelEdit('${key}')" title="Cancel">✖</button>
@@ -6533,18 +6596,22 @@
       }
       
       input.readOnly = true;
-      input.type = 'password';
+      if (input.type === 'text' && key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID') {
+        input.type = 'password';
+      }
       
-      // Restore edit button
+      // Restore buttons
       const group = input.parentElement;
       const saveBtn = group.querySelector('button[onclick*="saveCredential"]');
       
       if (saveBtn) {
-        const revealBtn = key === 'GOOGLE_CLIENT_ID' || key === 'AMAZON_MARKETPLACE_ID' ? '' : 
-          `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>`;
+        // Determine which buttons to show
+        const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
+        const revealBtn = hasReveal ? `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>` : '';
         
         saveBtn.parentElement.innerHTML = `
           ${revealBtn}
+          <button class="btn-icon" onclick="copyToClipboard('${key}')" title="Copy">📋</button>
           <button class="btn-icon" onclick="enableEdit('${key}')" title="Edit">✏️</button>
         `;
       }
@@ -6579,27 +6646,38 @@
         if (response.ok && data.success) {
           alert('Credential saved successfully! Changes will take effect on next deployment.');
           
-          // Update original value and restore UI
-          originalValues[key] = value;
-          input.value = '••••••••••••••';
+          // Keep the value in the input but make it readonly
           input.readOnly = true;
-          input.type = 'password';
+          if (key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID') {
+            input.type = 'password';
+          }
           
-          // Restore edit button
+          // Update status indicator
+          const statusSpan = document.getElementById(`${key}-status`);
+          if (statusSpan) {
+            statusSpan.textContent = '● Connected';
+            statusSpan.style.color = 'var(--success)';
+          }
+          
+          // Restore all buttons
           const group = input.parentElement;
           const saveBtn = group.querySelector('button[onclick*="saveCredential"]');
           
           if (saveBtn) {
-            const revealBtn = key === 'GOOGLE_CLIENT_ID' || key === 'AMAZON_MARKETPLACE_ID' ? '' : 
-              `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>`;
+            const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
+            const revealBtn = hasReveal ? `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>` : '';
             
             saveBtn.parentElement.innerHTML = `
               ${revealBtn}
+              <button class="btn-icon" onclick="copyToClipboard('${key}')" title="Copy">📋</button>
               <button class="btn-icon" onclick="enableEdit('${key}')" title="Edit">✏️</button>
             `;
           }
           
           delete originalValues[key];
+          
+          // Refresh overall integration status
+          loadCredentialStatus();
         } else {
           alert('Failed to save credential: ' + (data.error || 'Unknown error'));
         }
