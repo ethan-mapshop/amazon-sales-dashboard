@@ -65,38 +65,17 @@ async function fetchAmazonTransactions(startDate, endDate) {
     // Get access token from LWA (Login with Amazon)
     const accessToken = await getAmazonAccessToken();
     
-    // Fetch orders from SP-API
-    const orders = await fetchAmazonOrders(accessToken, startDate, endDate);
+    // Request the transaction report
+    const reportId = await requestReport(accessToken, startDate, endDate);
     
-    // Transform to our transaction format
-    const transactions = [];
+    // Poll until report is ready
+    const reportDocumentId = await pollReportStatus(accessToken, reportId);
     
-    for (const order of orders) {
-      // Fetch order items
-      const items = await fetchOrderItems(accessToken, order.AmazonOrderId);
-      
-      for (const item of items) {
-        transactions.push({
-          date: order.PurchaseDate?.split('T')[0] || startDate,
-          'order-id': order.AmazonOrderId,
-          sku: item.SellerSKU,
-          asin: item.ASIN,
-          type: 'Order',
-          fulfillment: order.FulfillmentChannel === 'AFN' ? 'Amazon' : 'Seller',
-          quantity: parseInt(item.QuantityOrdered) || 1,
-          'product sales': parseFloat(item.ItemPrice?.Amount || 0),
-          'shipping credits': parseFloat(item.ShippingPrice?.Amount || 0),
-          'gift wrap credits': parseFloat(item.GiftWrapPrice?.Amount || 0),
-          'promotional rebates': parseFloat(item.PromotionDiscount?.Amount || 0) * -1,
-          'sales tax collected': parseFloat(item.ItemTax?.Amount || 0),
-          'selling fees': parseFloat(item.Commission?.Amount || 0) * -1,
-          'fba fees': order.FulfillmentChannel === 'AFN' ? parseFloat(item.ItemPrice?.Amount || 0) * 0.15 * -1 : 0, // Estimate
-          'other transaction fees': 0,
-          'other': 0,
-          total: parseFloat(item.ItemPrice?.Amount || 0)
-        });
-      }
-    }
+    // Get download URL
+    const downloadUrl = await getReportDownloadUrl(accessToken, reportDocumentId);
+    
+    // Download and parse the report
+    const transactions = await downloadAndParseReport(downloadUrl, startDate);
     
     return transactions;
   } catch (error) {
@@ -105,70 +84,128 @@ async function fetchAmazonTransactions(startDate, endDate) {
   }
 }
 
-async function getAmazonAccessToken() {
-  const response = await fetch('https://api.amazon.com/auth/o2/token', {
+async function requestReport(accessToken, startDate, endDate) {
+  const response = await fetch('https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: process.env.AMAZON_REFRESH_TOKEN,
-      client_id: process.env.AMAZON_LWA_CLIENT_ID,
-      client_secret: process.env.AMAZON_LWA_CLIENT_SECRET
+    headers: {
+      'x-amz-access-token': accessToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+      marketplaceIds: [process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'],
+      dataStartTime: new Date(startDate).toISOString(),
+      dataEndTime: new Date(endDate + 'T23:59:59').toISOString()
     })
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to get Amazon access token: ${error}`);
+    throw new Error(`Failed to request report: ${error}`);
   }
 
   const data = await response.json();
-  return data.access_token;
+  return data.reportId;
 }
 
-async function fetchAmazonOrders(accessToken, startDate, endDate) {
-  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
-  
-  // Convert dates to ISO format
-  const createdAfter = new Date(startDate).toISOString();
-  const createdBefore = new Date(endDate + 'T23:59:59').toISOString();
-  
-  const url = `https://sellingpartnerapi-na.amazon.com/orders/v0/orders?MarketplaceIds=${marketplaceId}&CreatedAfter=${createdAfter}&CreatedBefore=${createdBefore}`;
-  
-  const response = await fetch(url, {
-    headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json'
+async function pollReportStatus(accessToken, reportId) {
+  // Poll every 10 seconds for up to 5 minutes
+  for (let i = 0; i < 30; i++) {
+    await new Promise(resolve => setTimeout(resolve, 10000));
+    
+    const response = await fetch(
+      `https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports/${reportId}`,
+      { headers: { 'x-amz-access-token': accessToken } }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to check report status');
     }
-  });
+
+    const data = await response.json();
+    
+    if (data.processingStatus === 'DONE') {
+      return data.reportDocumentId;
+    } else if (data.processingStatus === 'FATAL' || data.processingStatus === 'CANCELLED') {
+      throw new Error(`Report failed: ${data.processingStatus}`);
+    }
+  }
+  
+  throw new Error('Report generation timed out');
+}
+
+async function getReportDownloadUrl(accessToken, reportDocumentId) {
+  const response = await fetch(
+    `https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/documents/${reportDocumentId}`,
+    { headers: { 'x-amz-access-token': accessToken } }
+  );
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to fetch orders: ${error}`);
+    throw new Error('Failed to get download URL');
   }
 
   const data = await response.json();
-  return data.payload?.Orders || [];
+  return data.url;
 }
 
-async function fetchOrderItems(accessToken, orderId) {
-  const url = `https://sellingpartnerapi-na.amazon.com/orders/v0/orders/${orderId}/orderItems`;
+async function downloadAndParseReport(url, startDate) {
+  const response = await fetch(url);
   
-  const response = await fetch(url, {
-    headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json'
-    }
-  });
-
   if (!response.ok) {
-    const error = await response.text();
-    console.warn(`Failed to fetch items for order ${orderId}:`, error);
+    throw new Error('Failed to download report');
+  }
+
+  const text = await response.text();
+  const lines = text.split('\n').filter(line => line.trim());
+  
+  if (lines.length < 2) {
     return [];
   }
 
-  const data = await response.json();
-  return data.payload?.OrderItems || [];
+  const headers = lines[0].split('\t');
+  const transactions = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split('\t');
+    const row = {};
+    
+    headers.forEach((header, index) => {
+      row[header] = values[index] || '';
+    });
+
+    // Parse date from "Mar 1, 2026 12:52:57 AM PST" format
+    const dateTime = row['date/time'] || '';
+    let date = startDate;
+    if (dateTime) {
+      const datePart = dateTime.split(' ').slice(0, 3).join(' ');
+      const parsed = new Date(datePart);
+      if (!isNaN(parsed)) {
+        date = parsed.toISOString().split('T')[0];
+      }
+    }
+
+    transactions.push({
+      date: date,
+      'order-id': row['order id'] || '',
+      sku: row['sku'] || '',
+      asin: '',
+      type: row['type'] || 'Order',
+      fulfillment: row['fulfillment'] || 'Seller',
+      quantity: parseFloat(row['quantity']) || 0,
+      'product sales': parseFloat(row['product sales']) || 0,
+      'shipping credits': parseFloat(row['shipping credits']) || 0,
+      'gift wrap credits': parseFloat(row['gift wrap credits']) || 0,
+      'promotional rebates': parseFloat(row['promotional rebates']) || 0,
+      'sales tax collected': (parseFloat(row['product sales tax']) || 0) + (parseFloat(row['shipping credits tax']) || 0),
+      'selling fees': parseFloat(row['selling fees']) || 0,
+      'fba fees': parseFloat(row['fba fees']) || 0,
+      'other transaction fees': parseFloat(row['other transaction fees']) || 0,
+      'other': parseFloat(row['other']) || 0,
+      total: parseFloat(row['total']) || 0
+    });
+  }
+
+  return transactions;
 }
 
 // ==================== SHIPSTATION ====================
