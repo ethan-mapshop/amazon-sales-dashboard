@@ -6437,12 +6437,79 @@
     // Store original values for cancel functionality
     const originalValues = {};
     
-    // Load credential status when page loads
+    // Encryption utilities using Web Crypto API
+    async function deriveKey(token) {
+      // Derive encryption key from Google access token
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(token),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
+      );
+      
+      return crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt: encoder.encode('credential-encryption-salt'), // Static salt - okay since token is secret
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    }
+    
+    async function encryptValue(value, token) {
+      const encoder = new TextEncoder();
+      const key = await deriveKey(token);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      
+      const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        encoder.encode(value)
+      );
+      
+      // Combine IV and encrypted data
+      const combined = new Uint8Array(iv.length + encrypted.byteLength);
+      combined.set(iv, 0);
+      combined.set(new Uint8Array(encrypted), iv.length);
+      
+      // Return as base64
+      return btoa(String.fromCharCode(...combined));
+    }
+    
+    async function decryptValue(encryptedBase64, token) {
+      const decoder = new TextDecoder();
+      const key = await deriveKey(token);
+      
+      // Decode from base64
+      const combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+      
+      // Extract IV and encrypted data
+      const iv = combined.slice(0, 12);
+      const encrypted = combined.slice(12);
+      
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        encrypted
+      );
+      
+      return decoder.decode(decrypted);
+    }
+    
+    // Load credential values from Upstash (encrypted)
     async function loadCredentialStatus() {
       if (!accessToken) return;
       
       try {
-        const response = await fetch('/api/get-credentials', {
+        // Fetch encrypted credentials from Upstash
+        const response = await fetch('/api/get-credentials-upstash', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
@@ -6451,21 +6518,25 @@
         if (response.ok) {
           const { credentials } = await response.json();
           
-          // Update each individual credential status
-          Object.keys(credentials).forEach(key => {
-            const isConfigured = credentials[key];
-            const statusSpan = document.getElementById(`${key}-status`);
-            
-            if (statusSpan) {
-              if (isConfigured) {
+          // Decrypt and populate each credential
+          for (const [key, encryptedValue] of Object.entries(credentials)) {
+            try {
+              const decryptedValue = await decryptValue(encryptedValue, accessToken);
+              const input = document.getElementById(key);
+              const statusSpan = document.getElementById(`${key}-status`);
+              
+              if (input) {
+                input.value = decryptedValue;
+              }
+              
+              if (statusSpan) {
                 statusSpan.textContent = '● Connected';
                 statusSpan.style.color = 'var(--success)';
-              } else {
-                statusSpan.textContent = '○ Not configured';
-                statusSpan.style.color = 'var(--text-secondary)';
               }
+            } catch (decryptError) {
+              console.error(`Failed to decrypt ${key}:`, decryptError);
             }
-          });
+          }
           
           // Update card-level status indicators
           updateIntegrationStatus('amazon', [
@@ -6600,16 +6671,10 @@
         input.type = 'password';
       }
       
-      // Restore buttons - find and replace only the buttons
+      // Restore buttons - find the input group and remove ALL buttons
       const group = input.parentElement;
-      const buttons = Array.from(group.querySelectorAll('button'));
-      
-      // Remove Save and Cancel buttons
-      buttons.forEach(btn => {
-        if (btn.onclick && (btn.onclick.toString().includes('saveCredential') || btn.onclick.toString().includes('cancelEdit'))) {
-          btn.remove();
-        }
-      });
+      const allButtons = group.querySelectorAll('button');
+      allButtons.forEach(btn => btn.remove());
       
       // Add back the original buttons
       const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
@@ -6653,13 +6718,17 @@
       }
       
       try {
-        const response = await fetch('/api/save-credential', {
+        // Encrypt the value
+        const encryptedValue = await encryptValue(value, accessToken);
+        
+        // Save encrypted value to Upstash
+        const response = await fetch('/api/save-credential-upstash', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${accessToken}`
           },
-          body: JSON.stringify({ key, value })
+          body: JSON.stringify({ key, encryptedValue })
         });
         
         const data = await response.json();
@@ -6678,16 +6747,10 @@
             statusSpan.style.color = 'var(--success)';
           }
           
-          // Restore buttons - find and replace only the buttons
+          // Restore buttons - remove ALL buttons first
           const group = input.parentElement;
-          const buttons = Array.from(group.querySelectorAll('button'));
-          
-          // Remove Save and Cancel buttons
-          buttons.forEach(btn => {
-            if (btn.onclick && (btn.onclick.toString().includes('saveCredential') || btn.onclick.toString().includes('cancelEdit'))) {
-              btn.remove();
-            }
-          });
+          const allButtons = group.querySelectorAll('button');
+          allButtons.forEach(btn => btn.remove());
           
           // Add back the original buttons
           const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
@@ -6718,7 +6781,7 @@
           delete originalValues[key];
           
           // Show success feedback
-          showCredentialFeedback(key, 'Saved! Changes take effect on next deployment.', 'success');
+          showCredentialFeedback(key, 'Saved successfully!', 'success');
           
           // Refresh overall integration status
           setTimeout(() => loadCredentialStatus(), 500);
