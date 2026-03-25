@@ -2078,6 +2078,10 @@
       if (pageName === 'charts' && accessToken) {
         loadChartsData(); // Load chart data
       }
+      
+      if (pageName === 'integrations' && accessToken) {
+        loadCredentialStatus(); // Load credential status
+      }
     }
     
     // Client ID management
@@ -6398,6 +6402,93 @@
     
     // Store original values for cancel functionality
     const originalValues = {};
+    
+    // Load credential status when page loads
+    async function loadCredentialStatus() {
+      if (!accessToken) return;
+      
+      try {
+        const response = await fetch('/api/get-credentials', {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        
+        if (response.ok) {
+          const { credentials } = await response.json();
+          
+          // Update status indicators and input values
+          Object.keys(credentials).forEach(key => {
+            const isConfigured = credentials[key];
+            const input = document.getElementById(key);
+            
+            if (input) {
+              if (isConfigured) {
+                input.value = '***REDACTED***';
+              } else {
+                input.value = '';
+                input.placeholder = 'Not configured';
+              }
+            }
+          });
+          
+          // Update status dots for each integration
+          updateIntegrationStatus('amazon', [
+            credentials.AMAZON_LWA_CLIENT_ID,
+            credentials.AMAZON_LWA_CLIENT_SECRET,
+            credentials.AMAZON_REFRESH_TOKEN,
+            credentials.AMAZON_SELLER_ID,
+            credentials.AMAZON_MARKETPLACE_ID
+          ]);
+          
+          updateIntegrationStatus('adv', [
+            credentials.ADV_CLIENT_ID,
+            credentials.ADV_CLIENT_SECRET,
+            credentials.ADV_REFRESH_TOKEN,
+            credentials.ADV_PROFILE_ID
+          ]);
+          
+          updateIntegrationStatus('shipstation', [
+            credentials.SHIPSTATION_API_KEY,
+            credentials.SHIPSTATION_API_SECRET
+          ]);
+          
+          updateIntegrationStatus('anthropic', [
+            credentials.ANTHROPIC_API_KEY
+          ]);
+          
+          updateIntegrationStatus('google', [
+            credentials.GOOGLE_CLIENT_ID
+          ]);
+        }
+      } catch (error) {
+        console.error('Error loading credentials:', error);
+      }
+    }
+    
+    function updateIntegrationStatus(prefix, statuses) {
+      const allConfigured = statuses.every(s => s);
+      const someConfigured = statuses.some(s => s);
+      
+      const dot = document.getElementById(`${prefix}-status-dot`);
+      const text = document.getElementById(`${prefix}-status-text`);
+      
+      if (dot && text) {
+        if (allConfigured) {
+          dot.style.background = 'var(--success)';
+          text.style.color = 'var(--success)';
+          text.textContent = 'Connected';
+        } else if (someConfigured) {
+          dot.style.background = 'var(--warning)';
+          text.style.color = 'var(--warning)';
+          text.textContent = 'Partially configured';
+        } else {
+          dot.style.background = 'var(--text-secondary)';
+          text.style.color = 'var(--text-secondary)';
+          text.textContent = 'Not configured';
+        }
+      }
+    }
     
     function toggleReveal(key) {
       const input = document.getElementById(key);
