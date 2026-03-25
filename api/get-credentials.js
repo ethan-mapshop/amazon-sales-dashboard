@@ -1,6 +1,8 @@
-// Get credential status - checks which env vars are set
-// GET /api/get-credentials
-// Returns: { AMAZON_LWA_CLIENT_ID: true, AMAZON_LWA_CLIENT_SECRET: false, ... }
+// Get encrypted credentials from Upstash
+// GET /api/get-credentials-upstash
+// Returns: { credentials: { AMAZON_LWA_CLIENT_ID: "encrypted...", ... } }
+
+import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -20,55 +22,43 @@ export default async function handler(req, res) {
     if (!verifyResponse.ok) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-  } catch (error) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  // Check if Vercel credentials are configured
-  if (!process.env.VERCEL_TOKEN || !process.env.VERCEL_PROJECT_ID) {
-    return res.status(500).json({ error: 'Server not configured' });
-  }
-
-  try {
-    // Fetch all env vars from Vercel
-    const response = await fetch(
-      `https://api.vercel.com/v9/projects/${process.env.VERCEL_PROJECT_ID}/env`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.VERCEL_TOKEN}`
-        }
-      }
-    );
-
-    if (!response.ok) {
-      return res.status(500).json({ error: 'Failed to fetch credentials' });
+    
+    const tokenInfo = await verifyResponse.json();
+    const userEmail = tokenInfo.email;
+    
+    if (!userEmail) {
+      return res.status(401).json({ error: 'No email in token' });
     }
 
-    const { envs } = await response.json();
+    // List of credential keys to fetch
+    const credentialKeys = [
+      'AMAZON_LWA_CLIENT_ID',
+      'AMAZON_LWA_CLIENT_SECRET',
+      'AMAZON_REFRESH_TOKEN',
+      'AMAZON_SELLER_ID',
+      'AMAZON_MARKETPLACE_ID',
+      'ADV_CLIENT_ID',
+      'ADV_CLIENT_SECRET',
+      'ADV_REFRESH_TOKEN',
+      'ADV_PROFILE_ID',
+      'SHIPSTATION_API_KEY',
+      'SHIPSTATION_API_SECRET',
+      'ANTHROPIC_API_KEY',
+      'GOOGLE_CLIENT_ID'
+    ];
 
-    // Build status object for each credential we care about
-    const credentials = {
-      AMAZON_LWA_CLIENT_ID: false,
-      AMAZON_LWA_CLIENT_SECRET: false,
-      AMAZON_REFRESH_TOKEN: false,
-      AMAZON_SELLER_ID: false,
-      AMAZON_MARKETPLACE_ID: false,
-      ADV_CLIENT_ID: false,
-      ADV_CLIENT_SECRET: false,
-      ADV_REFRESH_TOKEN: false,
-      ADV_PROFILE_ID: false,
-      SHIPSTATION_API_KEY: false,
-      SHIPSTATION_API_SECRET: false,
-      ANTHROPIC_API_KEY: false,
-      GOOGLE_CLIENT_ID: false
-    };
-
-    // Mark which ones exist (for production target)
-    envs.forEach(env => {
-      if (env.target.includes('production') && credentials.hasOwnProperty(env.key)) {
-        credentials[env.key] = true;
+    const credentials = {};
+    
+    // Fetch each credential from Upstash
+    for (const key of credentialKeys) {
+      const kvKey = `credential:${userEmail}:${key}`;
+      const encryptedValue = await kv.get(kvKey);
+      
+      // Only include if value exists
+      if (encryptedValue) {
+        credentials[key] = encryptedValue;
       }
-    });
+    }
 
     res.status(200).json({ credentials });
   } catch (error) {
