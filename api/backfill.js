@@ -84,6 +84,27 @@ async function fetchAmazonTransactions(startDate, endDate) {
   }
 }
 
+async function getAmazonAccessToken() {
+  const response = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: process.env.AMAZON_REFRESH_TOKEN,
+      client_id: process.env.AMAZON_LWA_CLIENT_ID,
+      client_secret: process.env.AMAZON_LWA_CLIENT_SECRET
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get Amazon access token: ${error}`);
+  }
+
+  const data = await response.json();
+  return data.access_token;
+}
+
 async function requestReport(accessToken, startDate, endDate) {
   const response = await fetch('https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports', {
     method: 'POST',
