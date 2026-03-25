@@ -1124,6 +1124,65 @@
       padding: 2rem;
     }
     
+    
+    /* ==================== INTEGRATIONS PAGE ==================== */
+    
+    .credential-row {
+      margin-bottom: 1.25rem;
+    }
+    
+    .credential-row label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+    }
+    
+    .credential-input-group {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    
+    .credential-input-group input {
+      flex: 1;
+      padding: 0.75rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-family: 'Roboto Mono', monospace;
+      font-size: 0.875rem;
+    }
+    
+    .credential-input-group input:read-only {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+    
+    .credential-input-group input:not(:read-only) {
+      border-color: var(--accent-orange);
+    }
+    
+    .btn-icon {
+      padding: 0.75rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: all 0.2s;
+      min-width: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .btn-icon:hover {
+      background: var(--bg-primary);
+      border-color: var(--accent-orange);
+    }
   </style>
 </head>
 <body>
@@ -1558,12 +1617,175 @@
 
     <!-- INTEGRATIONS PAGE (PHASE 4) -->
     <div id="integrations-page" class="page">
+      <h2 class="section-title" style="margin-bottom: 2rem;">Integrations</h2>
+      
+      <!-- Amazon SP-API -->
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.25rem; font-weight: 600;">Amazon SP-API</h3>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span id="amazon-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--text-secondary);"></span>
+            <span id="amazon-status-text" style="color: var(--text-secondary); font-size: 0.875rem;">Not configured</span>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>LWA Client ID</label>
+          <div class="credential-input-group">
+            <input type="password" id="AMAZON_LWA_CLIENT_ID" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('AMAZON_LWA_CLIENT_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('AMAZON_LWA_CLIENT_ID')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>LWA Client Secret</label>
+          <div class="credential-input-group">
+            <input type="password" id="AMAZON_LWA_CLIENT_SECRET" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('AMAZON_LWA_CLIENT_SECRET')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('AMAZON_LWA_CLIENT_SECRET')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Refresh Token</label>
+          <div class="credential-input-group">
+            <input type="password" id="AMAZON_REFRESH_TOKEN" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('AMAZON_REFRESH_TOKEN')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('AMAZON_REFRESH_TOKEN')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Seller ID</label>
+          <div class="credential-input-group">
+            <input type="password" id="AMAZON_SELLER_ID" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('AMAZON_SELLER_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('AMAZON_SELLER_ID')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Marketplace ID</label>
+          <div class="credential-input-group">
+            <input type="text" id="AMAZON_MARKETPLACE_ID" readonly value="ATVPDKIKX0DER">
+            <button class="btn-icon" onclick="enableEdit('AMAZON_MARKETPLACE_ID')" title="Edit">✏️</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Amazon Advertising API -->
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.25rem; font-weight: 600;">Amazon Advertising API</h3>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span id="adv-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--text-secondary);"></span>
+            <span id="adv-status-text" style="color: var(--text-secondary); font-size: 0.875rem;">Not configured</span>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Client ID</label>
+          <div class="credential-input-group">
+            <input type="password" id="ADV_CLIENT_ID" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('ADV_CLIENT_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('ADV_CLIENT_ID')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Client Secret</label>
+          <div class="credential-input-group">
+            <input type="password" id="ADV_CLIENT_SECRET" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('ADV_CLIENT_SECRET')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('ADV_CLIENT_SECRET')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Refresh Token</label>
+          <div class="credential-input-group">
+            <input type="password" id="ADV_REFRESH_TOKEN" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('ADV_REFRESH_TOKEN')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('ADV_REFRESH_TOKEN')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Profile ID</label>
+          <div class="credential-input-group">
+            <input type="password" id="ADV_PROFILE_ID" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('ADV_PROFILE_ID')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('ADV_PROFILE_ID')" title="Edit">✏️</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- ShipStation -->
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.25rem; font-weight: 600;">ShipStation</h3>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span id="shipstation-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--text-secondary);"></span>
+            <span id="shipstation-status-text" style="color: var(--text-secondary); font-size: 0.875rem;">Not configured</span>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>API Key</label>
+          <div class="credential-input-group">
+            <input type="password" id="SHIPSTATION_API_KEY" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('SHIPSTATION_API_KEY')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('SHIPSTATION_API_KEY')" title="Edit">✏️</button>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>API Secret</label>
+          <div class="credential-input-group">
+            <input type="password" id="SHIPSTATION_API_SECRET" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('SHIPSTATION_API_SECRET')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('SHIPSTATION_API_SECRET')" title="Edit">✏️</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Anthropic API (for chatbot) -->
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.25rem; font-weight: 600;">Anthropic API</h3>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span id="anthropic-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--text-secondary);"></span>
+            <span id="anthropic-status-text" style="color: var(--text-secondary); font-size: 0.875rem;">Not configured</span>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>API Key</label>
+          <div class="credential-input-group">
+            <input type="password" id="ANTHROPIC_API_KEY" readonly value="••••••••••••••">
+            <button class="btn-icon" onclick="toggleReveal('ANTHROPIC_API_KEY')" title="Reveal">👁</button>
+            <button class="btn-icon" onclick="enableEdit('ANTHROPIC_API_KEY')" title="Edit">✏️</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Google OAuth -->
       <div class="card">
-        <h2 class="section-title">Integrations</h2>
-        <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">🔌</div>
-          <div style="font-size: 1.125rem; margin-bottom: 0.5rem;">Coming Soon</div>
-          <div style="font-size: 0.875rem;">API credentials and data source configuration</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.25rem; font-weight: 600;">Google OAuth</h3>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span id="google-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: var(--success);"></span>
+            <span id="google-status-text" style="color: var(--success); font-size: 0.875rem;">Connected</span>
+          </div>
+        </div>
+        
+        <div class="credential-row">
+          <label>Client ID</label>
+          <div class="credential-input-group">
+            <input type="text" id="GOOGLE_CLIENT_ID" readonly value="Default client configured">
+            <button class="btn-icon" onclick="enableEdit('GOOGLE_CLIENT_ID')" title="Edit">✏️</button>
+          </div>
         </div>
       </div>
     </div>
@@ -6169,6 +6391,131 @@
       });
       
       console.log('Brand charts updated for filter:', filter);
+    }
+    
+    
+    // ==================== INTEGRATIONS PAGE ====================
+    
+    // Store original values for cancel functionality
+    const originalValues = {};
+    
+    function toggleReveal(key) {
+      const input = document.getElementById(key);
+      if (input.type === 'password') {
+        input.type = 'text';
+      } else {
+        input.type = 'password';
+      }
+    }
+    
+    function enableEdit(key) {
+      const input = document.getElementById(key);
+      
+      // Store original value if not already stored
+      if (!originalValues[key]) {
+        originalValues[key] = input.value;
+      }
+      
+      input.readOnly = false;
+      input.focus();
+      input.select();
+      
+      // Replace edit button with save/cancel buttons
+      const group = input.parentElement;
+      const editBtn = group.querySelector('button[onclick*="enableEdit"]');
+      
+      if (editBtn) {
+        editBtn.outerHTML = `
+          <button class="btn-icon" onclick="saveCredential('${key}')" title="Save" style="background: var(--success);">💾</button>
+          <button class="btn-icon" onclick="cancelEdit('${key}')" title="Cancel">✖</button>
+        `;
+      }
+    }
+    
+    function cancelEdit(key) {
+      const input = document.getElementById(key);
+      
+      // Restore original value
+      if (originalValues[key]) {
+        input.value = originalValues[key];
+        delete originalValues[key];
+      }
+      
+      input.readOnly = true;
+      input.type = 'password';
+      
+      // Restore edit button
+      const group = input.parentElement;
+      const saveBtn = group.querySelector('button[onclick*="saveCredential"]');
+      
+      if (saveBtn) {
+        const revealBtn = key === 'GOOGLE_CLIENT_ID' || key === 'AMAZON_MARKETPLACE_ID' ? '' : 
+          `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>`;
+        
+        saveBtn.parentElement.innerHTML = `
+          ${revealBtn}
+          <button class="btn-icon" onclick="enableEdit('${key}')" title="Edit">✏️</button>
+        `;
+      }
+    }
+    
+    async function saveCredential(key) {
+      const input = document.getElementById(key);
+      const value = input.value.trim();
+      
+      if (!value) {
+        alert('Value cannot be empty');
+        return;
+      }
+      
+      if (!accessToken) {
+        alert('Please sign in to save credentials');
+        return;
+      }
+      
+      try {
+        const response = await fetch('/api/save-credential', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ key, value })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+          alert('Credential saved successfully! Changes will take effect on next deployment.');
+          
+          // Update original value and restore UI
+          originalValues[key] = value;
+          input.value = '••••••••••••••';
+          input.readOnly = true;
+          input.type = 'password';
+          
+          // Restore edit button
+          const group = input.parentElement;
+          const saveBtn = group.querySelector('button[onclick*="saveCredential"]');
+          
+          if (saveBtn) {
+            const revealBtn = key === 'GOOGLE_CLIENT_ID' || key === 'AMAZON_MARKETPLACE_ID' ? '' : 
+              `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">👁</button>`;
+            
+            saveBtn.parentElement.innerHTML = `
+              ${revealBtn}
+              <button class="btn-icon" onclick="enableEdit('${key}')" title="Edit">✏️</button>
+            `;
+          }
+          
+          delete originalValues[key];
+        } else {
+          alert('Failed to save credential: ' + (data.error || 'Unknown error'));
+        }
+      } catch (error) {
+        console.error('Error saving credential:', error);
+        alert('Error saving credential: ' + error.message);
+      }
     }
     
     // PRICE ANALYSIS PAGE
