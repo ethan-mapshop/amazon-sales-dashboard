@@ -113,7 +113,7 @@ async function requestReport(accessToken, startDate, endDate) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+      reportType: 'GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE',
       marketplaceIds: [process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'],
       dataStartTime: new Date(startDate).toISOString(),
       dataEndTime: new Date(endDate + 'T23:59:59').toISOString()
