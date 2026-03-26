@@ -1,5 +1,6 @@
 import SellingPartner from 'amazon-sp-api';
 import { kv } from '@vercel/kv';
+import { gunzipSync } from 'zlib';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -55,7 +56,10 @@ export default async function handler(req, res) {
       throw new Error('Failed to download report from URL');
     }
     
-    const reportDocument = await downloadResponse.json();
+    // Get buffer and decompress if gzipped
+    const buffer = Buffer.from(await downloadResponse.arrayBuffer());
+    const decompressed = gunzipSync(buffer);
+    const reportDocument = JSON.parse(decompressed.toString());
     
     // The download method returns the raw content - parse if it's a JSON string
     let reportData;
