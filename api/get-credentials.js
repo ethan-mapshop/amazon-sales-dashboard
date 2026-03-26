@@ -24,11 +24,9 @@ export default async function handler(req, res) {
     }
     
     const tokenInfo = await verifyResponse.json();
-    const userId = tokenInfo.sub || tokenInfo.email;
     
-    if (!userId) {
-      return res.status(401).json({ error: 'No user identifier in token' });
-    }
+    // Token only has spreadsheets scope, no user info
+    // Use fixed key since this is a personal dashboard
 
     // List of credential keys to fetch
     const credentialKeys = [
@@ -51,7 +49,7 @@ export default async function handler(req, res) {
     
     // Fetch each credential from Upstash
     for (const key of credentialKeys) {
-      const kvKey = `credential:${userId}:${key}`;
+      const kvKey = `credential:${key}`;
       const encryptedValue = await kv.get(kvKey);
       
       // Only include if value exists
