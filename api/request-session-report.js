@@ -1,5 +1,4 @@
 import SellingPartner from 'amazon-sp-api';
-import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -20,10 +19,10 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Invalid access token' });
     }
 
-    const { reportId } = req.body;
+    const { startDate, endDate } = req.body;
 
-    if (!reportId) {
-      return res.status(400).json({ error: 'Report ID required' });
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start and end dates required (YYYY-MM-DD format)' });
     }
 
     // Initialize SP-API client
@@ -36,68 +35,31 @@ export default async function handler(req, res) {
       }
     });
 
-    // Check report status
-    const statusResponse = await sellingPartner.callAPI({
-      operation: 'getReport',
+    // Request report
+    const reportResponse = await sellingPartner.callAPI({
+      operation: 'createReport',
       endpoint: 'reports',
-      path: {
-        reportId
+      body: {
+        reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
+        marketplaceIds: [process.env.AMAZON_MARKETPLACE_ID],
+        dataStartTime: `${startDate}T00:00:00Z`,
+        dataEndTime: `${endDate}T23:59:59Z`,
+        reportOptions: {
+          asinGranularity: 'CHILD'
+        }
       }
     });
 
-    if (statusResponse.processingStatus !== 'DONE') {
-      return res.status(200).json({
-        status: statusResponse.processingStatus,
-        message: 'Report still processing'
-      });
-    }
-
-    // Download report
-    const reportDocument = await sellingPartner.download(statusResponse.reportDocumentId);
-
-    // Parse and store data
-    const sessionData = parseSessionReport(reportDocument);
-    
-    // Store in Upstash
-    await kv.set('session_data', JSON.stringify(sessionData));
+    const reportId = reportResponse.reportId;
 
     return res.status(200).json({
-      status: 'DONE',
       success: true,
-      recordCount: sessionData.length,
-      message: 'Report downloaded and stored successfully'
+      reportId,
+      message: 'Report requested. Use report ID to check status.'
     });
 
   } catch (error) {
-    console.error('Error downloading session report:', error);
-    return res.status(500).json({ error: 'Failed to download report: ' + error.message });
+    console.error('Error requesting session report:', error);
+    return res.status(500).json({ error: 'Failed to request report: ' + error.message });
   }
-}
-
-function parseSessionReport(reportData) {
-  const data = [];
-  
-  // Amazon's report structure: salesAndTrafficByAsin array
-  const records = reportData.salesAndTrafficByAsin || [];
-  
-  records.forEach(record => {
-    const asin = record.childAsin;
-    const trafficByDate = record.trafficByDate || {};
-    
-    Object.keys(trafficByDate).forEach(date => {
-      const traffic = trafficByDate[date];
-      
-      data.push({
-        date,
-        asin,
-        sessions: traffic.browserSessions || 0,
-        sessionPercentage: traffic.browserSessionPercentage || 0,
-        pageViews: traffic.browserPageViews || 0,
-        unitSessionPercentage: traffic.unitSessionPercentage || 0, // This is CVR
-        buyBoxPercentage: traffic.buyBoxPercentage || 0
-      });
-    });
-  });
-  
-  return data;
 }
