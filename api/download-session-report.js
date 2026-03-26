@@ -74,8 +74,8 @@ export default async function handler(req, res) {
     // Parse and store data
     const sessionData = parseSessionReport(reportData);
     
-    // Store in Upstash
-    await kv.set('session_data', JSON.stringify(sessionData));
+    // Store in Upstash (KV handles JSON serialization automatically)
+    await kv.set('session_data', sessionData);
 
     return res.status(200).json({
       status: 'DONE',
