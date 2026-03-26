@@ -1,5 +1,5 @@
 // Get encrypted credentials from Upstash
-// GET /api/get-credentials-upstash
+// GET /api/get-credentials
 // Returns: { credentials: { AMAZON_LWA_CLIENT_ID: "encrypted...", ... } }
 
 import { kv } from '@vercel/kv';
