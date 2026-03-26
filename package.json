@@ -2,7 +2,7 @@
   "name": "mapshop-dashboard",
   "version": "1.0.0",
   "dependencies": {
-    "amazon-sp-api": "^0.13.0",
+    "amazon-sp-api": "latest",
     "@vercel/kv": "^1.0.0"
   }
 }
