@@ -7081,10 +7081,20 @@
       const selectedBrand = document.getElementById('changelog-brand').value;
       const productSelect = document.getElementById('changelog-product');
       
-      // Filter products
-      const filteredProducts = selectedBrand 
+      // Filter products by brand
+      let filteredProducts = selectedBrand 
         ? allProducts.filter(p => p.brand === selectedBrand)
         : allProducts;
+      
+      // Deduplicate by ASIN (keep first occurrence)
+      const seenAsins = new Set();
+      filteredProducts = filteredProducts.filter(product => {
+        if (seenAsins.has(product.asin)) {
+          return false;
+        }
+        seenAsins.add(product.asin);
+        return true;
+      });
       
       // Populate product dropdown
       productSelect.innerHTML = '<option value="">Select Product...</option>';
