@@ -1,4 +1,4 @@
-import { kv } from '@vercel/kv';
+import SellingPartner from 'amazon-sp-api';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -25,64 +25,33 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Start and end dates required (YYYY-MM-DD format)' });
     }
 
-    // Get credentials from Vercel environment variables
-    const clientId = process.env.AMAZON_LWA_CLIENT_ID;
-    const clientSecret = process.env.AMAZON_LWA_CLIENT_SECRET;
-    const refreshToken = process.env.AMAZON_REFRESH_TOKEN;
-    const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
-
-    if (!clientId || !clientSecret || !refreshToken || !marketplaceId) {
-      return res.status(400).json({ error: 'Amazon SP-API credentials not configured in Vercel environment variables' });
-    }
-
-    // Step 1: Get access token
-    const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret
-      })
+    // Initialize SP-API client
+    const sellingPartner = new SellingPartner({
+      region: 'na',
+      refresh_token: process.env.AMAZON_REFRESH_TOKEN,
+      credentials: {
+        SELLING_PARTNER_APP_CLIENT_ID: process.env.AMAZON_LWA_CLIENT_ID,
+        SELLING_PARTNER_APP_CLIENT_SECRET: process.env.AMAZON_LWA_CLIENT_SECRET
+      }
     });
 
-    if (!tokenResponse.ok) {
-      throw new Error('Failed to get Amazon access token');
-    }
-
-    const tokenData = await tokenResponse.json();
-    const spAccessToken = tokenData.access_token;
-
-    // Step 2: Request report
-    const reportResponse = await fetch('https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports', {
-      method: 'POST',
-      headers: {
-        'x-amz-access-token': spAccessToken,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
+    // Request report
+    const reportResponse = await sellingPartner.callAPI({
+      operation: 'createReport',
+      endpoint: 'reports',
+      body: {
         reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
-        marketplaceIds: [marketplaceId],
+        marketplaceIds: [process.env.AMAZON_MARKETPLACE_ID],
         dataStartTime: `${startDate}T00:00:00Z`,
         dataEndTime: `${endDate}T23:59:59Z`,
         reportOptions: {
           asinGranularity: 'CHILD'
         }
-      })
+      }
     });
 
-    if (!reportResponse.ok) {
-      const errorData = await reportResponse.text();
-      throw new Error(`Report request failed: ${errorData}`);
-    }
+    const reportId = reportResponse.reportId;
 
-    const reportData = await reportResponse.json();
-    const reportId = reportData.reportId;
-
-    // Return report ID for polling
     return res.status(200).json({
       success: true,
       reportId,
