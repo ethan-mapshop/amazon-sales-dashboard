@@ -7096,6 +7096,9 @@
         return true;
       });
       
+      // Sort alphabetically by name
+      filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
+      
       // Populate product dropdown
       productSelect.innerHTML = '<option value="">Select Product...</option>';
       filteredProducts.forEach(product => {
