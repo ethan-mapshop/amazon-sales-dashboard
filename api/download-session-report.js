@@ -7,19 +7,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!accessToken) {
-      return res.status(401).json({ error: 'No access token provided' });
-    }
-
-    // Verify Google token
-    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    
-    if (!verifyResponse.ok) {
-      return res.status(401).json({ error: 'Invalid access token' });
-    }
-
     const { reportId } = req.body;
 
     if (!reportId) {
