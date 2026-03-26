@@ -24,10 +24,10 @@ export default async function handler(req, res) {
     }
     
     const tokenInfo = await verifyResponse.json();
-    const userEmail = tokenInfo.email;
+    const userId = tokenInfo.sub || tokenInfo.email;
     
-    if (!userEmail) {
-      return res.status(401).json({ error: 'No email in token' });
+    if (!userId) {
+      return res.status(401).json({ error: 'No user identifier in token' });
     }
 
     // List of credential keys to fetch
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     
     // Fetch each credential from Upstash
     for (const key of credentialKeys) {
-      const kvKey = `credential:${userEmail}:${key}`;
+      const kvKey = `credential:${userId}:${key}`;
       const encryptedValue = await kv.get(kvKey);
       
       // Only include if value exists
