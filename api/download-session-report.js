@@ -39,8 +39,20 @@ export default async function handler(req, res) {
       });
     }
 
-    // Download report
-    const reportDocument = await sellingPartner.download(statusResponse.reportDocumentId);
+    // Get document details
+    const documentId = statusResponse.reportDocumentId;
+    const documentResponse = await sellingPartner.callAPI({
+      operation: 'getReportDocument',
+      endpoint: 'reports',
+      path: {
+        reportDocumentId: documentId
+      }
+    });
+
+    // Download report from URL
+    const reportDocument = await sellingPartner.download(documentResponse.url, {
+      json: true
+    });
     
     // The download method returns the raw content - parse if it's a JSON string
     let reportData;
