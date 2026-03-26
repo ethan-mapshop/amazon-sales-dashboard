@@ -1173,13 +1173,6 @@
       white-space: nowrap;
     }
     
-    .vercel-indicator {
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-      margin-left: 0.5rem;
-      cursor: help;
-    }
-    
     .btn-icon {
       padding: 0.75rem;
       background: var(--bg-secondary);
@@ -1197,15 +1190,6 @@
     .btn-icon:hover {
       background: var(--bg-primary);
       border-color: var(--accent-orange);
-    }
-    
-    /* Make emoji icons more visible with brightness filter */
-    .btn-icon {
-      filter: brightness(1.5) contrast(1.2);
-    }
-    
-    .btn-icon:hover {
-      filter: brightness(1.8) contrast(1.3);
     }
   </style>
 </head>
@@ -1640,7 +1624,6 @@
     </div>
 
     <!-- INTEGRATIONS PAGE (PHASE 4) -->
-    <!-- INTEGRATIONS PAGE (PHASE 4) -->
     <div id="integrations-page" class="page">
       <h2 class="section-title" style="margin-bottom: 2rem;">Integrations</h2>
       
@@ -1657,8 +1640,8 @@
         <div class="credential-row">
           <label>LWA Client ID</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_LWA_CLIENT_ID" placeholder="Enter LWA Client ID" readonly autocomplete="off">
-            <span id="AMAZON_LWA_CLIENT_ID-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="AMAZON_LWA_CLIENT_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_LWA_CLIENT_ID" autocomplete="off" placeholder="Enter LWA Client ID" readonly autocomplete="off">
             <button class="btn-icon" onclick="toggleReveal('AMAZON_LWA_CLIENT_ID')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('AMAZON_LWA_CLIENT_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_LWA_CLIENT_ID')" title="Edit">✏️</button>
@@ -1668,8 +1651,8 @@
         <div class="credential-row">
           <label>LWA Client Secret</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_LWA_CLIENT_SECRET" placeholder="Enter LWA Client Secret" readonly autocomplete="off">
-            <span id="AMAZON_LWA_CLIENT_SECRET-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="AMAZON_LWA_CLIENT_SECRET-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_LWA_CLIENT_SECRET" autocomplete="off" placeholder="Enter LWA Client Secret" readonly autocomplete="off">
             <button class="btn-icon" onclick="toggleReveal('AMAZON_LWA_CLIENT_SECRET')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('AMAZON_LWA_CLIENT_SECRET')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_LWA_CLIENT_SECRET')" title="Edit">✏️</button>
@@ -1679,8 +1662,8 @@
         <div class="credential-row">
           <label>Refresh Token</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_REFRESH_TOKEN" placeholder="Enter Refresh Token" readonly autocomplete="off">
-            <span id="AMAZON_REFRESH_TOKEN-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="AMAZON_REFRESH_TOKEN-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_REFRESH_TOKEN" autocomplete="off" placeholder="Enter Refresh Token" readonly autocomplete="off">
             <button class="btn-icon" onclick="toggleReveal('AMAZON_REFRESH_TOKEN')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('AMAZON_REFRESH_TOKEN')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_REFRESH_TOKEN')" title="Edit">✏️</button>
@@ -1690,8 +1673,8 @@
         <div class="credential-row">
           <label>Seller ID</label>
           <div class="credential-input-group">
-            <input type="password" id="AMAZON_SELLER_ID" placeholder="Enter Seller ID" readonly autocomplete="off">
-            <span id="AMAZON_SELLER_ID-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="AMAZON_SELLER_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="AMAZON_SELLER_ID" autocomplete="off" placeholder="Enter Seller ID" readonly autocomplete="off">
             <button class="btn-icon" onclick="toggleReveal('AMAZON_SELLER_ID')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('AMAZON_SELLER_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_SELLER_ID')" title="Edit">✏️</button>
@@ -1701,8 +1684,8 @@
         <div class="credential-row">
           <label>Marketplace ID</label>
           <div class="credential-input-group">
+            <span id="AMAZON_MARKETPLACE_ID-status" class="credential-status">○ Not configured</span>
             <input type="text" id="AMAZON_MARKETPLACE_ID" placeholder="ATVPDKIKX0DER" readonly autocomplete="off">
-            <span id="AMAZON_MARKETPLACE_ID-vercel" class="vercel-indicator" title="Vercel">🔍</span>
             <button class="btn-icon" onclick="copyToClipboard('AMAZON_MARKETPLACE_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('AMAZON_MARKETPLACE_ID')" title="Edit">✏️</button>
           </div>
@@ -1722,8 +1705,8 @@
         <div class="credential-row">
           <label>Client ID</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_CLIENT_ID" placeholder="Enter Client ID" readonly autocomplete="off">
-            <span id="ADV_CLIENT_ID-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="ADV_CLIENT_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_CLIENT_ID" autocomplete="off" placeholder="Enter Client ID" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_CLIENT_ID')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('ADV_CLIENT_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_CLIENT_ID')" title="Edit">✏️</button>
@@ -1733,8 +1716,8 @@
         <div class="credential-row">
           <label>Client Secret</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_CLIENT_SECRET" placeholder="Enter Client Secret" readonly autocomplete="off">
-            <span id="ADV_CLIENT_SECRET-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="ADV_CLIENT_SECRET-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_CLIENT_SECRET" autocomplete="off" placeholder="Enter Client Secret" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_CLIENT_SECRET')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('ADV_CLIENT_SECRET')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_CLIENT_SECRET')" title="Edit">✏️</button>
@@ -1744,8 +1727,8 @@
         <div class="credential-row">
           <label>Refresh Token</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_REFRESH_TOKEN" placeholder="Enter Refresh Token" readonly autocomplete="off">
-            <span id="ADV_REFRESH_TOKEN-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="ADV_REFRESH_TOKEN-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_REFRESH_TOKEN" autocomplete="off" placeholder="Enter Refresh Token" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_REFRESH_TOKEN')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('ADV_REFRESH_TOKEN')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_REFRESH_TOKEN')" title="Edit">✏️</button>
@@ -1755,8 +1738,8 @@
         <div class="credential-row">
           <label>Profile ID</label>
           <div class="credential-input-group">
-            <input type="password" id="ADV_PROFILE_ID" placeholder="Enter Profile ID" readonly autocomplete="off">
-            <span id="ADV_PROFILE_ID-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="ADV_PROFILE_ID-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ADV_PROFILE_ID" autocomplete="off" placeholder="Enter Profile ID" readonly>
             <button class="btn-icon" onclick="toggleReveal('ADV_PROFILE_ID')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('ADV_PROFILE_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ADV_PROFILE_ID')" title="Edit">✏️</button>
@@ -1777,8 +1760,8 @@
         <div class="credential-row">
           <label>API Key</label>
           <div class="credential-input-group">
-            <input type="password" id="SHIPSTATION_API_KEY" placeholder="Enter API Key" readonly autocomplete="off">
-            <span id="SHIPSTATION_API_KEY-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="SHIPSTATION_API_KEY-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="SHIPSTATION_API_KEY" autocomplete="off" placeholder="Enter API Key" readonly>
             <button class="btn-icon" onclick="toggleReveal('SHIPSTATION_API_KEY')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('SHIPSTATION_API_KEY')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('SHIPSTATION_API_KEY')" title="Edit">✏️</button>
@@ -1788,8 +1771,8 @@
         <div class="credential-row">
           <label>API Secret</label>
           <div class="credential-input-group">
-            <input type="password" id="SHIPSTATION_API_SECRET" placeholder="Enter API Secret" readonly autocomplete="off">
-            <span id="SHIPSTATION_API_SECRET-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="SHIPSTATION_API_SECRET-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="SHIPSTATION_API_SECRET" autocomplete="off" placeholder="Enter API Secret" readonly>
             <button class="btn-icon" onclick="toggleReveal('SHIPSTATION_API_SECRET')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('SHIPSTATION_API_SECRET')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('SHIPSTATION_API_SECRET')" title="Edit">✏️</button>
@@ -1797,7 +1780,7 @@
         </div>
       </div>
       
-      <!-- Anthropic API -->
+      <!-- Anthropic API (for chatbot) -->
       <div class="card" style="margin-bottom: 1.5rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
           <h3 style="font-size: 1.25rem; font-weight: 600;">Anthropic API</h3>
@@ -1810,8 +1793,8 @@
         <div class="credential-row">
           <label>API Key</label>
           <div class="credential-input-group">
-            <input type="password" id="ANTHROPIC_API_KEY" placeholder="Enter API Key" readonly autocomplete="off">
-            <span id="ANTHROPIC_API_KEY-vercel" class="vercel-indicator" title="Vercel">🔍</span>
+            <span id="ANTHROPIC_API_KEY-status" class="credential-status">○ Not configured</span>
+            <input type="password" id="ANTHROPIC_API_KEY" autocomplete="off" placeholder="Enter API Key" readonly>
             <button class="btn-icon" onclick="toggleReveal('ANTHROPIC_API_KEY')" title="Reveal">🔍</button>
             <button class="btn-icon" onclick="copyToClipboard('ANTHROPIC_API_KEY')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('ANTHROPIC_API_KEY')" title="Edit">✏️</button>
@@ -1832,14 +1815,15 @@
         <div class="credential-row">
           <label>Client ID</label>
           <div class="credential-input-group">
-            <input type="text" id="GOOGLE_CLIENT_ID" placeholder="Using default client" readonly autocomplete="off">
-            <span id="GOOGLE_CLIENT_ID-vercel" class="vercel-indicator" title="Vercel">●</span>
+            <span id="GOOGLE_CLIENT_ID-status" class="credential-status">● Connected</span>
+            <input type="text" id="GOOGLE_CLIENT_ID" autocomplete="off" placeholder="Using default client" readonly>
             <button class="btn-icon" onclick="copyToClipboard('GOOGLE_CLIENT_ID')" title="Copy">📋</button>
             <button class="btn-icon" onclick="enableEdit('GOOGLE_CLIENT_ID')" title="Edit">✏️</button>
           </div>
         </div>
       </div>
     </div>
+
     <!-- PRICE ANALYSIS PAGE -->
     <div id="priceanalysis-page" class="page">
       <div class="card">
@@ -6524,100 +6508,65 @@
       if (!accessToken) return;
       
       try {
-        // Fetch encrypted credentials from Upstash (database)
-        const dbResponse = await fetch('/api/get-credentials', {
+        // Fetch encrypted credentials from Upstash
+        const response = await fetch('/api/get-credentials-upstash', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
         });
         
-        // Fetch Vercel env var status (read-only check)
-        const vercelResponse = await fetch('/api/get-vercel-status', {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
-        });
-        
-        let dbCredentials = {};
-        let vercelCredentials = {};
-        
-        if (dbResponse.ok) {
-          const data = await dbResponse.json();
-          dbCredentials = data.credentials || {};
-        }
-        
-        if (vercelResponse.ok) {
-          const data = await vercelResponse.json();
-          vercelCredentials = data.credentials || {};
-        }
-        
-        // Decrypt and populate each credential from database
-        const allKeys = [
-          'AMAZON_LWA_CLIENT_ID', 'AMAZON_LWA_CLIENT_SECRET', 'AMAZON_REFRESH_TOKEN',
-          'AMAZON_SELLER_ID', 'AMAZON_MARKETPLACE_ID',
-          'ADV_CLIENT_ID', 'ADV_CLIENT_SECRET', 'ADV_REFRESH_TOKEN', 'ADV_PROFILE_ID',
-          'SHIPSTATION_API_KEY', 'SHIPSTATION_API_SECRET',
-          'ANTHROPIC_API_KEY', 'GOOGLE_CLIENT_ID'
-        ];
-        
-        for (const key of allKeys) {
-          const input = document.getElementById(key);
-          const vercelIndicator = document.getElementById(`${key}-vercel`);
+        if (response.ok) {
+          const { credentials } = await response.json();
           
-          // Load and decrypt database value
-          if (dbCredentials[key]) {
+          // Decrypt and populate each credential
+          for (const [key, encryptedValue] of Object.entries(credentials)) {
             try {
-              const decryptedValue = await decryptValue(dbCredentials[key], accessToken);
+              const decryptedValue = await decryptValue(encryptedValue, accessToken);
+              const input = document.getElementById(key);
+              const statusSpan = document.getElementById(`${key}-status`);
+              
               if (input) {
                 input.value = decryptedValue;
+              }
+              
+              if (statusSpan) {
+                statusSpan.textContent = '● Connected';
+                statusSpan.style.color = 'var(--success)';
               }
             } catch (decryptError) {
               console.error(`Failed to decrypt ${key}:`, decryptError);
             }
           }
           
-          // Update Vercel indicator
-          if (vercelIndicator) {
-            if (vercelCredentials[key]) {
-              vercelIndicator.textContent = '●';
-              vercelIndicator.style.color = 'var(--success)';
-              vercelIndicator.title = 'Configured in Vercel';
-            } else {
-              vercelIndicator.textContent = '🔍';
-              vercelIndicator.style.color = 'var(--text-secondary)';
-              vercelIndicator.title = 'Not in Vercel';
-            }
-          }
+          // Update card-level status indicators
+          updateIntegrationStatus('amazon', [
+            credentials.AMAZON_LWA_CLIENT_ID,
+            credentials.AMAZON_LWA_CLIENT_SECRET,
+            credentials.AMAZON_REFRESH_TOKEN,
+            credentials.AMAZON_SELLER_ID,
+            credentials.AMAZON_MARKETPLACE_ID
+          ]);
+          
+          updateIntegrationStatus('adv', [
+            credentials.ADV_CLIENT_ID,
+            credentials.ADV_CLIENT_SECRET,
+            credentials.ADV_REFRESH_TOKEN,
+            credentials.ADV_PROFILE_ID
+          ]);
+          
+          updateIntegrationStatus('shipstation', [
+            credentials.SHIPSTATION_API_KEY,
+            credentials.SHIPSTATION_API_SECRET
+          ]);
+          
+          updateIntegrationStatus('anthropic', [
+            credentials.ANTHROPIC_API_KEY
+          ]);
+          
+          updateIntegrationStatus('google', [
+            credentials.GOOGLE_CLIENT_ID
+          ]);
         }
-        
-        // Update card-level status indicators
-        updateIntegrationStatus('amazon', [
-          dbCredentials.AMAZON_LWA_CLIENT_ID,
-          dbCredentials.AMAZON_LWA_CLIENT_SECRET,
-          dbCredentials.AMAZON_REFRESH_TOKEN,
-          dbCredentials.AMAZON_SELLER_ID,
-          dbCredentials.AMAZON_MARKETPLACE_ID
-        ]);
-        
-        updateIntegrationStatus('adv', [
-          dbCredentials.ADV_CLIENT_ID,
-          dbCredentials.ADV_CLIENT_SECRET,
-          dbCredentials.ADV_REFRESH_TOKEN,
-          dbCredentials.ADV_PROFILE_ID
-        ]);
-        
-        updateIntegrationStatus('shipstation', [
-          dbCredentials.SHIPSTATION_API_KEY,
-          dbCredentials.SHIPSTATION_API_SECRET
-        ]);
-        
-        updateIntegrationStatus('anthropic', [
-          dbCredentials.ANTHROPIC_API_KEY
-        ]);
-        
-        updateIntegrationStatus('google', [
-          dbCredentials.GOOGLE_CLIENT_ID
-        ]);
       } catch (error) {
         console.error('Error loading credentials:', error);
       }
@@ -6727,17 +6676,6 @@
       const allButtons = group.querySelectorAll('button');
       allButtons.forEach(btn => btn.remove());
       
-      // Re-add vercel indicator if missing
-      const vercelIndicator = document.getElementById(`${key}-vercel`);
-      if (!vercelIndicator) {
-        const newIndicator = document.createElement('span');
-        newIndicator.id = `${key}-vercel`;
-        newIndicator.className = 'vercel-indicator';
-        newIndicator.title = 'Vercel';
-        newIndicator.textContent = '🔍';
-        group.appendChild(newIndicator);
-      }
-      
       // Add back the original buttons
       const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
       
@@ -6784,7 +6722,7 @@
         const encryptedValue = await encryptValue(value, accessToken);
         
         // Save encrypted value to Upstash only
-        const response = await fetch('/api/save-credential', {
+        const response = await fetch('/api/save-credential-upstash', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -6792,15 +6730,6 @@
           },
           body: JSON.stringify({ key, encryptedValue })
         });
-        
-        // Check if response is JSON
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          const text = await response.text();
-          console.error('Non-JSON response:', text);
-          showCredentialFeedback(key, 'Server error - check console', 'error');
-          return;
-        }
         
         const data = await response.json();
         
@@ -6811,21 +6740,17 @@
             input.type = 'password';
           }
           
-          // Restore buttons - remove ALL buttons and vercel indicator first
+          // Update status indicator
+          const statusSpan = document.getElementById(`${key}-status`);
+          if (statusSpan) {
+            statusSpan.textContent = '● Connected';
+            statusSpan.style.color = 'var(--success)';
+          }
+          
+          // Restore buttons - remove ALL buttons first
           const group = input.parentElement;
           const allButtons = group.querySelectorAll('button');
           allButtons.forEach(btn => btn.remove());
-          
-          // Re-add vercel indicator
-          const vercelIndicator = document.getElementById(`${key}-vercel`);
-          if (!vercelIndicator) {
-            const newIndicator = document.createElement('span');
-            newIndicator.id = `${key}-vercel`;
-            newIndicator.className = 'vercel-indicator';
-            newIndicator.title = 'Vercel';
-            newIndicator.textContent = '🔍';
-            group.appendChild(newIndicator);
-          }
           
           // Add back the original buttons
           const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
