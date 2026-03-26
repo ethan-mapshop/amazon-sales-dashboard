@@ -24,10 +24,10 @@ export default async function handler(req, res) {
     }
     
     const tokenInfo = await verifyResponse.json();
-    const userEmail = tokenInfo.email;
+    const userId = tokenInfo.sub || tokenInfo.email;
     
-    if (!userEmail) {
-      return res.status(401).json({ error: 'No email in token' });
+    if (!userId) {
+      return res.status(401).json({ error: 'No user identifier in token' });
     }
     
     const { key, encryptedValue } = req.body;
@@ -58,7 +58,7 @@ export default async function handler(req, res) {
     }
 
     // Store in Upstash with user-specific key
-    const kvKey = `credential:${userEmail}:${key}`;
+    const kvKey = `credential:${userId}:${key}`;
     await kv.set(kvKey, encryptedValue);
 
     res.status(200).json({ success: true });
