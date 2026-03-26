@@ -7042,11 +7042,11 @@
         const data = await response.json();
         
         if (data.values && data.values.length > 0) {
-          // Store all products
+          // Store all products - A=sku/ASIN, B=name, C=brand
           allProducts = data.values.map(row => ({
-            asin: row[0],
-            name: row[1] || row[0],
-            brand: row[2] || 'Unknown'
+            asin: row[0],      // Column A = sku (ASIN)
+            name: row[1] || row[0],  // Column B = name
+            brand: row[2] || 'Unknown'  // Column C = brand
           }));
           
           // Get unique brands
