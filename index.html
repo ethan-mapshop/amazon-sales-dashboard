@@ -6516,14 +6516,14 @@
       
       try {
         // Fetch encrypted credentials from Upstash (database)
-        const dbResponse = await fetch('/api/get-credentials-upstash', {
+        const dbResponse = await fetch('/api/get-credentials', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
         });
         
         // Fetch Vercel env var status (read-only check)
-        const vercelResponse = await fetch('/api/get-credentials', {
+        const vercelResponse = await fetch('/api/get-vercel-status', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
