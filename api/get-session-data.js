@@ -21,7 +21,16 @@ export default async function handler(req, res) {
 
     // Get session data from Upstash
     const dataString = await kv.get('session_data');
-    const sessionData = dataString ? JSON.parse(dataString) : [];
+    
+    // Handle empty or missing data
+    if (!dataString) {
+      return res.status(200).json({ 
+        success: true,
+        data: []
+      });
+    }
+    
+    const sessionData = JSON.parse(dataString);
 
     return res.status(200).json({ 
       success: true,
