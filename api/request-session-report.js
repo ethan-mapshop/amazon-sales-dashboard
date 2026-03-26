@@ -19,20 +19,20 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Invalid access token' });
     }
 
-    // Get Amazon credentials from Upstash
-    const clientId = await kv.get('credential:AMAZON_LWA_CLIENT_ID');
-    const clientSecret = await kv.get('credential:AMAZON_LWA_CLIENT_SECRET');
-    const refreshToken = await kv.get('credential:AMAZON_REFRESH_TOKEN');
-    const marketplaceId = await kv.get('credential:AMAZON_MARKETPLACE_ID');
-
-    if (!clientId || !clientSecret || !refreshToken || !marketplaceId) {
-      return res.status(400).json({ error: 'Amazon SP-API credentials not configured' });
-    }
-
     const { startDate, endDate } = req.body;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'Start and end dates required (YYYY-MM-DD format)' });
+    }
+
+    // Get credentials from Vercel environment variables
+    const clientId = process.env.AMAZON_LWA_CLIENT_ID;
+    const clientSecret = process.env.AMAZON_LWA_CLIENT_SECRET;
+    const refreshToken = process.env.AMAZON_REFRESH_TOKEN;
+    const marketplaceId = process.env.AMAZON_MARKETPLACE_ID;
+
+    if (!clientId || !clientSecret || !refreshToken || !marketplaceId) {
+      return res.status(400).json({ error: 'Amazon SP-API credentials not configured in Vercel environment variables' });
     }
 
     // Step 1: Get access token
