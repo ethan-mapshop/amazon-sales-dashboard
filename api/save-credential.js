@@ -24,11 +24,9 @@ export default async function handler(req, res) {
     }
     
     const tokenInfo = await verifyResponse.json();
-    const userId = tokenInfo.sub || tokenInfo.email;
     
-    if (!userId) {
-      return res.status(401).json({ error: 'No user identifier in token' });
-    }
+    // Token only has spreadsheets scope, no user info
+    // Use fixed key since this is a personal dashboard
     
     const { key, encryptedValue } = req.body;
 
@@ -57,8 +55,8 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Key not allowed' });
     }
 
-    // Store in Upstash with user-specific key
-    const kvKey = `credential:${userId}:${key}`;
+    // Store in Upstash
+    const kvKey = `credential:${key}`;
     await kv.set(kvKey, encryptedValue);
 
     res.status(200).json({ success: true });
