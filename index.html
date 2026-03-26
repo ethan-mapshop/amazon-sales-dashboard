@@ -1198,6 +1198,19 @@
       background: var(--bg-primary);
       border-color: var(--accent-orange);
     }
+    
+    /* Make specific buttons more visible */
+    .btn-icon[title="Reveal"],
+    .btn-icon[title="Cancel"] {
+      background: var(--bg-primary);
+      border-color: var(--accent-orange);
+    }
+    
+    .btn-icon[title="Reveal"]:hover,
+    .btn-icon[title="Cancel"]:hover {
+      background: var(--accent-orange);
+      transform: scale(1.05);
+    }
   </style>
 </head>
 <body>
