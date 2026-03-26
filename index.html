@@ -1893,11 +1893,18 @@
         <div class="card" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Log Listing Change</h3>
           
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
             <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">ASIN</label>
-              <select id="changelog-asin" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-                <option value="">Select ASIN...</option>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
+              <select id="changelog-brand" onchange="filterChangeLogProducts()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+                <option value="">All Brands</option>
+              </select>
+            </div>
+            
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
+              <select id="changelog-product" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+                <option value="">Select Product...</option>
               </select>
             </div>
             
@@ -6996,6 +7003,8 @@
     
     // ==================== LISTING OPTIMIZATION PAGE ====================
     
+    let allProducts = []; // Store all products for filtering
+    
     function showListingTab(tabName) {
       // Hide all tabs
       document.querySelectorAll('.listing-tab').forEach(tab => {
@@ -7021,29 +7030,58 @@
       }
     }
     
-    // Load ASINs into dropdown
+    // Load brands and products from Products sheet
     async function loadChangeLogASINs() {
       if (!accessToken) return;
       
       try {
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Products!A2:B`, {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Products!A2:C`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
         const data = await response.json();
-        const select = document.getElementById('changelog-asin');
         
         if (data.values && data.values.length > 0) {
-          select.innerHTML = '<option value="">Select ASIN...</option>';
-          data.values.forEach(row => {
-            const asin = row[0];
-            const name = row[1] || asin;
-            select.innerHTML += `<option value="${asin}">${name} (${asin})</option>`;
+          // Store all products
+          allProducts = data.values.map(row => ({
+            asin: row[0],
+            name: row[1] || row[0],
+            brand: row[2] || 'Unknown'
+          }));
+          
+          // Get unique brands
+          const brands = [...new Set(allProducts.map(p => p.brand))].sort();
+          
+          // Populate brand dropdown
+          const brandSelect = document.getElementById('changelog-brand');
+          brandSelect.innerHTML = '<option value="">All Brands</option>';
+          brands.forEach(brand => {
+            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
           });
+          
+          // Populate products (all initially)
+          filterChangeLogProducts();
         }
       } catch (error) {
-        console.error('Error loading ASINs:', error);
+        console.error('Error loading products:', error);
       }
+    }
+    
+    // Filter products based on selected brand
+    function filterChangeLogProducts() {
+      const selectedBrand = document.getElementById('changelog-brand').value;
+      const productSelect = document.getElementById('changelog-product');
+      
+      // Filter products
+      const filteredProducts = selectedBrand 
+        ? allProducts.filter(p => p.brand === selectedBrand)
+        : allProducts;
+      
+      // Populate product dropdown
+      productSelect.innerHTML = '<option value="">Select Product...</option>';
+      filteredProducts.forEach(product => {
+        productSelect.innerHTML += `<option value="${product.asin}" data-name="${product.name}">${product.name} (${product.asin})</option>`;
+      });
     }
     
     // Character counter for notes
@@ -7070,12 +7108,13 @@
         return;
       }
       
-      const asin = document.getElementById('changelog-asin').value;
+      const productSelect = document.getElementById('changelog-product');
+      const asin = productSelect.value;
       const date = document.getElementById('changelog-date').value;
       const notes = document.getElementById('changelog-notes').value.trim();
       
       if (!asin) {
-        alert('Please select an ASIN');
+        alert('Please select a product');
         return;
       }
       
@@ -7094,13 +7133,12 @@
       }
       
       try {
-        // Get product name for display
-        const asinSelect = document.getElementById('changelog-asin');
-        const productName = asinSelect.options[asinSelect.selectedIndex].text.split(' (')[0];
+        // Get product name from selected option
+        const productName = productSelect.options[productSelect.selectedIndex].getAttribute('data-name');
         
-        // Append to ChangeLog sheet
+        // Append to ListingChangeLog sheet
         const response = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ChangeLog!A:E:append?valueInputOption=USER_ENTERED`,
+          `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ListingChangeLog!A:E:append?valueInputOption=USER_ENTERED`,
           {
             method: 'POST',
             headers: {
@@ -7123,7 +7161,9 @@
           alert('Change log entry saved!');
           
           // Clear form
-          document.getElementById('changelog-asin').value = '';
+          document.getElementById('changelog-brand').value = '';
+          document.getElementById('changelog-product').value = '';
+          filterChangeLogProducts(); // Reset product list
           document.getElementById('changelog-date').valueAsDate = new Date();
           document.getElementById('changelog-notes').value = '';
           document.querySelectorAll('#changelog-tab input[type="checkbox"]').forEach(cb => cb.checked = false);
@@ -7145,7 +7185,7 @@
       
       try {
         const response = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ChangeLog!A2:E`,
+          `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/ListingChangeLog!A2:E`,
           {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }
