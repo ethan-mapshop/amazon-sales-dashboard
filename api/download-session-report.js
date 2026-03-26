@@ -1,3 +1,4 @@
+import SellingPartner from 'amazon-sp-api';
 import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
@@ -25,81 +26,45 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Report ID required' });
     }
 
-    // Get credentials from Vercel environment variables
-    const clientId = process.env.AMAZON_LWA_CLIENT_ID;
-    const clientSecret = process.env.AMAZON_LWA_CLIENT_SECRET;
-    const refreshToken = process.env.AMAZON_REFRESH_TOKEN;
-
-    if (!clientId || !clientSecret || !refreshToken) {
-      return res.status(400).json({ error: 'Amazon SP-API credentials not configured in Vercel environment variables' });
-    }
-
-    // Get access token
-    const tokenResponse = await fetch('https://api.amazon.com/auth/o2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret
-      })
-    });
-
-    if (!tokenResponse.ok) {
-      throw new Error('Failed to get Amazon access token');
-    }
-
-    const tokenData = await tokenResponse.json();
-    const spAccessToken = tokenData.access_token;
-
-    // Check report status
-    const statusResponse = await fetch(`https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/reports/${reportId}`, {
-      headers: {
-        'x-amz-access-token': spAccessToken
+    // Initialize SP-API client
+    const sellingPartner = new SellingPartner({
+      region: 'na',
+      refresh_token: process.env.AMAZON_REFRESH_TOKEN,
+      credentials: {
+        SELLING_PARTNER_APP_CLIENT_ID: process.env.AMAZON_LWA_CLIENT_ID,
+        SELLING_PARTNER_APP_CLIENT_SECRET: process.env.AMAZON_LWA_CLIENT_SECRET
       }
     });
 
-    if (!statusResponse.ok) {
-      throw new Error('Failed to check report status');
-    }
+    // Check report status
+    const statusResponse = await sellingPartner.callAPI({
+      operation: 'getReport',
+      endpoint: 'reports',
+      path: {
+        reportId
+      }
+    });
 
-    const statusData = await statusResponse.json();
-
-    if (statusData.processingStatus !== 'DONE') {
+    if (statusResponse.processingStatus !== 'DONE') {
       return res.status(200).json({
-        status: statusData.processingStatus,
+        status: statusResponse.processingStatus,
         message: 'Report still processing'
       });
     }
 
-    // Get report document
-    const documentId = statusData.reportDocumentId;
-    const docResponse = await fetch(`https://sellingpartnerapi-na.amazon.com/reports/2021-06-30/documents/${documentId}`, {
-      headers: {
-        'x-amz-access-token': spAccessToken
-      }
-    });
-
-    if (!docResponse.ok) {
-      throw new Error('Failed to get report document info');
-    }
-
-    const docData = await docResponse.json();
-    const reportUrl = docData.url;
-
     // Download report
-    const reportResponse = await fetch(reportUrl);
-    if (!reportResponse.ok) {
-      throw new Error('Failed to download report');
+    const reportDocument = await sellingPartner.download(statusResponse.reportDocumentId);
+    
+    // The download method returns the raw content - parse if it's a JSON string
+    let reportData;
+    if (typeof reportDocument === 'string') {
+      reportData = JSON.parse(reportDocument);
+    } else {
+      reportData = reportDocument;
     }
-
-    const reportJson = await reportResponse.json();
 
     // Parse and store data
-    const sessionData = parseSessionReport(reportJson);
+    const sessionData = parseSessionReport(reportData);
     
     // Store in Upstash
     await kv.set('session_data', JSON.stringify(sessionData));
@@ -117,11 +82,11 @@ export default async function handler(req, res) {
   }
 }
 
-function parseSessionReport(reportJson) {
+function parseSessionReport(reportData) {
   const data = [];
   
   // Amazon's report structure: salesAndTrafficByAsin array
-  const records = reportJson.salesAndTrafficByAsin || [];
+  const records = reportData.salesAndTrafficByAsin || [];
   
   records.forEach(record => {
     const asin = record.childAsin;
