@@ -19,19 +19,19 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Invalid access token' });
     }
 
-    // Get Amazon credentials
-    const clientId = await kv.get('credential:AMAZON_LWA_CLIENT_ID');
-    const clientSecret = await kv.get('credential:AMAZON_LWA_CLIENT_SECRET');
-    const refreshToken = await kv.get('credential:AMAZON_REFRESH_TOKEN');
-
-    if (!clientId || !clientSecret || !refreshToken) {
-      return res.status(400).json({ error: 'Amazon SP-API credentials not configured' });
-    }
-
     const { reportId } = req.body;
 
     if (!reportId) {
       return res.status(400).json({ error: 'Report ID required' });
+    }
+
+    // Get credentials from Vercel environment variables
+    const clientId = process.env.AMAZON_LWA_CLIENT_ID;
+    const clientSecret = process.env.AMAZON_LWA_CLIENT_SECRET;
+    const refreshToken = process.env.AMAZON_REFRESH_TOKEN;
+
+    if (!clientId || !clientSecret || !refreshToken) {
+      return res.status(400).json({ error: 'Amazon SP-API credentials not configured in Vercel environment variables' });
     }
 
     // Get access token
