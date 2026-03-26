@@ -1955,11 +1955,16 @@
           <button class="btn btn-primary" onclick="saveChangeLog()" style="width: auto;">
             Save Change Log Entry
           </button>
+          
+          <div id="changelog-save-feedback" style="margin-top: 1rem; display: none;"></div>
         </div>
         
         <!-- Change Log Table -->
         <div class="card">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Change History</h3>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h3 style="font-size: 1.125rem; font-weight: 600;">Change History</h3>
+            <input type="text" id="changelog-search" placeholder="Search changes..." style="padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); width: 300px;">
+          </div>
           <div id="changelog-table" style="overflow-x: auto;">
             <div style="padding: 2rem; text-align: center; color: var(--text-secondary);">
               No changes logged yet. Add your first entry above.
@@ -7043,12 +7048,15 @@
         
         if (data.values && data.values.length > 0) {
           // Store all products - A=sku, B=name, C=brand, F=asin
-          allProducts = data.values.map(row => ({
-            sku: row[0],      // Column A = sku
-            name: row[1] || row[0],  // Column B = name
-            brand: row[2] || 'Unknown',  // Column C = brand
-            asin: row[5] || row[0]  // Column F = asin (fallback to sku if missing)
-          }));
+          // Filter out discontinued products (ASIN = N/A)
+          allProducts = data.values
+            .filter(row => row[5] && row[5].toUpperCase() !== 'N/A')
+            .map(row => ({
+              sku: row[0],      // Column A = sku
+              name: row[1] || row[0],  // Column B = name
+              brand: row[2] || 'Unknown',  // Column C = brand
+              asin: row[5]  // Column F = asin
+            }));
           
           // Get unique brands
           const brands = [...new Set(allProducts.map(p => p.brand))].sort();
@@ -7159,7 +7167,19 @@
         );
         
         if (response.ok) {
-          alert('Change log entry saved!');
+          // Show success message
+          const feedback = document.getElementById('changelog-save-feedback');
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(6, 214, 160, 0.1)';
+          feedback.style.border = '1px solid var(--success)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--success)';
+          feedback.textContent = '✓ Change log entry saved successfully!';
+          
+          setTimeout(() => {
+            feedback.style.display = 'none';
+          }, 5000);
           
           // Clear form
           document.getElementById('changelog-brand').value = '';
@@ -7224,10 +7244,76 @@
         
         html += '</tbody></table>';
         tableDiv.innerHTML = html;
+        
+        // Setup search functionality
+        setupChangeLogSearch(rows);
       } catch (error) {
         console.error('Error loading change log:', error);
         document.getElementById('changelog-table').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--error);">Error loading change log</div>';
       }
+    }
+    
+    // Search functionality for change log
+    let changeLogData = [];
+    
+    function setupChangeLogSearch(rows) {
+      changeLogData = rows;
+      
+      const searchInput = document.getElementById('changelog-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', filterChangeLog);
+      }
+    }
+    
+    function filterChangeLog() {
+      const searchTerm = document.getElementById('changelog-search').value.toLowerCase();
+      const tableDiv = document.getElementById('changelog-table');
+      
+      if (!searchTerm) {
+        // Show all if search is empty
+        renderChangeLogTable(changeLogData);
+        return;
+      }
+      
+      // Filter rows
+      const filtered = changeLogData.filter(row => {
+        return row.some(cell => 
+          cell && cell.toString().toLowerCase().includes(searchTerm)
+        );
+      });
+      
+      renderChangeLogTable(filtered);
+    }
+    
+    function renderChangeLogTable(rows) {
+      const tableDiv = document.getElementById('changelog-table');
+      
+      if (rows.length === 0) {
+        tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No matching changes found.</div>';
+        return;
+      }
+      
+      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Date</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">ASIN</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
+      html += '</tr></thead><tbody>';
+      
+      rows.forEach(row => {
+        html += '<tr style="border-bottom: 1px solid var(--border);">';
+        html += `<td style="padding: 0.75rem;">${row[0] || ''}</td>`;
+        html += `<td style="padding: 0.75rem;">${row[1] || ''}</td>`;
+        html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${row[2] || ''}</td>`;
+        html += `<td style="padding: 0.75rem;">${row[3] || ''}</td>`;
+        html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${row[4] || ''}</td>`;
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      tableDiv.innerHTML = html;
     }
     
     // PRICE ANALYSIS PAGE
