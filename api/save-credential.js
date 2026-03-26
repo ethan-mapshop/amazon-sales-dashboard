@@ -1,5 +1,5 @@
 // Save encrypted credentials to Upstash
-// POST /api/save-credential-upstash
+// POST /api/save-credential
 // Body: { key: "AMAZON_LWA_CLIENT_ID", encryptedValue: "..." }
 
 import { kv } from '@vercel/kv';
