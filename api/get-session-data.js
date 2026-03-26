@@ -19,18 +19,16 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Invalid access token' });
     }
 
-    // Get session data from Upstash
-    const dataString = await kv.get('session_data');
+    // Get session data from Upstash (KV returns deserialized objects)
+    const sessionData = await kv.get('session_data');
     
     // Handle empty or missing data
-    if (!dataString) {
+    if (!sessionData) {
       return res.status(200).json({ 
         success: true,
         data: []
       });
     }
-    
-    const sessionData = JSON.parse(dataString);
 
     return res.status(200).json({ 
       success: true,
