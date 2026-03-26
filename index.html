@@ -6516,14 +6516,14 @@
       
       try {
         // Fetch encrypted credentials from Upstash (database)
-        const dbResponse = await fetch('/api/get-credentials-upstash', {
+        const dbResponse = await fetch('/api/get-credentials', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
         });
         
         // Fetch Vercel env var status (read-only check)
-        const vercelResponse = await fetch('/api/get-credentials', {
+        const vercelResponse = await fetch('/api/get-vercel-status', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
@@ -6775,7 +6775,7 @@
         const encryptedValue = await encryptValue(value, accessToken);
         
         // Save encrypted value to Upstash only
-        const response = await fetch('/api/save-credential-upstash', {
+        const response = await fetch('/api/save-credential', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -6783,6 +6783,15 @@
           },
           body: JSON.stringify({ key, encryptedValue })
         });
+        
+        // Check if response is JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          console.error('Non-JSON response:', text);
+          showCredentialFeedback(key, 'Server error - check console', 'error');
+          return;
+        }
         
         const data = await response.json();
         
