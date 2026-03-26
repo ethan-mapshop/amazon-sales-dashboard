@@ -49,10 +49,13 @@ export default async function handler(req, res) {
       }
     });
 
-    // Download report from URL
-    const reportDocument = await sellingPartner.download(documentResponse.url, {
-      json: true
-    });
+    // Download report directly from URL
+    const downloadResponse = await fetch(documentResponse.url);
+    if (!downloadResponse.ok) {
+      throw new Error('Failed to download report from URL');
+    }
+    
+    const reportDocument = await downloadResponse.json();
     
     // The download method returns the raw content - parse if it's a JSON string
     let reportData;
