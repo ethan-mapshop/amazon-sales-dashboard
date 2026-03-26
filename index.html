@@ -7035,18 +7035,19 @@
       if (!accessToken) return;
       
       try {
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:C`, {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:F`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
         const data = await response.json();
         
         if (data.values && data.values.length > 0) {
-          // Store all products - A=sku/ASIN, B=name, C=brand
+          // Store all products - A=sku, B=name, C=brand, F=asin
           allProducts = data.values.map(row => ({
-            asin: row[0],      // Column A = sku (ASIN)
+            sku: row[0],      // Column A = sku
             name: row[1] || row[0],  // Column B = name
-            brand: row[2] || 'Unknown'  // Column C = brand
+            brand: row[2] || 'Unknown',  // Column C = brand
+            asin: row[5] || row[0]  // Column F = asin (fallback to sku if missing)
           }));
           
           // Get unique brands
