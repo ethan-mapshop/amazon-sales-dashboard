@@ -1199,17 +1199,13 @@
       border-color: var(--accent-orange);
     }
     
-    /* Make specific buttons more visible */
-    .btn-icon[title="Reveal"],
-    .btn-icon[title="Cancel"] {
-      background: var(--bg-primary);
-      border-color: var(--accent-orange);
+    /* Make emoji icons more visible with brightness filter */
+    .btn-icon {
+      filter: brightness(1.5) contrast(1.2);
     }
     
-    .btn-icon[title="Reveal"]:hover,
-    .btn-icon[title="Cancel"]:hover {
-      background: var(--accent-orange);
-      transform: scale(1.05);
+    .btn-icon:hover {
+      filter: brightness(1.8) contrast(1.3);
     }
   </style>
 </head>
