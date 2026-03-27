@@ -8,9 +8,13 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Action parameter required' });
   }
 
-  // Handle GET requests (for 'get' action)
-  if (req.method === 'GET' && action === 'get') {
-    return handleGet(req, res);
+  // Handle GET requests (for 'get' and 'sync' actions)
+  if (req.method === 'GET') {
+    if (action === 'get') {
+      return handleGet(req, res);
+    } else if (action === 'sync') {
+      return handleSync(req, res);
+    }
   }
 
   // All other actions are POST
