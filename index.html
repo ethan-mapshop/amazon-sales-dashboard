@@ -2117,7 +2117,7 @@
         <div id="session-charts" style="display: none;">
           <!-- ASIN Selector -->
           <div class="card" style="margin-bottom: 1.5rem;">
-            <div style="display: grid; grid-template-columns: 200px 300px; gap: 1rem;">
+            <div style="display: grid; grid-template-columns: 200px 300px 300px; gap: 1rem;">
               <div>
                 <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
                 <select id="session-brand-filter" onchange="filterSessionProducts()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
@@ -2126,8 +2126,14 @@
               </div>
               <div>
                 <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
-                <select id="session-product-filter" onchange="renderSessionCharts()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+                <select id="session-product-filter" onchange="filterSessionChanges()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
                   <option value="">Select Product...</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change to Analyze</label>
+                <select id="session-change-filter" onchange="renderSessionCharts()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+                  <option value="">Select Change...</option>
                 </select>
               </div>
             </div>
@@ -2136,20 +2142,51 @@
           <!-- Summary Cards -->
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
             <div class="card">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg CVR</div>
-              <div id="summary-avg-cvr" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Sessions/Day</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="summary-sessions-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="summary-sessions-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="summary-sessions-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
             </div>
             <div class="card">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">CVR vs Prior</div>
-              <div id="summary-cvr-change" style="font-size: 1.75rem; font-weight: 700;">-</div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">CVR (Conversion Rate)</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="summary-cvr-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="summary-cvr-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="summary-cvr-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
             </div>
             <div class="card">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Total Sessions</div>
-              <div id="summary-total-sessions" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-orange);">-</div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Page Views/Day</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="summary-pageviews-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="summary-pageviews-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="summary-pageviews-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
             </div>
             <div class="card">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Sessions vs Prior</div>
-              <div id="summary-sessions-change" style="font-size: 1.75rem; font-weight: 700;">-</div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
+              <div id="summary-days-since" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
             </div>
           </div>
           
@@ -8306,12 +8343,63 @@
       });
     }
     
-    async function renderSessionCharts() {
+    async function filterSessionChanges() {
       const selectedASIN = document.getElementById('session-product-filter').value;
+      const changeSelect = document.getElementById('session-change-filter');
       
       if (!selectedASIN) {
+        changeSelect.innerHTML = '<option value="">Select Change...</option>';
         return;
       }
+      
+      try {
+        // Fetch Change Log from Google Sheets
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const data = await response.json();
+        
+        if (data.values && data.values.length > 0) {
+          // Filter changes for this ASIN
+          // Column structure: Date | Product | ASIN | Changes | Notes
+          const changes = data.values
+            .filter(row => row[2] === selectedASIN) // Match ASIN
+            .map(row => ({
+              date: row[0],
+              product: row[1],
+              asin: row[2],
+              changes: row[3],
+              notes: row[4]
+            }))
+            .sort((a, b) => b.date.localeCompare(a.date)); // Most recent first
+          
+          // Populate change dropdown
+          changeSelect.innerHTML = '<option value="">Select Change...</option>';
+          changes.forEach((change, index) => {
+            changeSelect.innerHTML += `<option value="${index}" data-date="${change.date}">${change.date} - ${change.changes}</option>`;
+          });
+          
+          // Store changes for later use
+          window.sessionChanges = changes;
+        }
+        
+      } catch (error) {
+        console.error('Error loading changes:', error);
+      }
+    }
+    
+    async function renderSessionCharts() {
+      const selectedASIN = document.getElementById('session-product-filter').value;
+      const changeIndex = document.getElementById('session-change-filter').value;
+      
+      if (!selectedASIN || changeIndex === '') {
+        return;
+      }
+      
+      // Get selected change
+      const change = window.sessionChanges[changeIndex];
+      const changeDate = new Date(change.date);
       
       // Filter data for selected ASIN
       const asinData = sessionData.filter(d => d.asin === selectedASIN);
@@ -8319,54 +8407,97 @@
       // Sort by date
       asinData.sort((a, b) => new Date(a.date) - new Date(b.date));
       
-      // Get change log dates for this ASIN
-      const changeLogDates = await getChangeLogDates(selectedASIN);
+      // Calculate 30 days before change
+      const thirtyDaysBefore = new Date(changeDate);
+      thirtyDaysBefore.setDate(thirtyDaysBefore.getDate() - 30);
       
-      // Prepare chart data
+      // Split data into before and after
+      const beforeData = asinData.filter(d => {
+        const date = new Date(d.date);
+        return date >= thirtyDaysBefore && date < changeDate;
+      });
+      
+      const afterData = asinData.filter(d => {
+        const date = new Date(d.date);
+        return date >= changeDate;
+      });
+      
+      // Calculate metrics
+      const avgSessionsBefore = beforeData.length > 0 
+        ? beforeData.reduce((sum, d) => sum + d.sessions, 0) / beforeData.length 
+        : 0;
+      const avgSessionsAfter = afterData.length > 0 
+        ? afterData.reduce((sum, d) => sum + d.sessions, 0) / afterData.length 
+        : 0;
+      const sessionsChange = avgSessionsBefore > 0 
+        ? ((avgSessionsAfter - avgSessionsBefore) / avgSessionsBefore) * 100 
+        : 0;
+      
+      const avgCVRBefore = beforeData.length > 0 
+        ? beforeData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / beforeData.length 
+        : 0;
+      const avgCVRAfter = afterData.length > 0 
+        ? afterData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / afterData.length 
+        : 0;
+      const cvrChange = avgCVRBefore > 0 
+        ? ((avgCVRAfter - avgCVRBefore) / avgCVRBefore) * 100 
+        : 0;
+      
+      const avgPageViewsBefore = beforeData.length > 0 
+        ? beforeData.reduce((sum, d) => sum + d.pageViews, 0) / beforeData.length 
+        : 0;
+      const avgPageViewsAfter = afterData.length > 0 
+        ? afterData.reduce((sum, d) => sum + d.pageViews, 0) / afterData.length 
+        : 0;
+      const pageViewsChange = avgPageViewsBefore > 0 
+        ? ((avgPageViewsAfter - avgPageViewsBefore) / avgPageViewsBefore) * 100 
+        : 0;
+      
+      // Calculate days since change
+      const today = new Date();
+      const daysSince = Math.floor((today - changeDate) / (1000 * 60 * 60 * 24));
+      
+      // Update summary cards
+      document.getElementById('summary-sessions-before').textContent = avgSessionsBefore.toFixed(1);
+      document.getElementById('summary-sessions-after').textContent = avgSessionsAfter.toFixed(1);
+      document.getElementById('summary-sessions-change').textContent = (sessionsChange >= 0 ? '+' : '') + sessionsChange.toFixed(1) + '%';
+      document.getElementById('summary-sessions-change').style.color = sessionsChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('summary-cvr-before').textContent = avgCVRBefore.toFixed(2) + '%';
+      document.getElementById('summary-cvr-after').textContent = avgCVRAfter.toFixed(2) + '%';
+      document.getElementById('summary-cvr-change').textContent = (cvrChange >= 0 ? '+' : '') + cvrChange.toFixed(1) + '%';
+      document.getElementById('summary-cvr-change').style.color = cvrChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('summary-pageviews-before').textContent = avgPageViewsBefore.toFixed(1);
+      document.getElementById('summary-pageviews-after').textContent = avgPageViewsAfter.toFixed(1);
+      document.getElementById('summary-pageviews-change').textContent = (pageViewsChange >= 0 ? '+' : '') + pageViewsChange.toFixed(1) + '%';
+      document.getElementById('summary-pageviews-change').style.color = pageViewsChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('summary-days-since').textContent = daysSince;
+      document.getElementById('summary-change-date').textContent = `Change: ${change.date} - ${change.changes}`;
+      
+      // Prepare chart data (show all data, with annotation at change date)
       const dates = asinData.map(d => d.date);
       const sessions = asinData.map(d => d.sessions);
       const cvr = asinData.map(d => d.unitSessionPercentage);
       
-      // Calculate summary stats
-      const avgCVR = cvr.reduce((a, b) => a + b, 0) / cvr.length;
-      const totalSessions = sessions.reduce((a, b) => a + b, 0);
-      
-      // Calculate vs prior period (first half vs second half)
-      const midpoint = Math.floor(cvr.length / 2);
-      const firstHalfCVR = cvr.slice(0, midpoint).reduce((a, b) => a + b, 0) / midpoint;
-      const secondHalfCVR = cvr.slice(midpoint).reduce((a, b) => a + b, 0) / (cvr.length - midpoint);
-      const cvrChange = ((secondHalfCVR - firstHalfCVR) / firstHalfCVR) * 100;
-      
-      const firstHalfSessions = sessions.slice(0, midpoint).reduce((a, b) => a + b, 0);
-      const secondHalfSessions = sessions.slice(midpoint).reduce((a, b) => a + b, 0);
-      const sessionsChange = ((secondHalfSessions - firstHalfSessions) / firstHalfSessions) * 100;
-      
-      // Update summary cards
-      document.getElementById('summary-avg-cvr').textContent = avgCVR.toFixed(2) + '%';
-      document.getElementById('summary-cvr-change').textContent = (cvrChange >= 0 ? '+' : '') + cvrChange.toFixed(1) + '%';
-      document.getElementById('summary-cvr-change').style.color = cvrChange >= 0 ? 'var(--success)' : 'var(--error)';
-      
-      document.getElementById('summary-total-sessions').textContent = totalSessions.toLocaleString();
-      document.getElementById('summary-sessions-change').textContent = (sessionsChange >= 0 ? '+' : '') + sessionsChange.toFixed(1) + '%';
-      document.getElementById('summary-sessions-change').style.color = sessionsChange >= 0 ? 'var(--success)' : 'var(--error)';
-      
-      // Create annotations for change log dates
-      const annotations = {};
-      changeLogDates.forEach((dateStr, idx) => {
-        annotations[`line${idx}`] = {
+      // Create annotation for change date
+      const annotations = {
+        changeLine: {
           type: 'line',
-          xMin: dateStr,
-          xMax: dateStr,
-          borderColor: 'rgba(255, 159, 64, 0.8)',
+          xMin: change.date,
+          xMax: change.date,
+          borderColor: 'rgba(255, 99, 132, 0.8)',
           borderWidth: 2,
           borderDash: [5, 5],
           label: {
             display: true,
-            content: 'Change',
-            position: 'start'
+            content: change.changes,
+            position: 'start',
+            backgroundColor: 'rgba(255, 99, 132, 0.8)'
           }
-        };
-      });
+        }
+      };
       
       // Destroy existing charts
       if (sessionsChart) sessionsChart.destroy();
