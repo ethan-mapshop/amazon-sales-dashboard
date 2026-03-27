@@ -2073,14 +2073,19 @@
         <div class="card" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Fetch Session & CVR Data</h3>
           
-          <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+          <div style="padding: 0.75rem; background: var(--bg-secondary); border-radius: 6px; margin-bottom: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+            ℹ️ Amazon data has a 48-hour delay. Data from 2 days ago is the most recent available.
+          </div>
+          
+          <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-secondary); border-radius: 6px;">
+            <span style="font-size: 0.875rem; color: var(--text-secondary);">Latest data in database:</span>
+            <span id="latest-session-date" style="font-weight: 600; color: var(--text-primary);">Loading...</span>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: 300px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
             <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Start Date</label>
-              <input type="date" id="session-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-            </div>
-            <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">End Date</label>
-              <input type="date" id="session-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select Date to Fetch</label>
+              <input type="date" id="session-fetch-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
             </div>
             <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
               Fetch Data
@@ -8131,12 +8136,11 @@
     let cvrChart = null;
     
     async function fetchSessionData() {
-      const startDate = document.getElementById('session-start-date').value;
-      const endDate = document.getElementById('session-end-date').value;
+      const fetchDate = document.getElementById('session-fetch-date').value;
       const feedback = document.getElementById('session-fetch-feedback');
       
-      if (!startDate || !endDate) {
-        showFeedback(feedback, 'error', '⚠ Please select start and end dates');
+      if (!fetchDate) {
+        showFeedback(feedback, 'error', '⚠ Please select a date to fetch');
         return;
       }
       
@@ -8150,8 +8154,8 @@
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            startDate,
-            endDate
+            startDate: fetchDate,
+            endDate: fetchDate
           })
         });
         
@@ -8225,6 +8229,15 @@
         
         const result = await response.json();
         sessionData = result.data;
+        
+        // Display latest date in database
+        if (sessionData.length > 0) {
+          const dates = sessionData.map(d => d.date).filter(Boolean);
+          const latestDate = dates.sort().reverse()[0];
+          document.getElementById('latest-session-date').textContent = latestDate || 'No data';
+        } else {
+          document.getElementById('latest-session-date').textContent = 'No data';
+        }
         
         // Load products from Google Sheets to populate dropdowns
         const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:F`, {
