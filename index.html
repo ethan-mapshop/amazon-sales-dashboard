@@ -2073,7 +2073,7 @@
         <div class="card" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Fetch Session & CVR Data</h3>
           
-          <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr 200px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Start Date</label>
               <input type="date" id="session-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
@@ -2085,9 +2085,13 @@
             <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
               Fetch Data
             </button>
+            <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
+              Backfill Jan-Mar
+            </button>
           </div>
           
           <div id="session-fetch-feedback" style="display: none;"></div>
+          <div id="backfill-progress" style="margin-top: 1rem; max-height: 300px; overflow-y: auto; display: none; padding: 1rem; background: var(--bg-secondary); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem;"></div>
         </div>
         
         <!-- Charts Section -->
@@ -8441,6 +8445,52 @@
       } catch (error) {
         console.error('Error loading change log dates:', error);
         return [];
+      }
+    }
+    
+    async function backfillSessions() {
+      const progressDiv = document.getElementById('backfill-progress');
+      const feedback = document.getElementById('session-fetch-feedback');
+      
+      progressDiv.style.display = 'block';
+      progressDiv.innerHTML = 'Starting backfill from January 1 to March 24, 2026...\n';
+      feedback.style.display = 'none';
+      
+      try {
+        const response = await fetch('/api/backfill-sessions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+          
+          lines.forEach(line => {
+            if (line.startsWith('data: ')) {
+              const message = line.substring(6);
+              progressDiv.innerHTML += message + '\n';
+              progressDiv.scrollTop = progressDiv.scrollHeight;
+            }
+          });
+        }
+        
+        // Reload data
+        await loadSessionData();
+        
+        showFeedback(feedback, 'success', '✓ Backfill complete! Data loaded.');
+        
+      } catch (error) {
+        console.error('Backfill error:', error);
+        showFeedback(feedback, 'error', '⚠ Backfill failed: ' + error.message);
       }
     }
     
