@@ -2094,7 +2094,7 @@
           
           <div style="border-top: 1px solid var(--border); margin: 1.5rem 0; padding-top: 1.5rem;">
             <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Backfill Historical Data</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 200px 150px; gap: 1rem; align-items: end;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; align-items: end;">
               <div>
                 <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill Start Date</label>
                 <input type="date" id="backfill-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
@@ -2105,9 +2105,6 @@
               </div>
               <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
                 Run Backfill
-              </button>
-              <button class="btn" onclick="clearSessionData()" style="height: fit-content; background: var(--error); color: white;">
-                Clear Data
               </button>
             </div>
           </div>
@@ -8770,38 +8767,6 @@
       }
     }
     
-    async function clearSessionData() {
-      const feedback = document.getElementById('session-fetch-feedback');
-      
-      if (!confirm('Are you sure you want to clear ALL session data? This cannot be undone.')) {
-        return;
-      }
-      
-      showFeedback(feedback, 'info', 'Clearing session data...');
-      
-      try {
-        const response = await fetch('/api/sessions?action=clear', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error('Failed to clear data');
-        }
-        
-        // Clear local data
-        sessionData = [];
-        document.getElementById('latest-session-date').textContent = 'No data';
-        
-        showFeedback(feedback, 'success', '✓ All session data cleared. You can now re-backfill with updated parsing.');
-        
-      } catch (error) {
-        console.error('Clear error:', error);
-        showFeedback(feedback, 'error', '⚠ Failed to clear data: ' + error.message);
-      }
-    }
     
     function selectAllBrands() {
       document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = true);
