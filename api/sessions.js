@@ -149,9 +149,17 @@ async function handleDownload(req, res) {
       reportData = reportDocument;
     }
 
-    const sessionData = parseSessionReport(reportData);
+    // Extract date from reportSpecification
+    const reportDate = reportData.reportSpecification?.dataEndTime?.split('T')[0] || 
+                       reportData.reportSpecification?.dataStartTime?.split('T')[0];
     
-    await kv.set('session_data', sessionData);
+    const sessionData = parseSessionReport(reportData, reportDate);
+    
+    // Get existing data and append new data
+    const existingData = await kv.get('session_data') || [];
+    const combinedData = [...existingData, ...sessionData];
+    
+    await kv.set('session_data', combinedData);
 
     return res.status(200).json({
       status: 'DONE',
@@ -201,7 +209,7 @@ async function handleGet(req, res) {
   }
 }
 
-// BACKFILL: Backfill Jan-Mar data
+// BACKFILL: Backfill custom date range
 async function handleBackfill(req, res) {
   try {
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
@@ -216,6 +224,12 @@ async function handleBackfill(req, res) {
       return res.status(401).json({ error: 'Invalid access token' });
     }
 
+    const { startDate, endDate } = req.body;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start and end dates required (YYYY-MM-DD format)' });
+    }
+
     const sellingPartner = new SellingPartner({
       region: 'na',
       refresh_token: process.env.AMAZON_REFRESH_TOKEN,
@@ -225,18 +239,21 @@ async function handleBackfill(req, res) {
       }
     });
 
-    const startDate = new Date('2026-01-01');
-    const endDate = new Date('2026-03-24');
+    const start = new Date(startDate);
+    const end = new Date(endDate);
     
-    const allData = [];
+    // Get existing data
+    const existingData = await kv.get('session_data') || [];
+    let allData = [...existingData];
+    
     let processedDays = 0;
-    let currentDate = new Date(startDate);
+    let currentDate = new Date(start);
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    while (currentDate <= endDate) {
+    while (currentDate <= end) {
       const dateStr = currentDate.toISOString().split('T')[0];
       
       try {
@@ -298,8 +315,11 @@ async function handleBackfill(req, res) {
         const dayData = parseSessionReport(reportData, dateStr);
         allData.push(...dayData);
         
+        // Save incrementally after each day
+        await kv.set('session_data', allData);
+        
         processedDays++;
-        res.write(`data: Completed ${dateStr} (${processedDays} days processed)\n\n`);
+        res.write(`data: Completed ${dateStr} (${processedDays} days processed, ${allData.length} total records)\n\n`);
         
         await sleep(2000);
         
@@ -310,9 +330,7 @@ async function handleBackfill(req, res) {
       currentDate.setDate(currentDate.getDate() + 1);
     }
     
-    await kv.set('session_data', allData);
-    
-    res.write(`data: COMPLETE - Stored ${allData.length} records from ${processedDays} days\n\n`);
+    res.write(`data: COMPLETE - Total ${allData.length} records from ${processedDays} days\n\n`);
     res.end();
 
   } catch (error) {
