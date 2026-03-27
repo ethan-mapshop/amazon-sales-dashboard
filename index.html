@@ -6822,14 +6822,14 @@
       
       try {
         // Fetch encrypted credentials from Upstash (database)
-        const dbResponse = await fetch('/api/get-credentials', {
+        const dbResponse = await fetch('/api/credentials?action=get', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
         });
         
         // Fetch Vercel env var status (read-only check)
-        const vercelResponse = await fetch('/api/get-vercel-status', {
+        const vercelResponse = await fetch('/api/credentials?action=vercel-status', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
@@ -7819,7 +7819,7 @@
         // Save to Upstash
         showFeedback(feedback, 'info', `Uploading ${keywords.length} keywords...`);
         
-        const response = await fetch('/api/save-keyword-data', {
+        const response = await fetch('/api/keywords?action=save', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${accessToken}`,
@@ -8129,7 +8129,7 @@
       try {
         showFeedback(feedback, 'info', 'Requesting report from Amazon...');
         
-        const response = await fetch('/api/request-session-report', {
+        const response = await fetch('/api/sessions?action=request', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${accessToken}`,
@@ -8162,7 +8162,7 @@
     
     async function pollSessionReport(feedback) {
       try {
-        const response = await fetch('/api/download-session-report', {
+        const response = await fetch('/api/sessions?action=download', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${accessToken}`,
@@ -8199,7 +8199,7 @@
     
     async function loadSessionData() {
       try {
-        const response = await fetch('/api/get-session-data', {
+        const response = await fetch('/api/sessions?action=get', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
@@ -8457,7 +8457,7 @@
       feedback.style.display = 'none';
       
       try {
-        const response = await fetch('/api/backfill-sessions', {
+        const response = await fetch('/api/sessions?action=backfill', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${accessToken}`
