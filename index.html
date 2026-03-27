@@ -7350,22 +7350,29 @@
       if (!accessToken) return;
       
       try {
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:F`, {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
         const data = await response.json();
         
         if (data.values && data.values.length > 0) {
-          // Store all products - A=sku, B=name, C=brand, F=asin
-          // Filter out discontinued products (ASIN = N/A)
+          // Store products - A=sku, B=name, C=brand, F=asin, G=productType
+          // For Listing Optimization: only show Parent and Non-Variable products
           allProducts = data.values
-            .filter(row => row[5] && row[5].toUpperCase() !== 'N/A')
+            .filter(row => {
+              const asin = row[5];
+              const productType = row[6] || '';
+              return asin && 
+                     asin.toUpperCase() !== 'N/A' && 
+                     (productType === 'Parent' || productType === 'Non-Variable');
+            })
             .map(row => ({
-              sku: row[0],      // Column A = sku
-              name: row[1] || row[0],  // Column B = name
-              brand: row[2] || 'Unknown',  // Column C = brand
-              asin: row[5]  // Column F = asin
+              sku: row[0],
+              name: row[1] || row[0],
+              brand: row[2] || 'Unknown',
+              asin: row[5],
+              productType: row[6] || ''
             }));
           
           // Get unique brands
@@ -8337,22 +8344,30 @@
         }
         
         // Load products from Google Sheets to populate dropdowns
-        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:F`, {
+        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
         const productsData = await productsResponse.json();
         
         if (productsData.values && productsData.values.length > 0) {
-          // Store all products - A=sku, B=name, C=brand, F=asin
-          // Filter out discontinued products (ASIN = N/A)
+          // Store products - A=sku, B=name, C=brand, F=asin, G=productType
+          // For Listing Optimization: only show Parent and Non-Variable products
+          // Filter out discontinued products (ASIN = N/A) and Child products
           allProducts = productsData.values
-            .filter(row => row[5] && row[5].toUpperCase() !== 'N/A')
+            .filter(row => {
+              const asin = row[5];
+              const productType = row[6] || '';
+              return asin && 
+                     asin.toUpperCase() !== 'N/A' && 
+                     (productType === 'Parent' || productType === 'Non-Variable');
+            })
             .map(row => ({
               sku: row[0],
               name: row[1] || row[0],
               brand: row[2] || 'Unknown',
-              asin: row[5]
+              asin: row[5],
+              productType: row[6] || ''
             }));
           
           // Get unique brands
