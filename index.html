@@ -2094,7 +2094,7 @@
           
           <div style="border-top: 1px solid var(--border); margin: 1.5rem 0; padding-top: 1.5rem;">
             <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Backfill Historical Data</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; align-items: end;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 200px 150px; gap: 1rem; align-items: end;">
               <div>
                 <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill Start Date</label>
                 <input type="date" id="backfill-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
@@ -2105,6 +2105,9 @@
               </div>
               <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
                 Run Backfill
+              </button>
+              <button class="btn" onclick="clearSessionData()" style="height: fit-content; background: var(--error); color: white;">
+                Clear Data
               </button>
             </div>
           </div>
@@ -2495,6 +2498,9 @@
         }
       });
       
+      // Save current page to localStorage
+      localStorage.setItem('currentPage', pageName);
+      
       // Page-specific initialization
       if (pageName === 'mapping' && accessToken) {
         loadMappingData();
@@ -2649,14 +2655,33 @@
     // Try to initialize on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', () => {
       initializeGoogleAuth();
-      // Initialize Overview Monthly since it's the default page and view
-      showMonthly();
-      // Auto-load Monthly data if signed in (small delay to ensure accessToken is set)
-      setTimeout(() => {
-        if (accessToken) {
-          generateMonthlyReport();
+      
+      // Restore saved page and tab
+      const savedPage = localStorage.getItem('currentPage');
+      const savedListingTab = localStorage.getItem('currentListingTab');
+      
+      if (savedPage && document.getElementById(`${savedPage}-page`)) {
+        showPage(savedPage);
+        
+        // If it's the listing page, restore the sub-tab
+        if (savedPage === 'listing' && savedListingTab) {
+          setTimeout(() => {
+            const tabButton = Array.from(document.querySelectorAll('#listing-page .tab'))
+              .find(btn => btn.getAttribute('onclick')?.includes(`'${savedListingTab}'`));
+            if (tabButton) {
+              tabButton.click();
+            }
+          }, 100);
         }
-      }, 100);
+      } else {
+        // Default to Overview Monthly
+        showMonthly();
+        setTimeout(() => {
+          if (accessToken) {
+            generateMonthlyReport();
+          }
+        }, 100);
+      }
     });
     
     // Also try on window load as backup
@@ -7314,6 +7339,9 @@
       // Set active tab button
       event.target.classList.add('active');
       
+      // Save current listing sub-tab to localStorage
+      localStorage.setItem('currentListingTab', tabName);
+      
       // Load data for specific tabs
       if (tabName === 'changelog' && accessToken) {
         loadChangeLog();
@@ -8747,6 +8775,39 @@
       } catch (error) {
         console.error('Backfill error:', error);
         showFeedback(feedback, 'error', '⚠ Backfill failed: ' + error.message);
+      }
+    }
+    
+    async function clearSessionData() {
+      const feedback = document.getElementById('session-fetch-feedback');
+      
+      if (!confirm('Are you sure you want to clear ALL session data? This cannot be undone.')) {
+        return;
+      }
+      
+      showFeedback(feedback, 'info', 'Clearing session data...');
+      
+      try {
+        const response = await fetch('/api/sessions?action=clear', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to clear data');
+        }
+        
+        // Clear local data
+        sessionData = [];
+        document.getElementById('latest-session-date').textContent = 'No data';
+        
+        showFeedback(feedback, 'success', '✓ All session data cleared. You can now re-backfill with updated parsing.');
+        
+      } catch (error) {
+        console.error('Clear error:', error);
+        showFeedback(feedback, 'error', '⚠ Failed to clear data: ' + error.message);
       }
     }
     
