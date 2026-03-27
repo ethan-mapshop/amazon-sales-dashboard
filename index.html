@@ -2084,7 +2084,7 @@
           
           <div style="display: grid; grid-template-columns: 300px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
             <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select Date to Fetch</label>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Manual Data Fetch</label>
               <input type="date" id="session-fetch-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
             </div>
             <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
@@ -7236,13 +7236,10 @@
       if (tabName === 'changelog' && accessToken) {
         loadChangeLog();
       } else if (tabName === 'sessions' && accessToken) {
-        // Set default dates (last 90 days)
-        const endDate = new Date();
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - 90);
-        
-        document.getElementById('session-start-date').valueAsDate = startDate;
-        document.getElementById('session-end-date').valueAsDate = endDate;
+        // Set default date to 2 days ago (48-hour delay)
+        const twoDaysAgo = new Date();
+        twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+        document.getElementById('session-fetch-date').valueAsDate = twoDaysAgo;
         
         // Load existing data if available
         loadSessionData();
