@@ -2113,6 +2113,41 @@
           <div id="backfill-progress" style="margin-top: 1rem; max-height: 300px; overflow-y: auto; display: none; padding: 1rem; background: var(--bg-secondary); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem;"></div>
         </div>
         
+        <!-- Export Section -->
+        <div class="card" style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Change Analysis</h3>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select Brands</label>
+              <div style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; max-height: 150px; overflow-y: auto;">
+                <div style="margin-bottom: 0.5rem;">
+                  <button onclick="selectAllBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Select All</button>
+                  <button onclick="selectNoBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">Select None</button>
+                </div>
+                <div id="export-brand-checkboxes" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <!-- Brands will be populated here -->
+                </div>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change Start Date</label>
+                <input type="date" id="export-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              </div>
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change End Date</label>
+                <input type="date" id="export-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="exportChangeAnalysis()" style="height: fit-content;">
+              Export to CSV
+            </button>
+          </div>
+          
+          <div id="export-feedback" style="display: none;"></div>
+        </div>
+        
         <!-- Charts Section -->
         <div id="session-charts" style="display: none;">
           <!-- ASIN Selector -->
@@ -8307,6 +8342,18 @@
             brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
           });
           
+          // Populate export brand checkboxes
+          const exportBrandCheckboxes = document.getElementById('export-brand-checkboxes');
+          exportBrandCheckboxes.innerHTML = '';
+          brands.forEach(brand => {
+            exportBrandCheckboxes.innerHTML += `
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" class="export-brand-checkbox" value="${brand}" checked style="cursor: pointer;">
+                <span style="font-size: 0.875rem;">${brand}</span>
+              </label>
+            `;
+          });
+          
           // Populate products (all initially)
           filterSessionProducts();
         }
@@ -8694,6 +8741,176 @@
       } catch (error) {
         console.error('Backfill error:', error);
         showFeedback(feedback, 'error', '⚠ Backfill failed: ' + error.message);
+      }
+    }
+    
+    function selectAllBrands() {
+      document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = true);
+    }
+    
+    function selectNoBrands() {
+      document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = false);
+    }
+    
+    async function exportChangeAnalysis() {
+      const feedback = document.getElementById('export-feedback');
+      const startDate = document.getElementById('export-start-date').value;
+      const endDate = document.getElementById('export-end-date').value;
+      
+      if (!startDate || !endDate) {
+        showFeedback(feedback, 'error', '⚠ Please select both start and end dates');
+        return;
+      }
+      
+      // Get selected brands
+      const selectedBrands = Array.from(document.querySelectorAll('.export-brand-checkbox:checked'))
+        .map(cb => cb.value);
+      
+      if (selectedBrands.length === 0) {
+        showFeedback(feedback, 'error', '⚠ Please select at least one brand');
+        return;
+      }
+      
+      showFeedback(feedback, 'info', 'Generating export...');
+      
+      try {
+        // Fetch change log data
+        const changeLogResponse = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`,
+          { headers: { 'Authorization': `Bearer ${accessToken}` } }
+        );
+        const changeLogData = await changeLogResponse.json();
+        
+        if (!changeLogData.values) {
+          throw new Error('No change log data found');
+        }
+        
+        // Filter changes by date range and brand
+        const changes = changeLogData.values
+          .map(row => ({
+            date: row[0],
+            product: row[1],
+            asin: row[2],
+            changes: row[3],
+            notes: row[4]
+          }))
+          .filter(change => {
+            if (change.date < startDate || change.date > endDate) return false;
+            
+            // Find product brand
+            const product = allProducts.find(p => p.asin === change.asin);
+            return product && selectedBrands.includes(product.brand);
+          });
+        
+        if (changes.length === 0) {
+          showFeedback(feedback, 'error', '⚠ No changes found for selected criteria');
+          return;
+        }
+        
+        // Calculate metrics for each change
+        const exportData = [];
+        
+        for (const change of changes) {
+          const product = allProducts.find(p => p.asin === change.asin);
+          if (!product) continue;
+          
+          const changeDate = new Date(change.date);
+          const thirtyDaysBefore = new Date(changeDate);
+          thirtyDaysBefore.setDate(thirtyDaysBefore.getDate() - 30);
+          
+          // Get ASIN data
+          const asinData = sessionData.filter(d => d.asin === change.asin);
+          
+          const beforeData = asinData.filter(d => {
+            const date = new Date(d.date);
+            return date >= thirtyDaysBefore && date < changeDate;
+          });
+          
+          const afterData = asinData.filter(d => {
+            const date = new Date(d.date);
+            return date >= changeDate;
+          });
+          
+          // Calculate metrics
+          const avgSessionsBefore = beforeData.length > 0 
+            ? beforeData.reduce((sum, d) => sum + d.sessions, 0) / beforeData.length 
+            : 0;
+          const avgSessionsAfter = afterData.length > 0 
+            ? afterData.reduce((sum, d) => sum + d.sessions, 0) / afterData.length 
+            : 0;
+          const sessionsChange = avgSessionsBefore > 0 
+            ? ((avgSessionsAfter - avgSessionsBefore) / avgSessionsBefore) * 100 
+            : 0;
+          
+          const avgCVRBefore = beforeData.length > 0 
+            ? beforeData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / beforeData.length 
+            : 0;
+          const avgCVRAfter = afterData.length > 0 
+            ? afterData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / afterData.length 
+            : 0;
+          const cvrChange = avgCVRBefore > 0 
+            ? ((avgCVRAfter - avgCVRBefore) / avgCVRBefore) * 100 
+            : 0;
+          
+          const avgPageViewsBefore = beforeData.length > 0 
+            ? beforeData.reduce((sum, d) => sum + d.pageViews, 0) / beforeData.length 
+            : 0;
+          const avgPageViewsAfter = afterData.length > 0 
+            ? afterData.reduce((sum, d) => sum + d.pageViews, 0) / afterData.length 
+            : 0;
+          const pageViewsChange = avgPageViewsBefore > 0 
+            ? ((avgPageViewsAfter - avgPageViewsBefore) / avgPageViewsBefore) * 100 
+            : 0;
+          
+          exportData.push({
+            Date: change.date,
+            Brand: product.brand,
+            Product: change.product,
+            ASIN: change.asin,
+            Changes: change.changes,
+            'Sessions per day Before (30d)': avgSessionsBefore.toFixed(2),
+            'Sessions per day After': avgSessionsAfter.toFixed(2),
+            'Sessions per day Change (%)': sessionsChange.toFixed(2),
+            'CVR Before (30d) (%)': avgCVRBefore.toFixed(2),
+            'CVR After (%)': avgCVRAfter.toFixed(2),
+            'CVR Change (%)': cvrChange.toFixed(2),
+            'Page Views per day Before (30d)': avgPageViewsBefore.toFixed(2),
+            'Page Views per day After': avgPageViewsAfter.toFixed(2),
+            'Page Views per day Change (%)': pageViewsChange.toFixed(2)
+          });
+        }
+        
+        // Convert to CSV
+        const headers = Object.keys(exportData[0]);
+        const csvRows = [headers.join(',')];
+        
+        exportData.forEach(row => {
+          const values = headers.map(header => {
+            const value = row[header];
+            // Escape values with commas
+            return typeof value === 'string' && value.includes(',') 
+              ? `"${value}"` 
+              : value;
+          });
+          csvRows.push(values.join(','));
+        });
+        
+        const csv = csvRows.join('\n');
+        
+        // Download CSV
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `change-analysis-${startDate}-to-${endDate}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        
+        showFeedback(feedback, 'success', `✓ Exported ${exportData.length} changes to CSV`);
+        
+      } catch (error) {
+        console.error('Export error:', error);
+        showFeedback(feedback, 'error', '⚠ Export failed: ' + error.message);
       }
     }
     
