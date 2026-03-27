@@ -2191,7 +2191,7 @@
           </div>
           
           <!-- Charts -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem;">
             <div class="card">
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sessions Over Time</h3>
               <canvas id="sessions-chart"></canvas>
@@ -2199,6 +2199,10 @@
             <div class="card">
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Conversion Rate Over Time</h3>
               <canvas id="cvr-chart"></canvas>
+            </div>
+            <div class="card">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Page Views Over Time</h3>
+              <canvas id="pageviews-chart"></canvas>
             </div>
           </div>
         </div>
@@ -8168,6 +8172,7 @@
     let sessionPollingInterval = null;
     let sessionsChart = null;
     let cvrChart = null;
+    let pageviewsChart = null;
     
     async function fetchSessionData() {
       const fetchDate = document.getElementById('session-fetch-date').value;
@@ -8493,7 +8498,7 @@
           label: {
             display: true,
             content: change.changes,
-            position: 'start',
+            position: 'end',
             backgroundColor: 'rgba(255, 99, 132, 0.8)'
           }
         }
@@ -8502,6 +8507,7 @@
       // Destroy existing charts
       if (sessionsChart) sessionsChart.destroy();
       if (cvrChart) cvrChart.destroy();
+      if (pageviewsChart) pageviewsChart.destroy();
       
       // Create Sessions chart
       const sessionsCtx = document.getElementById('sessions-chart').getContext('2d');
@@ -8569,6 +8575,40 @@
                   return value + '%';
                 }
               }
+            }
+          }
+        }
+      });
+      
+      // Create Page Views chart
+      const pageViews = asinData.map(d => d.pageViews);
+      const pageviewsCtx = document.getElementById('pageviews-chart').getContext('2d');
+      pageviewsChart = new Chart(pageviewsCtx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Page Views',
+            data: pageViews,
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false
+            },
+            annotation: {
+              annotations
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true
             }
           }
         }
