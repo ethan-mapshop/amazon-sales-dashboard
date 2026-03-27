@@ -6971,7 +6971,7 @@
         
         if (vercelResponse.ok) {
           const data = await vercelResponse.json();
-          vercelCredentials = data.credentials || {};
+          vercelCredentials = data.status || {};
         }
         
         // Decrypt and populate each credential from database
