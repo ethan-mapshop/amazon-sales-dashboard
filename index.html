@@ -2073,7 +2073,7 @@
         <div class="card" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Fetch Session & CVR Data</h3>
           
-          <div style="display: grid; grid-template-columns: 1fr 1fr 200px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Start Date</label>
               <input type="date" id="session-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
@@ -2085,9 +2085,23 @@
             <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
               Fetch Data
             </button>
-            <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
-              Backfill Jan-Mar
-            </button>
+          </div>
+          
+          <div style="border-top: 1px solid var(--border); margin: 1.5rem 0; padding-top: 1.5rem;">
+            <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Backfill Historical Data</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; align-items: end;">
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill Start Date</label>
+                <input type="date" id="backfill-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              </div>
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill End Date</label>
+                <input type="date" id="backfill-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              </div>
+              <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
+                Run Backfill
+              </button>
+            </div>
           </div>
           
           <div id="session-fetch-feedback" style="display: none;"></div>
@@ -8449,19 +8463,28 @@
     }
     
     async function backfillSessions() {
+      const startDate = document.getElementById('backfill-start-date').value;
+      const endDate = document.getElementById('backfill-end-date').value;
       const progressDiv = document.getElementById('backfill-progress');
       const feedback = document.getElementById('session-fetch-feedback');
       
+      if (!startDate || !endDate) {
+        showFeedback(feedback, 'error', '⚠ Please select both start and end dates for backfill');
+        return;
+      }
+      
       progressDiv.style.display = 'block';
-      progressDiv.innerHTML = 'Starting backfill from January 1 to March 24, 2026...\n';
+      progressDiv.innerHTML = `Starting backfill from ${startDate} to ${endDate}...\n`;
       feedback.style.display = 'none';
       
       try {
         const response = await fetch('/api/sessions?action=backfill', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ startDate, endDate })
         });
         
         const reader = response.body.getReader();
