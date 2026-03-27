@@ -25,6 +25,8 @@ export default async function handler(req, res) {
       return handleDownload(req, res);
     case 'backfill':
       return handleBackfill(req, res);
+    case 'sync':
+      return handleSync(req, res);
     default:
       return res.status(400).json({ error: 'Invalid action' });
   }
@@ -336,6 +338,121 @@ async function handleBackfill(req, res) {
   } catch (error) {
     console.error('Backfill error:', error);
     return res.status(500).json({ error: 'Backfill failed: ' + error.message });
+  }
+}
+
+// SYNC: Daily automated sync (2 days ago)
+async function handleSync(req, res) {
+  try {
+    // Calculate date for 2 days ago
+    const twoDaysAgo = new Date();
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+    const dateStr = twoDaysAgo.toISOString().split('T')[0];
+    
+    console.log(`[SYNC] Starting daily sync for ${dateStr}`);
+    
+    const sellingPartner = new SellingPartner({
+      region: 'na',
+      refresh_token: process.env.AMAZON_REFRESH_TOKEN,
+      credentials: {
+        SELLING_PARTNER_APP_CLIENT_ID: process.env.AMAZON_LWA_CLIENT_ID,
+        SELLING_PARTNER_APP_CLIENT_SECRET: process.env.AMAZON_LWA_CLIENT_SECRET
+      }
+    });
+
+    // Request report
+    console.log(`[SYNC] Requesting report for ${dateStr}`);
+    const reportResponse = await sellingPartner.callAPI({
+      operation: 'createReport',
+      endpoint: 'reports',
+      body: {
+        reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
+        marketplaceIds: [process.env.AMAZON_MARKETPLACE_ID],
+        dataStartTime: `${dateStr}T00:00:00Z`,
+        dataEndTime: `${dateStr}T23:59:59Z`,
+        reportOptions: {
+          asinGranularity: 'CHILD'
+        }
+      }
+    });
+
+    const reportId = reportResponse.reportId;
+    console.log(`[SYNC] Report requested, ID: ${reportId}`);
+    
+    // Poll for completion (max 5 minutes)
+    let attempts = 0;
+    let statusResponse;
+    
+    while (attempts < 60) { // 60 * 5 seconds = 5 minutes
+      await sleep(5000);
+      
+      statusResponse = await sellingPartner.callAPI({
+        operation: 'getReport',
+        endpoint: 'reports',
+        path: { reportId }
+      });
+      
+      console.log(`[SYNC] Poll attempt ${attempts + 1}, status: ${statusResponse.processingStatus}`);
+      
+      if (statusResponse.processingStatus === 'DONE') {
+        break;
+      }
+      
+      if (statusResponse.processingStatus === 'FATAL' || statusResponse.processingStatus === 'CANCELLED') {
+        throw new Error(`Report failed with status: ${statusResponse.processingStatus}`);
+      }
+      
+      attempts++;
+    }
+    
+    if (statusResponse.processingStatus !== 'DONE') {
+      throw new Error('Report timed out after 5 minutes');
+    }
+    
+    console.log(`[SYNC] Report ready, downloading...`);
+    
+    // Download report
+    const documentResponse = await sellingPartner.callAPI({
+      operation: 'getReportDocument',
+      endpoint: 'reports',
+      path: { reportDocumentId: statusResponse.reportDocumentId }
+    });
+    
+    const downloadResponse = await fetch(documentResponse.url);
+    if (!downloadResponse.ok) {
+      throw new Error('Failed to download report from URL');
+    }
+    
+    const buffer = Buffer.from(await downloadResponse.arrayBuffer());
+    const { gunzipSync } = await import('zlib');
+    const decompressed = gunzipSync(buffer);
+    const reportData = JSON.parse(decompressed.toString());
+    
+    // Parse data
+    const sessionData = parseSessionReport(reportData, dateStr);
+    console.log(`[SYNC] Parsed ${sessionData.length} records`);
+    
+    // Append to existing data
+    const existingData = await kv.get('session_data') || [];
+    const combinedData = [...existingData, ...sessionData];
+    
+    await kv.set('session_data', combinedData);
+    console.log(`[SYNC] Stored successfully. Total records: ${combinedData.length}`);
+    
+    return res.status(200).json({
+      success: true,
+      date: dateStr,
+      newRecords: sessionData.length,
+      totalRecords: combinedData.length,
+      message: `Daily sync complete for ${dateStr}`
+    });
+
+  } catch (error) {
+    console.error('[SYNC] Error:', error);
+    return res.status(500).json({ 
+      success: false,
+      error: 'Sync failed: ' + error.message 
+    });
   }
 }
 
