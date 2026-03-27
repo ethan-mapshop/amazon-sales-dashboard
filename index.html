@@ -6987,15 +6987,10 @@
           const input = document.getElementById(key);
           const vercelIndicator = document.getElementById(`${key}-vercel`);
           
-          // Load and decrypt database value
+          // Load plaintext value from database (server decrypts)
           if (dbCredentials[key]) {
-            try {
-              const decryptedValue = await decryptValue(dbCredentials[key], accessToken);
-              if (input) {
-                input.value = decryptedValue;
-              }
-            } catch (decryptError) {
-              console.error(`Failed to decrypt ${key}:`, decryptError);
+            if (input) {
+              input.value = dbCredentials[key];
             }
           }
           
@@ -7203,17 +7198,14 @@
       }
       
       try {
-        // Encrypt the value
-        const encryptedValue = await encryptValue(value, accessToken);
-        
-        // Save encrypted value to Upstash only
-        const response = await fetch('/api/save-credential-upstash', {
+        // Save plaintext value to server (server handles encryption)
+        const response = await fetch('/api/credentials?action=save', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${accessToken}`
           },
-          body: JSON.stringify({ key, encryptedValue })
+          body: JSON.stringify({ key, value })
         });
         
         const data = await response.json();
