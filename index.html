@@ -2120,13 +2120,19 @@
           <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select Brands</label>
-              <div style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; max-height: 150px; overflow-y: auto;">
-                <div style="margin-bottom: 0.5rem;">
-                  <button onclick="selectAllBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Select All</button>
-                  <button onclick="selectNoBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">Select None</button>
-                </div>
-                <div id="export-brand-checkboxes" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                  <!-- Brands will be populated here -->
+              <div style="position: relative;">
+                <button id="brand-dropdown-btn" onclick="toggleBrandDropdown(event)" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); text-align: left; display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                  <span id="brand-dropdown-label">All brands selected</span>
+                  <span>▼</span>
+                </button>
+                <div id="brand-dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; right: 0; margin-top: 0.25rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; max-height: 250px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                  <div style="margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border);">
+                    <button onclick="selectAllBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Select All</button>
+                    <button onclick="selectNoBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">Select None</button>
+                  </div>
+                  <div id="export-brand-checkboxes" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <!-- Brands will be populated here -->
+                  </div>
                 </div>
               </div>
             </div>
@@ -8348,7 +8354,7 @@
           brands.forEach(brand => {
             exportBrandCheckboxes.innerHTML += `
               <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                <input type="checkbox" class="export-brand-checkbox" value="${brand}" checked style="cursor: pointer;">
+                <input type="checkbox" class="export-brand-checkbox" value="${brand}" checked onchange="updateBrandDropdownLabel()" style="cursor: pointer;">
                 <span style="font-size: 0.875rem;">${brand}</span>
               </label>
             `;
@@ -8746,11 +8752,43 @@
     
     function selectAllBrands() {
       document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = true);
+      updateBrandDropdownLabel();
     }
     
     function selectNoBrands() {
       document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = false);
+      updateBrandDropdownLabel();
     }
+    
+    function toggleBrandDropdown(event) {
+      event.stopPropagation();
+      const menu = document.getElementById('brand-dropdown-menu');
+      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    }
+    
+    function updateBrandDropdownLabel() {
+      const checkboxes = document.querySelectorAll('.export-brand-checkbox');
+      const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+      const totalCount = checkboxes.length;
+      const label = document.getElementById('brand-dropdown-label');
+      
+      if (checkedCount === 0) {
+        label.textContent = 'No brands selected';
+      } else if (checkedCount === totalCount) {
+        label.textContent = 'All brands selected';
+      } else {
+        label.textContent = `${checkedCount} brand${checkedCount > 1 ? 's' : ''} selected`;
+      }
+    }
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(event) {
+      const menu = document.getElementById('brand-dropdown-menu');
+      const btn = document.getElementById('brand-dropdown-btn');
+      if (menu && btn && !menu.contains(event.target) && !btn.contains(event.target)) {
+        menu.style.display = 'none';
+      }
+    });
     
     async function exportChangeAnalysis() {
       const feedback = document.getElementById('export-feedback');
