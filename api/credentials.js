@@ -40,10 +40,10 @@ async function handleSave(req, res) {
       return res.status(401).json({ error: 'Invalid access token' });
     }
 
-    const { key, encryptedValue } = req.body;
+    const { key, value } = req.body;
 
-    if (!key || !encryptedValue) {
-      return res.status(400).json({ error: 'Missing key or encryptedValue' });
+    if (!key || !value) {
+      return res.status(400).json({ error: 'Missing key or value' });
     }
 
     const allowedKeys = [
@@ -66,8 +66,16 @@ async function handleSave(req, res) {
       return res.status(403).json({ error: 'Key not allowed' });
     }
 
+    // Encrypt server-side using CREDENTIAL_ENCRYPTION_KEY
+    const encryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      return res.status(500).json({ error: 'Encryption key not configured' });
+    }
+
+    const encrypted = await encryptValue(value, encryptionKey);
+    
     const kvKey = `credential:${key}`;
-    await kv.set(kvKey, encryptedValue);
+    await kv.set(kvKey, encrypted);
 
     return res.status(200).json({ 
       success: true,
@@ -78,6 +86,38 @@ async function handleSave(req, res) {
     console.error('Error saving credential:', error);
     return res.status(500).json({ error: 'Failed to save credential: ' + error.message });
   }
+}
+
+// Encrypt value using AES-256-GCM
+async function encryptValue(plaintext, key) {
+  const crypto = require('crypto');
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv);
+  
+  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag();
+  
+  // Combine iv + authTag + encrypted
+  return iv.toString('hex') + authTag.toString('hex') + encrypted;
+}
+
+// Decrypt value using AES-256-GCM
+async function decryptValue(encryptedHex, key) {
+  const crypto = require('crypto');
+  
+  // Extract iv (12 bytes = 24 hex chars), authTag (16 bytes = 32 hex chars), and encrypted data
+  const iv = Buffer.from(encryptedHex.slice(0, 24), 'hex');
+  const authTag = Buffer.from(encryptedHex.slice(24, 56), 'hex');
+  const encrypted = encryptedHex.slice(56);
+  
+  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv);
+  decipher.setAuthTag(authTag);
+  
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  
+  return decrypted;
 }
 
 // GET: Retrieve all encrypted credentials
@@ -93,6 +133,11 @@ async function handleGet(req, res) {
     
     if (!verifyResponse.ok) {
       return res.status(401).json({ error: 'Invalid access token' });
+    }
+
+    const encryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      return res.status(500).json({ error: 'Encryption key not configured' });
     }
 
     const credentialKeys = [
@@ -118,7 +163,12 @@ async function handleGet(req, res) {
       const encryptedValue = await kv.get(kvKey);
       
       if (encryptedValue) {
-        credentials[key] = encryptedValue;
+        try {
+          // Decrypt server-side and send plaintext to client
+          credentials[key] = await decryptValue(encryptedValue, encryptionKey);
+        } catch (error) {
+          console.error(`Failed to decrypt ${key}:`, error);
+        }
       }
     }
 
