@@ -9401,6 +9401,8 @@
     }
     
     // ORDERS BACKFILL
+    // Runs day-by-day from the browser to avoid Vercel's 60s function timeout.
+    // Each day is one fast API call; the frontend loops through all days.
     async function runOrdersBackfill() {
       if (!accessToken) { alert('Please sign in first.'); return; }
 
@@ -9432,52 +9434,52 @@
         log.scrollTop = log.scrollHeight;
       };
 
-      addLine(`Starting backfill: ${startDate} → ${endDate}`, 'var(--text-secondary)');
-
-      try {
-        const response = await fetch('/api/orders?action=backfill', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ startDate, endDate })
-        });
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const text = decoder.decode(value);
-          const lines = text.split('\n').filter(l => l.startsWith('data: '));
-
-          for (const line of lines) {
-            const msg = line.replace('data: ', '').trim();
-            if (!msg) continue;
-
-            if (msg.startsWith('COMPLETE')) {
-              addLine(msg, 'var(--success)');
-              // Reload the page data now that we have orders
-              await loadSalesVolumeData();
-            } else if (msg.startsWith('FAILED') || msg.startsWith('⚠')) {
-              addLine(msg, 'var(--error)');
-            } else if (msg.startsWith('✓')) {
-              addLine(msg, 'var(--success)');
-            } else {
-              addLine(msg, 'var(--text-secondary)');
-            }
-          }
-        }
-
-      } catch (error) {
-        addLine('Error: ' + error.message, 'var(--error)');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Run Backfill';
+      // Build list of all dates in range
+      const dates = [];
+      const cursor = new Date(startDate);
+      const stop = new Date(endDate);
+      while (cursor <= stop) {
+        dates.push(cursor.toISOString().split('T')[0]);
+        cursor.setDate(cursor.getDate() + 1);
       }
+
+      addLine(`Starting backfill: ${startDate} → ${endDate} (${dates.length} days)`, 'var(--text-secondary)');
+
+      let totalRecords = 0;
+      let errors = 0;
+
+      for (let i = 0; i < dates.length; i++) {
+        const date = dates[i];
+        try {
+          const response = await fetch(`/api/orders?action=sync&date=${date}`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          const data = await response.json();
+
+          if (data.success) {
+            totalRecords += data.newRecords;
+            addLine(`✓ ${date} — ${data.newRecords} line items (${totalRecords} total, ${i + 1}/${dates.length} days)`, 'var(--success)');
+          } else {
+            errors++;
+            addLine(`⚠ ${date} — ${data.error}`, 'var(--error)');
+          }
+        } catch (error) {
+          errors++;
+          addLine(`⚠ ${date} — ${error.message}`, 'var(--error)');
+        }
+      }
+
+      if (errors === 0) {
+        addLine(`COMPLETE — ${totalRecords} order line items stored across ${dates.length} days`, 'var(--success)');
+      } else {
+        addLine(`DONE with ${errors} error(s) — ${totalRecords} line items stored`, 'var(--warning)');
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Run Backfill';
+
+      // Reload chart data now that orders are in Upstash
+      await loadSalesVolumeData();
     }
 
     async function testOrdersSync() {
