@@ -1543,6 +1543,28 @@
           </div>
         </div>
       </div>
+
+      <!-- Backfill Card -->
+      <div class="card" style="margin-top: 2rem;">
+        <h3 class="section-title" style="margin-bottom: 1.5rem;">Load Historical Data</h3>
+        <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1.5rem;">
+          Fetch and store historical orders from Amazon for a date range. Run this once to populate past data. The daily sync will keep it up to date automatically.
+        </p>
+        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Start Date</label>
+            <input type="date" id="backfill-start" style="padding: 0.625rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: 'Work Sans', sans-serif; font-size: 0.875rem;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">End Date</label>
+            <input type="date" id="backfill-end" style="padding: 0.625rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: 'Work Sans', sans-serif; font-size: 0.875rem;">
+          </div>
+          <button id="backfill-btn" class="btn btn-primary" onclick="runOrdersBackfill()">Run Backfill</button>
+          <button class="btn btn-secondary" onclick="testOrdersSync()" style="font-size: 0.8rem;">Test Yesterday's Sync</button>
+        </div>
+        <div id="backfill-log" style="display: none; margin-top: 1.5rem; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.8rem; max-height: 250px; overflow-y: auto; line-height: 1.8;">
+        </div>
+      </div>
     </div>
     
     <!-- OVERVIEW PAGE -->
@@ -9274,10 +9296,12 @@
       document.getElementById('mtd-volume-change').style.color = mtdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
       
       // Generate rolling 12 months
+      // Use the 1st of the current month as the anchor to avoid JS date overflow
+      // (e.g. Mar 30 - 1 month = Mar 2 instead of Feb 28)
       const months = [];
+      const anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
       for (let i = 11; i >= 0; i--) {
-        const d = new Date(yesterday);
-        d.setMonth(d.getMonth() - i);
+        const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
         months.push({
           year: d.getFullYear(),
           month: d.getMonth() + 1,
@@ -9376,6 +9400,110 @@
       });
     }
     
+    // ORDERS BACKFILL
+    async function runOrdersBackfill() {
+      if (!accessToken) { alert('Please sign in first.'); return; }
+
+      const startDate = document.getElementById('backfill-start').value;
+      const endDate = document.getElementById('backfill-end').value;
+
+      if (!startDate || !endDate) {
+        alert('Please select a start and end date.');
+        return;
+      }
+      if (startDate > endDate) {
+        alert('Start date must be before end date.');
+        return;
+      }
+
+      const btn = document.getElementById('backfill-btn');
+      const log = document.getElementById('backfill-log');
+
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      log.style.display = 'block';
+      log.innerHTML = '';
+
+      const addLine = (msg, color) => {
+        const line = document.createElement('div');
+        line.style.color = color || 'var(--text-primary)';
+        line.textContent = msg;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+      };
+
+      addLine(`Starting backfill: ${startDate} → ${endDate}`, 'var(--text-secondary)');
+
+      try {
+        const response = await fetch('/api/orders?action=backfill', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ startDate, endDate })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const text = decoder.decode(value);
+          const lines = text.split('\n').filter(l => l.startsWith('data: '));
+
+          for (const line of lines) {
+            const msg = line.replace('data: ', '').trim();
+            if (!msg) continue;
+
+            if (msg.startsWith('COMPLETE')) {
+              addLine(msg, 'var(--success)');
+              // Reload the page data now that we have orders
+              await loadSalesVolumeData();
+            } else if (msg.startsWith('FAILED') || msg.startsWith('⚠')) {
+              addLine(msg, 'var(--error)');
+            } else if (msg.startsWith('✓')) {
+              addLine(msg, 'var(--success)');
+            } else {
+              addLine(msg, 'var(--text-secondary)');
+            }
+          }
+        }
+
+      } catch (error) {
+        addLine('Error: ' + error.message, 'var(--error)');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run Backfill';
+      }
+    }
+
+    async function testOrdersSync() {
+      if (!accessToken) { alert('Please sign in first.'); return; }
+
+      const log = document.getElementById('backfill-log');
+      log.style.display = 'block';
+      log.innerHTML = '<div style="color: var(--text-secondary);">Testing yesterday\'s sync…</div>';
+
+      try {
+        const response = await fetch('/api/orders?action=sync', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          log.innerHTML = `<div style="color: var(--success);">✓ Sync successful — ${data.newRecords} order line items stored for ${data.date}</div>`;
+          await loadSalesVolumeData();
+        } else {
+          log.innerHTML = `<div style="color: var(--error);">✗ Sync failed: ${data.error}</div>`;
+        }
+      } catch (error) {
+        log.innerHTML = `<div style="color: var(--error);">✗ Error: ${error.message}</div>`;
+      }
+    }
+
     // PRICE ANALYSIS PAGE
     function shortenBrandName(brandName) {
       const brandMap = {
