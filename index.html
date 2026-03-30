@@ -1522,7 +1522,7 @@
       </div>
       
       <!-- Main Content: Monthly List and Charts -->
-      <div style="display: grid; grid-template-columns: 300px 1fr; gap: 2rem;">
+      <div style="display: grid; grid-template-columns: 300px 1fr; gap: 2rem; align-items: start;">
         <!-- Monthly List -->
         <div class="card">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Monthly Breakdown</h3>
@@ -1532,14 +1532,14 @@
         </div>
         
         <!-- Charts -->
-        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-          <div class="card">
+        <div style="display: grid; grid-template-rows: 1fr 1fr; gap: 1.5rem; height: 100%;">
+          <div class="card" style="min-height: 0;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales ($)</h3>
-            <canvas id="sales-chart-sv"></canvas>
+            <canvas id="sales-chart-sv" style="max-height: 250px;"></canvas>
           </div>
-          <div class="card">
+          <div class="card" style="min-height: 0;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume (Units)</h3>
-            <canvas id="volume-chart-sv"></canvas>
+            <canvas id="volume-chart-sv" style="max-height: 250px;"></canvas>
           </div>
         </div>
       </div>
