@@ -1224,6 +1224,7 @@
     <div class="sidebar-brand">Map Shop</div>
 
     <div class="nav-group-label">Reporting</div>
+    <a class="nav-item" onclick="showPage('salesvolume')">Sales &amp; Volume</a>
     <a class="nav-item active" onclick="showPage('overview')">Overview</a>
     <a class="nav-item" onclick="showPage('brandproduct')">Brand &amp; Product</a>
     <a class="nav-item" onclick="showPage('charts')">Charts</a>
@@ -1426,6 +1427,124 @@
       </div>
     </div>
 
+    <!-- OVERVIEW PAGE -->
+    <!-- SALES & VOLUME PAGE -->
+    <div id="salesvolume-page" class="page">
+      <h2 class="section-title" style="margin-bottom: 2rem;">Sales & Volume</h2>
+      
+      <!-- YTD and MTD Comparison Cards -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+        <div class="card">
+          <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Year-to-Date Comparison</h3>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Sales</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-sales-prev-label">2025:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-sales-prev">$0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-sales-curr-label">2026:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-sales-curr">$0</span>
+                </div>
+                <div id="ytd-sales-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+            <div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Volume</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-volume-prev-label">2025:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-volume-prev">0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-volume-curr-label">2026:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-volume-curr">0</span>
+                </div>
+                <div id="ytd-volume-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Month-to-Date Comparison</h3>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Sales</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-sales-prev-label">Mar 25:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-sales-prev">$0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-sales-curr-label">Mar 26:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-sales-curr">$0</span>
+                </div>
+                <div id="mtd-sales-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+            <div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Volume</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-volume-prev-label">Mar 25:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-volume-prev">0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-volume-curr-label">Mar 26:</span>
+                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-volume-curr">0</span>
+                </div>
+                <div id="mtd-volume-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Filters -->
+      <div class="card" style="margin-bottom: 2rem;">
+        <div style="display: grid; grid-template-columns: 200px 300px; gap: 1rem;">
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
+            <select id="sv-brand-filter" onchange="filterSVProducts()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              <option value="">All Brands</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
+            <select id="sv-product-filter" onchange="renderSalesVolumeData()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              <option value="">All Products</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Main Content: Monthly List and Charts -->
+      <div style="display: grid; grid-template-columns: 300px 1fr; gap: 2rem;">
+        <!-- Monthly List -->
+        <div class="card">
+          <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Monthly Breakdown</h3>
+          <div id="monthly-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <!-- Monthly data will be populated here -->
+          </div>
+        </div>
+        
+        <!-- Charts -->
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          <div class="card">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales ($)</h3>
+            <canvas id="sales-chart-sv"></canvas>
+          </div>
+          <div class="card">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume (Units)</h3>
+            <canvas id="volume-chart-sv"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+    
     <!-- OVERVIEW PAGE -->
     <div id="overview-page" class="page active">
       <div class="card">
@@ -2523,6 +2642,10 @@
       
       if (pageName === 'charts' && accessToken) {
         loadChartsData(); // Load chart data
+      }
+      
+      if (pageName === 'salesvolume' && accessToken) {
+        loadSalesVolumeData();
       }
       
       if (pageName === 'integrations' && accessToken) {
@@ -8983,6 +9106,274 @@
         console.error('Export error:', error);
         showFeedback(feedback, 'error', '⚠ Export failed: ' + error.message);
       }
+    }
+    
+    // SALES & VOLUME PAGE
+    let svAllProducts = [];
+    let svOrdersData = [];
+    let svSalesChart = null;
+    let svVolumeChart = null;
+    
+    async function loadSalesVolumeData() {
+      if (!accessToken) return;
+      
+      try {
+        // Load orders data from Upstash
+        const ordersResponse = await fetch('/api/orders?action=get', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (ordersResponse.ok) {
+          const data = await ordersResponse.json();
+          svOrdersData = data.orders || [];
+        }
+        
+        // Load products (Child + Non-Variable only)
+        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const productsData = await productsResponse.json();
+        
+        if (productsData.values && productsData.values.length > 0) {
+          svAllProducts = productsData.values
+            .filter(row => {
+              const asin = row[5];
+              const productType = row[6] || '';
+              return asin && 
+                     asin.toUpperCase() !== 'N/A' && 
+                     (productType === 'Child' || productType === 'Non-Variable');
+            })
+            .map(row => ({
+              sku: row[0],
+              name: row[1] || row[0],
+              brand: row[2] || 'Unknown',
+              asin: row[5],
+              productType: row[6] || ''
+            }));
+          
+          // Populate brand dropdown
+          const brands = [...new Set(svAllProducts.map(p => p.brand))].sort();
+          const brandSelect = document.getElementById('sv-brand-filter');
+          brandSelect.innerHTML = '<option value="">All Brands</option>';
+          brands.forEach(brand => {
+            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
+          });
+          
+          // Populate products
+          filterSVProducts();
+        }
+        
+        // Render data
+        renderSalesVolumeData();
+        
+      } catch (error) {
+        console.error('Error loading sales & volume data:', error);
+      }
+    }
+    
+    function filterSVProducts() {
+      const selectedBrand = document.getElementById('sv-brand-filter').value;
+      const productSelect = document.getElementById('sv-product-filter');
+      
+      let filteredProducts = selectedBrand 
+        ? svAllProducts.filter(p => p.brand === selectedBrand)
+        : svAllProducts;
+      
+      filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
+      
+      productSelect.innerHTML = '<option value="">All Products</option>';
+      filteredProducts.forEach(product => {
+        productSelect.innerHTML += `<option value="${product.sku}">${product.name}</option>`;
+      });
+      
+      renderSalesVolumeData();
+    }
+    
+    function renderSalesVolumeData() {
+      const selectedSKU = document.getElementById('sv-product-filter').value;
+      
+      // Filter orders by selected SKU
+      let orders = svOrdersData;
+      if (selectedSKU) {
+        orders = orders.filter(o => o.sku === selectedSKU);
+      }
+      
+      // Calculate dates
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      const currentYear = today.getFullYear();
+      const previousYear = currentYear - 1;
+      const currentMonth = today.getMonth(); // 0-indexed
+      
+      // YTD dates
+      const ytdPrevStart = `${previousYear}-01-01`;
+      const ytdPrevEnd = `${previousYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+      const ytdCurrStart = `${currentYear}-01-01`;
+      const ytdCurrEnd = `${currentYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+      
+      // MTD dates
+      const mtdPrevStart = `${previousYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-01`;
+      const mtdPrevEnd = ytdPrevEnd;
+      const mtdCurrStart = `${currentYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-01`;
+      const mtdCurrEnd = ytdCurrEnd;
+      
+      // Calculate YTD
+      const ytdPrevOrders = orders.filter(o => o.orderDate >= ytdPrevStart && o.orderDate <= ytdPrevEnd);
+      const ytdCurrOrders = orders.filter(o => o.orderDate >= ytdCurrStart && o.orderDate <= ytdCurrEnd);
+      
+      const ytdPrevSales = ytdPrevOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const ytdCurrSales = ytdCurrOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const ytdPrevVolume = ytdPrevOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+      const ytdCurrVolume = ytdCurrOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+      
+      const ytdSalesChange = ytdPrevSales > 0 ? ((ytdCurrSales - ytdPrevSales) / ytdPrevSales) * 100 : 0;
+      const ytdVolumeChange = ytdPrevVolume > 0 ? ((ytdCurrVolume - ytdPrevVolume) / ytdPrevVolume) * 100 : 0;
+      
+      // Calculate MTD
+      const mtdPrevOrders = orders.filter(o => o.orderDate >= mtdPrevStart && o.orderDate <= mtdPrevEnd);
+      const mtdCurrOrders = orders.filter(o => o.orderDate >= mtdCurrStart && o.orderDate <= mtdCurrEnd);
+      
+      const mtdPrevSales = mtdPrevOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const mtdCurrSales = mtdCurrOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const mtdPrevVolume = mtdPrevOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+      const mtdCurrVolume = mtdCurrOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+      
+      const mtdSalesChange = mtdPrevSales > 0 ? ((mtdCurrSales - mtdPrevSales) / mtdPrevSales) * 100 : 0;
+      const mtdVolumeChange = mtdPrevVolume > 0 ? ((mtdCurrVolume - mtdPrevVolume) / mtdPrevVolume) * 100 : 0;
+      
+      // Update YTD cards
+      document.getElementById('ytd-sales-prev').textContent = '$' + ytdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('ytd-sales-curr').textContent = '$' + ytdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('ytd-sales-change').textContent = (ytdSalesChange >= 0 ? '+' : '') + ytdSalesChange.toFixed(1) + '%';
+      document.getElementById('ytd-sales-change').style.color = ytdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('ytd-volume-prev').textContent = ytdPrevVolume.toLocaleString();
+      document.getElementById('ytd-volume-curr').textContent = ytdCurrVolume.toLocaleString();
+      document.getElementById('ytd-volume-change').textContent = (ytdVolumeChange >= 0 ? '+' : '') + ytdVolumeChange.toFixed(1) + '%';
+      document.getElementById('ytd-volume-change').style.color = ytdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      // Update MTD cards
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const currentMonthName = monthNames[yesterday.getMonth()];
+      
+      document.getElementById('mtd-sales-prev-label').textContent = `${currentMonthName} ${previousYear.toString().slice(2)}:`;
+      document.getElementById('mtd-sales-curr-label').textContent = `${currentMonthName} ${currentYear.toString().slice(2)}:`;
+      document.getElementById('mtd-sales-prev').textContent = '$' + mtdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('mtd-sales-curr').textContent = '$' + mtdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('mtd-sales-change').textContent = (mtdSalesChange >= 0 ? '+' : '') + mtdSalesChange.toFixed(1) + '%';
+      document.getElementById('mtd-sales-change').style.color = mtdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('mtd-volume-prev-label').textContent = `${currentMonthName} ${previousYear.toString().slice(2)}:`;
+      document.getElementById('mtd-volume-curr-label').textContent = `${currentMonthName} ${currentYear.toString().slice(2)}:`;
+      document.getElementById('mtd-volume-prev').textContent = mtdPrevVolume.toLocaleString();
+      document.getElementById('mtd-volume-curr').textContent = mtdCurrVolume.toLocaleString();
+      document.getElementById('mtd-volume-change').textContent = (mtdVolumeChange >= 0 ? '+' : '') + mtdVolumeChange.toFixed(1) + '%';
+      document.getElementById('mtd-volume-change').style.color = mtdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      // Generate rolling 12 months
+      const months = [];
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(yesterday);
+        d.setMonth(d.getMonth() - i);
+        months.push({
+          year: d.getFullYear(),
+          month: d.getMonth() + 1,
+          label: `${monthNames[d.getMonth()]} ${d.getFullYear().toString().slice(2)}`
+        });
+      }
+      
+      // Calculate monthly data
+      const monthlyData = months.map(m => {
+        const monthOrders = orders.filter(o => {
+          const orderMonth = parseInt(o.orderDate.split('-')[1]);
+          const orderYear = parseInt(o.orderDate.split('-')[0]);
+          return orderYear === m.year && orderMonth === m.month;
+        });
+        
+        const sales = monthOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+        const volume = monthOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+        
+        return { ...m, sales, volume };
+      });
+      
+      // Render monthly list
+      const monthlyList = document.getElementById('monthly-list');
+      monthlyList.innerHTML = monthlyData.map(m => `
+        <div style="display: flex; justify-content: space-between; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">
+          <span style="font-weight: 500;">${m.label}</span>
+          <div style="display: flex; gap: 1rem;">
+            <span>$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span>
+            <span style="color: var(--text-secondary);">${m.volume} units</span>
+          </div>
+        </div>
+      `).join('');
+      
+      // Render charts
+      if (svSalesChart) svSalesChart.destroy();
+      if (svVolumeChart) svVolumeChart.destroy();
+      
+      const salesCtx = document.getElementById('sales-chart-sv').getContext('2d');
+      svSalesChart = new Chart(salesCtx, {
+        type: 'line',
+        data: {
+          labels: monthlyData.map(m => m.label),
+          datasets: [{
+            label: 'Sales ($)',
+            data: monthlyData.map(m => m.sales),
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      const volumeCtx = document.getElementById('volume-chart-sv').getContext('2d');
+      svVolumeChart = new Chart(volumeCtx, {
+        type: 'line',
+        data: {
+          labels: monthlyData.map(m => m.label),
+          datasets: [{
+            label: 'Volume (Units)',
+            data: monthlyData.map(m => m.volume),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
     }
     
     // PRICE ANALYSIS PAGE
