@@ -1661,15 +1661,29 @@
             </div>
           </div>
 
-          <!-- Charts -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+          <!-- Charts: 7-day rolling average (top) + cumulative (bottom) -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
             <div class="card">
-              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Daily Revenue ($)</h3>
-              <canvas id="pci-revenue-chart"></canvas>
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Revenue — 7-Day Rolling Avg</h3>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily revenue, centred on each day</p>
+              <canvas id="pci-rolling-rev-chart"></canvas>
             </div>
             <div class="card">
-              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Daily Units Sold</h3>
-              <canvas id="pci-units-chart"></canvas>
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — 7-Day Rolling Avg</h3>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily units, centred on each day</p>
+              <canvas id="pci-rolling-units-chart"></canvas>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div class="card">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Revenue — Cumulative</h3>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Running total; slope change = impact</p>
+              <canvas id="pci-cumrev-chart"></canvas>
+            </div>
+            <div class="card">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — Cumulative</h3>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Running total; slope change = impact</p>
+              <canvas id="pci-cumunits-chart"></canvas>
             </div>
           </div>
         </div>
@@ -9934,8 +9948,7 @@
 
     // ── PRICE CHANGE IMPACTS ──────────────────────────────────────────────────
 
-    let pciRevenueChart = null;
-    let pciUnitsChart = null;
+    // PCI charts stored on window (pciRollingRevChart, pciRollingUnitsChart, pciCumRevChart, pciCumUnitsChart)
     let pciPriceChanges = []; // parsed from Sheets
     let pciSkuMap = {};       // sku -> { brand, productName }
 
@@ -10209,9 +10222,22 @@
         cursor = offsetDate(cursor, 1);
       }
 
-      // Index of change date in the labels array
-      const changeIdx = windowDays; // exactly windowDays in
+      const changeIdx = windowDays; // index of change date in the series
 
+      // 7-day rolling average (trailing, handles edges gracefully)
+      const rolling = (arr, w) => arr.map((_, i) => {
+        const slice = arr.slice(Math.max(0, i - Math.floor(w / 2)), Math.min(arr.length, i + Math.floor(w / 2) + 1));
+        return slice.reduce((a, b) => a + b, 0) / slice.length;
+      });
+      const rollingRev = rolling(dailyRevenue, 7);
+      const rollingUnits = rolling(dailyUnits, 7);
+
+      // Cumulative sums
+      const cumSum = arr => arr.reduce((acc, v) => { acc.push((acc[acc.length - 1] || 0) + v); return acc; }, []);
+      const cumRev = cumSum(dailyRevenue);
+      const cumUnits = cumSum(dailyUnits);
+
+      // Annotation: subtle white dashed vertical line at change date
       const annotationLine = {
         type: 'line',
         xMin: changeIdx - 0.5,
@@ -10221,7 +10247,7 @@
         borderDash: [4, 4]
       };
 
-      const chartOpts = (isCurrency) => ({
+      const mkOpts = (isCurrency) => ({
         responsive: true,
         plugins: {
           legend: { display: false },
@@ -10237,35 +10263,45 @@
 
       document.getElementById('pci-charts').style.display = 'block';
 
-      if (pciRevenueChart) pciRevenueChart.destroy();
-      if (pciUnitsChart) pciUnitsChart.destroy();
-
-      pciRevenueChart = new Chart(document.getElementById('pci-revenue-chart').getContext('2d'), {
-        type: 'line',
-        data: {
-          labels: dailyLabels,
-          datasets: [{
-            data: dailyRevenue,
-            borderColor: 'rgb(34, 197, 94)',
-            backgroundColor: 'rgba(34, 197, 94, 0.1)',
-            tension: 0.3, pointRadius: 2
-          }]
-        },
-        options: chartOpts(true)
+      // Destroy old charts
+      ['pciRollingRevChart','pciRollingUnitsChart','pciCumRevChart','pciCumUnitsChart'].forEach(k => {
+        if (window[k]) { window[k].destroy(); window[k] = null; }
       });
 
-      pciUnitsChart = new Chart(document.getElementById('pci-units-chart').getContext('2d'), {
+      window.pciRollingRevChart = new Chart(document.getElementById('pci-rolling-rev-chart').getContext('2d'), {
         type: 'line',
         data: {
           labels: dailyLabels,
-          datasets: [{
-            data: dailyUnits,
-            borderColor: 'rgb(59, 130, 246)',
-            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-            tension: 0.3, pointRadius: 2
-          }]
+          datasets: [{ data: rollingRev, borderColor: 'rgb(34, 197, 94)', backgroundColor: 'rgba(34, 197, 94, 0.1)', tension: 0.4, pointRadius: 0 }]
         },
-        options: chartOpts(false)
+        options: mkOpts(true)
+      });
+
+      window.pciRollingUnitsChart = new Chart(document.getElementById('pci-rolling-units-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: dailyLabels,
+          datasets: [{ data: rollingUnits, borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.1)', tension: 0.4, pointRadius: 0 }]
+        },
+        options: mkOpts(false)
+      });
+
+      window.pciCumRevChart = new Chart(document.getElementById('pci-cumrev-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: dailyLabels,
+          datasets: [{ data: cumRev, borderColor: 'rgb(34, 197, 94)', backgroundColor: 'rgba(34, 197, 94, 0.08)', tension: 0.1, pointRadius: 0, fill: true }]
+        },
+        options: mkOpts(true)
+      });
+
+      window.pciCumUnitsChart = new Chart(document.getElementById('pci-cumunits-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: dailyLabels,
+          datasets: [{ data: cumUnits, borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.08)', tension: 0.1, pointRadius: 0, fill: true }]
+        },
+        options: mkOpts(false)
       });
     }
 
