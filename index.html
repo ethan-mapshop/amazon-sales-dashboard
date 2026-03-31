@@ -10053,12 +10053,13 @@
       const changes = window._pciFilteredForSelect || [];
 
       // Calculate before/after metrics from orders data
+      const yesterday = offsetDate(new Date().toISOString().split('T')[0], -1);
       const results = changes.map(pc => {
         const changeDate = pc.date; // YYYY-MM-DD string
         const beforeStart = offsetDate(changeDate, -windowDays);
         const beforeEnd = offsetDate(changeDate, -1);
         const afterStart = changeDate;
-        const afterEnd = offsetDate(changeDate, windowDays - 1);
+        const afterEnd = yesterday;
 
         const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
         const after  = calcOrderMetrics(svOrdersData, pc.sku, afterStart, afterEnd, windowDays);
@@ -10092,7 +10093,7 @@
               <tr>
                 <th colspan="6" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Price Change</th>
                 <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Before (${windowDays}d)</th>
-                <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">After (${windowDays}d)</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">After (since change)</th>
                 <th colspan="2" style="text-align:center;padding:0.75rem;">Impact</th>
               </tr>
               <tr style="background:var(--bg-secondary);">
@@ -10159,17 +10160,20 @@
       if (!r) return;
 
       // Recalculate metrics fresh using current windowDays (not cached values)
+      // "before" = windowDays before the change; "after" = all days since the change
+      const todayStr = new Date().toISOString().split('T')[0];
+      const yesterdayStr = offsetDate(todayStr, -1);
       const beforeStart = offsetDate(r.date, -windowDays);
       const beforeEnd   = offsetDate(r.date, -1);
       const afterStart  = r.date;
-      const afterEnd    = offsetDate(r.date, windowDays - 1);
+      const afterEnd    = yesterdayStr;
 
       const freshBefore = calcOrderMetrics(svOrdersData, r.sku, beforeStart, beforeEnd, windowDays);
       const freshAfter  = calcOrderMetrics(svOrdersData, r.sku, afterStart, afterEnd, windowDays);
 
       // Update summary cards
       const daysBefore = windowDays;
-      const daysAfter = Math.min(windowDays, daysBetween(r.date, new Date().toISOString().split('T')[0]));
+      const daysAfter = daysBetween(r.date, todayStr);
 
       const revBefore   = daysBefore > 0 ? freshBefore.revenue / daysBefore : 0;
       const revAfter    = daysAfter  > 0 ? freshAfter.revenue  / daysAfter  : 0;
@@ -10196,9 +10200,9 @@
       document.getElementById('pci-summary-days').textContent = daysSince;
       document.getElementById('pci-summary-change-date').textContent = `Changed ${r.date}`;
 
-      // Build daily data series: windowDays before + windowDays after
+      // Build daily data series: windowDays before + all days since change
       const startDate = offsetDate(r.date, -windowDays);
-      const endDate = offsetDate(r.date, windowDays - 1);
+      const endDate = yesterdayStr;
       const dailyLabels = [];
       const dailyRevenue = [];
       const dailyUnits = [];
