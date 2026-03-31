@@ -10033,6 +10033,9 @@
         changeSelect.innerHTML += `<option value="${i}">${pc.date} — ${name} ($${pc.oldPrice.toFixed(2)} → $${pc.newPrice.toFixed(2)})</option>`;
       });
 
+      // Default to the most recent change (index 0 — list is sorted newest first)
+      if (filtered.length > 0) changeSelect.value = '0';
+
       loadPCITable();
     }
 
@@ -10219,31 +10222,6 @@
       const rollingRev   = rolling(dailyRevenue, 7);
       const rollingUnits = rolling(dailyUnits, 7);
 
-      // Separate linear trendlines for before and after periods
-      // Returns a full-length array with nulls outside each segment
-      const splitTrend = (arr, splitIdx) => {
-        const reg = (segment, offset) => {
-          const n = segment.length;
-          if (n < 2) return segment.map((v, i) => ({ i: i + offset, v }));
-          const xs = segment.map((_, i) => i);
-          const sumX  = xs.reduce((a, b) => a + b, 0);
-          const sumY  = segment.reduce((a, b) => a + b, 0);
-          const sumXY = xs.reduce((a, x, i) => a + x * segment[i], 0);
-          const sumXX = xs.reduce((a, x) => a + x * x, 0);
-          const denom = n * sumXX - sumX * sumX;
-          const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
-          const intercept = (sumY - slope * sumX) / n;
-          return xs.map((x, i) => ({ i: i + offset, v: intercept + slope * x }));
-        };
-        const before = reg(arr.slice(0, splitIdx), 0);
-        const after  = reg(arr.slice(splitIdx), splitIdx);
-        const result = new Array(arr.length).fill(null);
-        before.forEach(({ i, v }) => result[i] = v);
-        after.forEach(({ i, v }) => result[i] = v);
-        return result;
-      };
-      const trendRev   = splitTrend(rollingRev,   changeIdx);
-      const trendUnits = splitTrend(rollingUnits, changeIdx);
 
       // Annotation: subtle white dashed vertical line at change date
       const annotationLine = {
@@ -10269,11 +10247,8 @@
         }
       });
 
-      const mkDatasets = (rolling, trend, color) => ([
-        // Rolling avg — filled area
-        { data: rolling, borderColor: color, backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'), tension: 0.4, pointRadius: 0, borderWidth: 2, order: 1 },
-        // Trendline — thin dashed, no fill
-        { data: trend, borderColor: color.replace('rgb', 'rgba').replace(')', ', 0.6)'), borderWidth: 1.5, borderDash: [6, 3], pointRadius: 0, tension: 0, fill: false, spanGaps: false, order: 2 }
+      const mkDatasets = (rolling, color) => ([
+        { data: rolling, borderColor: color, backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'), tension: 0.4, pointRadius: 0, borderWidth: 2 }
       ]);
 
       // Destroy old charts
@@ -10283,13 +10258,13 @@
 
       window.pciRollingRevChart = new Chart(document.getElementById('pci-rolling-rev-chart').getContext('2d'), {
         type: 'line',
-        data: { labels: dailyLabels, datasets: mkDatasets(rollingRev, trendRev, 'rgb(34, 197, 94)') },
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingRev, 'rgb(34, 197, 94)') },
         options: mkOpts(true)
       });
 
       window.pciRollingUnitsChart = new Chart(document.getElementById('pci-rolling-units-chart').getContext('2d'), {
         type: 'line',
-        data: { labels: dailyLabels, datasets: mkDatasets(rollingUnits, trendUnits, 'rgb(59, 130, 246)') },
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingUnits, 'rgb(59, 130, 246)') },
         options: mkOpts(false)
       });
     }
