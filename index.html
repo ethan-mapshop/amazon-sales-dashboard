@@ -9634,6 +9634,38 @@
     }
 
 
+    function shortenBrandName(brandName) {
+      const brandMap = {
+        'South of Kings': 'SOK',
+        'BrightWay Educational': 'BrightWay',
+        'Hubbard Scientific': 'Hubbard',
+        'MapShop State Maps': 'State Maps',
+        'Kappa': 'Kappa',
+        'Other': 'Other'
+      };
+      return brandMap[brandName] || brandName;
+    }
+
+    function parsePriceChanges(data) {
+      if (!data.values || data.values.length < 2) return [];
+      const headers = data.values[0].map(h => h.toLowerCase());
+      const dateIdx     = headers.indexOf('date');
+      const skuIdx      = headers.indexOf('sku');
+      const oldPriceIdx = headers.indexOf('old price');
+      const newPriceIdx = headers.indexOf('new price');
+      const changes = [];
+      for (let i = 1; i < data.values.length; i++) {
+        const row = data.values[i];
+        changes.push({
+          date:     row[dateIdx],
+          sku:      row[skuIdx],
+          oldPrice: parseFloat(row[oldPriceIdx]) || 0,
+          newPrice: parseFloat(row[newPriceIdx]) || 0
+        });
+      }
+      return changes.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
     // ── SALES & VOLUME SUBTABS ────────────────────────────────────────────────
 
     function showSVTab(tab) {
