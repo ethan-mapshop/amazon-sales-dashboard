@@ -1584,7 +1584,7 @@
       <!-- PRICE CHANGE IMPACTS SUB-TAB -->
       <div id="sv-priceimpact" class="sv-subtab" style="display:none;">
 
-        <!-- Filters -->
+        <!-- Filters (Brand, Product, Window, Change to Analyze all in one row) -->
         <div class="card" style="margin-bottom: 2rem;">
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
@@ -1595,7 +1595,7 @@
             </div>
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
-              <select id="pci-product-filter" onchange="loadPCITable()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 240px;">
+              <select id="pci-product-filter" onchange="filterPCIChanges()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 240px;">
                 <option value="all">All Products</option>
               </select>
             </div>
@@ -1607,28 +1607,17 @@
                 <option value="90">90 days</option>
               </select>
             </div>
-          </div>
-        </div>
-
-        <!-- Summary Table -->
-        <div class="card" style="margin-bottom: 2rem;">
-          <div id="pci-table-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view price change impacts</div>
-          </div>
-        </div>
-
-        <!-- Detail Charts (shown when a row is selected) -->
-        <div id="pci-charts" style="display: none;">
-          <div class="card" style="margin-bottom: 1.5rem;">
-            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-              <div>
-                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change to Analyze</label>
-                <select id="pci-change-select" onchange="renderPCICharts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 320px;">
-                  <option value="">Select a price change...</option>
-                </select>
-              </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change to Analyze</label>
+              <select id="pci-change-select" onchange="renderPCICharts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 320px;">
+                <option value="">Select a price change...</option>
+              </select>
             </div>
           </div>
+        </div>
+
+        <!-- Detail: Summary Cards + Charts (shown when a change is selected) -->
+        <div id="pci-charts" style="display: none; margin-bottom: 2rem;">
 
           <!-- Summary Cards -->
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
@@ -1682,6 +1671,13 @@
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Daily Units Sold</h3>
               <canvas id="pci-units-chart"></canvas>
             </div>
+          </div>
+        </div>
+
+        <!-- Summary Table -->
+        <div class="card">
+          <div id="pci-table-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view price change impacts</div>
           </div>
         </div>
 
@@ -10012,6 +10008,30 @@
       productSelect.innerHTML = '<option value="all">All Products</option>';
       productNames.forEach(n => productSelect.innerHTML += `<option value="${n}">${n}</option>`);
 
+      filterPCIChanges();
+    }
+
+    // Populates the "Change to Analyze" dropdown filtered by current product selection
+    function filterPCIChanges() {
+      const productFilter = document.getElementById('pci-product-filter').value;
+      const changeSelect = document.getElementById('pci-change-select');
+      const windowDays = parseInt(document.getElementById('pci-window').value);
+
+      const filtered = pciPriceChanges.filter(pc => {
+        const info = pciSkuMap[pc.sku];
+        if (!info) return false;
+        if (productFilter !== 'all' && info.productName !== productFilter) return false;
+        return true;
+      });
+
+      changeSelect.innerHTML = '<option value="">Select a price change...</option>';
+      // Store filtered results on window so loadPCITable can use same set
+      window._pciFilteredForSelect = filtered;
+      filtered.forEach((pc, i) => {
+        const name = pciSkuMap[pc.sku]?.productName || pc.sku;
+        changeSelect.innerHTML += `<option value="${i}">${pc.date} — ${name} ($${pc.oldPrice.toFixed(2)} → $${pc.newPrice.toFixed(2)})</option>`;
+      });
+
       loadPCITable();
     }
 
@@ -10065,19 +10085,12 @@
         return a.date.localeCompare(b.date);
       });
 
-      // Populate chart change selector
-      const changeSelect = document.getElementById('pci-change-select');
-      changeSelect.innerHTML = '<option value="">Select a price change...</option>';
-      results.forEach((r, i) => {
-        changeSelect.innerHTML += `<option value="${i}">${r.date} — ${r.productName} ($${r.oldPrice.toFixed(2)} → $${r.newPrice.toFixed(2)})</option>`;
-      });
-      // Store results for chart use
+      // Store results for chart use (keyed to match _pciFilteredForSelect indices)
       window._pciResults = results;
       window._pciWindowDays = windowDays;
 
       if (results.length === 0) {
         container.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--text-secondary);">No price changes found for selected filters.</div>';
-        document.getElementById('pci-charts').style.display = 'none';
         return;
       }
 
@@ -10133,18 +10146,14 @@
           </tr>`;
       });
 
-      html += `</tbody></table></div>
-        <div style="margin-top:0.75rem;font-size:0.8rem;color:var(--text-secondary);">Click any row to see daily charts</div>`;
+      html += `</tbody></table></div>`;
       container.innerHTML = html;
-      document.getElementById('pci-charts').style.display = 'block';
     }
 
     function selectPCIChange(index) {
       const changeSelect = document.getElementById('pci-change-select');
       changeSelect.value = index;
       renderPCICharts();
-      // Scroll to charts
-      document.getElementById('pci-charts').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     function renderPCICharts() {
@@ -10207,19 +10216,12 @@
         type: 'line',
         xMin: changeIdx - 0.5,
         xMax: changeIdx - 0.5,
-        borderColor: 'var(--accent-orange)',
-        borderWidth: 2,
-        borderDash: [4, 4],
-        label: {
-          content: 'Price Change',
-          display: true,
-          position: 'start',
-          color: 'var(--accent-orange)',
-          font: { size: 11 }
-        }
+        borderColor: 'rgba(255, 255, 255, 0.35)',
+        borderWidth: 1.5,
+        borderDash: [4, 4]
       };
 
-      const chartOpts = (yLabel, isCurrency) => ({
+      const chartOpts = (isCurrency) => ({
         responsive: true,
         plugins: {
           legend: { display: false },
@@ -10232,6 +10234,8 @@
           }
         }
       });
+
+      document.getElementById('pci-charts').style.display = 'block';
 
       if (pciRevenueChart) pciRevenueChart.destroy();
       if (pciUnitsChart) pciUnitsChart.destroy();
@@ -10247,7 +10251,7 @@
             tension: 0.3, pointRadius: 2
           }]
         },
-        options: chartOpts('Revenue ($)', true)
+        options: chartOpts(true)
       });
 
       pciUnitsChart = new Chart(document.getElementById('pci-units-chart').getContext('2d'), {
@@ -10261,7 +10265,7 @@
             tension: 0.3, pointRadius: 2
           }]
         },
-        options: chartOpts('Units', false)
+        options: chartOpts(false)
       });
     }
 
