@@ -1584,7 +1584,7 @@
       <!-- PRICE CHANGE IMPACTS SUB-TAB -->
       <div id="sv-priceimpact" class="sv-subtab" style="display:none;">
 
-        <!-- Filters (Brand, Product, Window, Change to Analyze all in one row) -->
+        <!-- Filters: Brand → Product → Change to Analyze → Comparison Window -->
         <div class="card" style="margin-bottom: 2rem;">
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
@@ -1600,17 +1600,17 @@
               </select>
             </div>
             <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change to Analyze</label>
+              <select id="pci-change-select" onchange="renderPCICharts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 320px;">
+                <option value="">Select a price change...</option>
+              </select>
+            </div>
+            <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Comparison Window</label>
               <select id="pci-window" onchange="filterPCIChanges()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 120px;">
                 <option value="30">30 days</option>
                 <option value="60">60 days</option>
                 <option value="90">90 days</option>
-              </select>
-            </div>
-            <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change to Analyze</label>
-              <select id="pci-change-select" onchange="renderPCICharts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 320px;">
-                <option value="">Select a price change...</option>
               </select>
             </div>
           </div>
@@ -1661,29 +1661,17 @@
             </div>
           </div>
 
-          <!-- Charts: 7-day rolling average (top) + cumulative (bottom) -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+          <!-- Charts: 7-day rolling average with linear trendline -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
             <div class="card">
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Revenue — 7-Day Rolling Avg</h3>
-              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily revenue, centred on each day</p>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily revenue with linear trend</p>
               <canvas id="pci-rolling-rev-chart"></canvas>
             </div>
             <div class="card">
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — 7-Day Rolling Avg</h3>
-              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily units, centred on each day</p>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily units with linear trend</p>
               <canvas id="pci-rolling-units-chart"></canvas>
-            </div>
-          </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-            <div class="card">
-              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Revenue — Cumulative</h3>
-              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Running total; slope change = impact</p>
-              <canvas id="pci-cumrev-chart"></canvas>
-            </div>
-            <div class="card">
-              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — Cumulative</h3>
-              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Running total; slope change = impact</p>
-              <canvas id="pci-cumunits-chart"></canvas>
             </div>
           </div>
         </div>
@@ -10223,18 +10211,28 @@
 
       const changeIdx = windowDays; // index of change date in the series
 
-      // 7-day rolling average (trailing, handles edges gracefully)
+      // 7-day centred rolling average
       const rolling = (arr, w) => arr.map((_, i) => {
         const slice = arr.slice(Math.max(0, i - Math.floor(w / 2)), Math.min(arr.length, i + Math.floor(w / 2) + 1));
         return slice.reduce((a, b) => a + b, 0) / slice.length;
       });
-      const rollingRev = rolling(dailyRevenue, 7);
+      const rollingRev   = rolling(dailyRevenue, 7);
       const rollingUnits = rolling(dailyUnits, 7);
 
-      // Cumulative sums
-      const cumSum = arr => arr.reduce((acc, v) => { acc.push((acc[acc.length - 1] || 0) + v); return acc; }, []);
-      const cumRev = cumSum(dailyRevenue);
-      const cumUnits = cumSum(dailyUnits);
+      // Linear trendline via least-squares regression
+      const linReg = arr => {
+        const n = arr.length;
+        const xs = arr.map((_, i) => i);
+        const sumX  = xs.reduce((a, b) => a + b, 0);
+        const sumY  = arr.reduce((a, b) => a + b, 0);
+        const sumXY = xs.reduce((a, x, i) => a + x * arr[i], 0);
+        const sumXX = xs.reduce((a, x) => a + x * x, 0);
+        const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+        const intercept = (sumY - slope * sumX) / n;
+        return xs.map(x => intercept + slope * x);
+      };
+      const trendRev   = linReg(rollingRev);
+      const trendUnits = linReg(rollingUnits);
 
       // Annotation: subtle white dashed vertical line at change date
       const annotationLine = {
@@ -10260,44 +10258,27 @@
         }
       });
 
+      const mkDatasets = (rolling, trend, color) => ([
+        // Rolling avg — filled area
+        { data: rolling, borderColor: color, backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'), tension: 0.4, pointRadius: 0, borderWidth: 2, order: 1 },
+        // Trendline — thin dashed, no fill
+        { data: trend, borderColor: color.replace('rgb', 'rgba').replace(')', ', 0.6)'), borderWidth: 1.5, borderDash: [6, 3], pointRadius: 0, tension: 0, fill: false, order: 2 }
+      ]);
+
       // Destroy old charts
-      ['pciRollingRevChart','pciRollingUnitsChart','pciCumRevChart','pciCumUnitsChart'].forEach(k => {
+      ['pciRollingRevChart','pciRollingUnitsChart'].forEach(k => {
         if (window[k]) { window[k].destroy(); window[k] = null; }
       });
 
       window.pciRollingRevChart = new Chart(document.getElementById('pci-rolling-rev-chart').getContext('2d'), {
         type: 'line',
-        data: {
-          labels: dailyLabels,
-          datasets: [{ data: rollingRev, borderColor: 'rgb(34, 197, 94)', backgroundColor: 'rgba(34, 197, 94, 0.1)', tension: 0.4, pointRadius: 0 }]
-        },
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingRev, trendRev, 'rgb(34, 197, 94)') },
         options: mkOpts(true)
       });
 
       window.pciRollingUnitsChart = new Chart(document.getElementById('pci-rolling-units-chart').getContext('2d'), {
         type: 'line',
-        data: {
-          labels: dailyLabels,
-          datasets: [{ data: rollingUnits, borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.1)', tension: 0.4, pointRadius: 0 }]
-        },
-        options: mkOpts(false)
-      });
-
-      window.pciCumRevChart = new Chart(document.getElementById('pci-cumrev-chart').getContext('2d'), {
-        type: 'line',
-        data: {
-          labels: dailyLabels,
-          datasets: [{ data: cumRev, borderColor: 'rgb(34, 197, 94)', backgroundColor: 'rgba(34, 197, 94, 0.08)', tension: 0.1, pointRadius: 0, fill: true }]
-        },
-        options: mkOpts(true)
-      });
-
-      window.pciCumUnitsChart = new Chart(document.getElementById('pci-cumunits-chart').getContext('2d'), {
-        type: 'line',
-        data: {
-          labels: dailyLabels,
-          datasets: [{ data: cumUnits, borderColor: 'rgb(59, 130, 246)', backgroundColor: 'rgba(59, 130, 246, 0.08)', tension: 0.1, pointRadius: 0, fill: true }]
-        },
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingUnits, trendUnits, 'rgb(59, 130, 246)') },
         options: mkOpts(false)
       });
     }
