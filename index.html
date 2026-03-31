@@ -1584,6 +1584,47 @@
       <!-- PRICE CHANGE IMPACTS SUB-TAB -->
       <div id="sv-priceimpact" class="sv-subtab" style="display:none;">
 
+        <!-- Export to CSV -->
+        <div class="card" style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Price Change Analysis</h3>
+          <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brands</label>
+              <div style="position: relative;">
+                <button id="pci-export-brand-btn" onclick="togglePCIBrandDropdown(event)" style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); display: flex; gap: 0.75rem; align-items: center; cursor: pointer; min-width: 180px; justify-content: space-between;">
+                  <span id="pci-export-brand-label">All brands</span>
+                  <span>▼</span>
+                </button>
+                <div id="pci-export-brand-menu" style="display: none; position: absolute; top: 100%; left: 0; margin-top: 0.25rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; min-width: 200px; max-height: 250px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.2);">
+                  <div style="margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); display: flex; gap: 0.5rem;">
+                    <button onclick="pciSelectAllBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px; cursor: pointer;">All</button>
+                    <button onclick="pciSelectNoBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">None</button>
+                  </div>
+                  <div id="pci-export-brand-checkboxes" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change Start Date</label>
+              <input type="date" id="pci-export-start" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change End Date</label>
+              <input type="date" id="pci-export-end" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Comparison Window</label>
+              <select id="pci-export-window" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 120px;">
+                <option value="30">30 days</option>
+                <option value="60">60 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="exportPCIAnalysis()" style="height: fit-content;">Export to CSV</button>
+          </div>
+          <div id="pci-export-feedback" style="margin-top: 1rem; display: none;"></div>
+        </div>
+
         <!-- Filters: Brand → Product → Change to Analyze → Comparison Window -->
         <div class="card" style="margin-bottom: 2rem;">
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
@@ -9945,6 +9986,7 @@
       if (pciPriceChanges.length > 0) {
         // Already loaded — just re-render table
         renderPCIFilters();
+        populatePCIExportBrands();
         loadPCITable();
         return;
       }
@@ -10321,6 +10363,162 @@
       const a = new Date(dateStrA + 'T12:00:00Z');
       const b = new Date(dateStrB + 'T12:00:00Z');
       return Math.max(0, Math.round((b - a) / (1000 * 60 * 60 * 24)));
+    }
+
+
+    // ── PCI EXPORT ────────────────────────────────────────────────────────────
+
+    function togglePCIBrandDropdown(e) {
+      e.stopPropagation();
+      const menu = document.getElementById('pci-export-brand-menu');
+      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    }
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', () => {
+      const menu = document.getElementById('pci-export-brand-menu');
+      if (menu) menu.style.display = 'none';
+    });
+
+    function populatePCIExportBrands() {
+      const brands = [...new Set(pciPriceChanges.map(pc => pciSkuMap[pc.sku]?.brand).filter(Boolean))].sort();
+      const container = document.getElementById('pci-export-brand-checkboxes');
+      if (!container || container.children.length > 0) return; // already populated
+      container.innerHTML = brands.map(b => `
+        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem;">
+          <input type="checkbox" class="pci-export-brand-cb" value="${b}" checked onchange="updatePCIBrandLabel()">
+          ${b}
+        </label>`).join('');
+    }
+
+    function updatePCIBrandLabel() {
+      const total = document.querySelectorAll('.pci-export-brand-cb').length;
+      const checked = document.querySelectorAll('.pci-export-brand-cb:checked').length;
+      document.getElementById('pci-export-brand-label').textContent =
+        checked === total ? 'All brands' : checked === 0 ? 'No brands' : `${checked} brand${checked > 1 ? 's' : ''}`;
+    }
+
+    function pciSelectAllBrands() {
+      document.querySelectorAll('.pci-export-brand-cb').forEach(cb => cb.checked = true);
+      updatePCIBrandLabel();
+    }
+
+    function pciSelectNoBrands() {
+      document.querySelectorAll('.pci-export-brand-cb').forEach(cb => cb.checked = false);
+      updatePCIBrandLabel();
+    }
+
+    function exportPCIAnalysis() {
+      const feedback = document.getElementById('pci-export-feedback');
+      feedback.style.display = 'none';
+
+      const startDate = document.getElementById('pci-export-start').value;
+      const endDate   = document.getElementById('pci-export-end').value;
+      const windowDays = parseInt(document.getElementById('pci-export-window').value);
+
+      if (!startDate || !endDate) {
+        showFeedback(feedback, 'error', '⚠ Please select both a start and end date');
+        return;
+      }
+
+      const selectedBrands = new Set(
+        Array.from(document.querySelectorAll('.pci-export-brand-cb:checked')).map(cb => cb.value)
+      );
+      if (selectedBrands.size === 0) {
+        showFeedback(feedback, 'error', '⚠ Please select at least one brand');
+        return;
+      }
+
+      if (!pciPriceChanges.length) {
+        showFeedback(feedback, 'error', '⚠ Price change data not loaded yet — open the Price Change Impacts tab first');
+        return;
+      }
+
+      // Build per-SKU sorted change dates for next-change lookup
+      const skuChangeDates = {};
+      pciPriceChanges.forEach(pc => {
+        if (!skuChangeDates[pc.sku]) skuChangeDates[pc.sku] = [];
+        skuChangeDates[pc.sku].push(pc.date);
+      });
+      Object.values(skuChangeDates).forEach(dates => dates.sort());
+
+      const yesterday = offsetDate(new Date().toISOString().split('T')[0], -1);
+
+      // Filter price changes to the requested date range + brands
+      const rows = pciPriceChanges
+        .filter(pc => {
+          const info = pciSkuMap[pc.sku];
+          if (!info) return false;
+          if (!selectedBrands.has(info.brand)) return false;
+          if (pc.date < startDate || pc.date > endDate) return false;
+          return true;
+        })
+        .map(pc => {
+          const info = pciSkuMap[pc.sku] || {};
+          const nextChange = (skuChangeDates[pc.sku] || []).find(d => d > pc.date) || null;
+          const afterEnd = nextChange
+            ? (offsetDate(nextChange, -1) < yesterday ? offsetDate(nextChange, -1) : yesterday)
+            : yesterday;
+
+          const beforeStart = offsetDate(pc.date, -windowDays);
+          const beforeEnd   = offsetDate(pc.date, -1);
+
+          const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
+          const after  = calcOrderMetrics(svOrdersData, pc.sku, pc.date, afterEnd, windowDays);
+          const daysAfter = daysBetween(pc.date, offsetDate(afterEnd, 1));
+
+          const revChange   = before.revenue > 0 ? ((after.revenue   - before.revenue)   / before.revenue   * 100) : 0;
+          const unitsChange = before.units   > 0 ? ((after.units     - before.units)     / before.units     * 100) : 0;
+          const changePercent = pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0;
+
+          return [
+            pc.date,
+            info.brand || '',
+            info.productName || pc.sku,
+            pc.sku,
+            pc.oldPrice.toFixed(2),
+            pc.newPrice.toFixed(2),
+            changePercent.toFixed(1) + '%',
+            windowDays,
+            daysAfter,
+            before.revenue.toFixed(2),
+            before.units,
+            after.revenue.toFixed(2),
+            after.units,
+            revChange.toFixed(1) + '%',
+            unitsChange.toFixed(1) + '%',
+            nextChange || ''
+          ];
+        });
+
+      if (rows.length === 0) {
+        showFeedback(feedback, 'error', '⚠ No price changes found for the selected criteria');
+        return;
+      }
+
+      const headers = [
+        'Change Date', 'Brand', 'Product', 'SKU',
+        'Old Price', 'New Price', 'Price Change %',
+        'Before Window (days)', 'After Window (days)',
+        'Before Revenue', 'Before Units',
+        'After Revenue', 'After Units',
+        'Revenue Change %', 'Units Change %',
+        'Next Change Date'
+      ];
+
+      const csv = [headers, ...rows]
+        .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `price-change-analysis-${startDate}-to-${endDate}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showFeedback(feedback, 'success', `✓ Exported ${rows.length} price change${rows.length !== 1 ? 's' : ''}`);
     }
 
   </script>
