@@ -16,8 +16,10 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    if (action === 'get') return handleGet(req, res);
-    if (action === 'sync') return handleSync(req, res);
+    if (action === 'get')             return handleGet(req, res);
+    if (action === 'sync')            return handleSync(req, res);
+    if (action === 'get-summary')     return handleGetSummary(req, res);
+    if (action === 'rebuild-summary') return handleRebuildSummary(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -82,6 +84,9 @@ async function handleSync(req, res) {
 
     await upsertOrdersToKV(orders);
 
+    // Rebuild summary cache in the background (fire and forget)
+    rebuildSummaryCache().catch(e => console.warn('[SYNC] Summary rebuild failed:', e.message));
+
     return res.status(200).json({
       success: true,
       date: dateStr,
@@ -92,6 +97,58 @@ async function handleSync(req, res) {
   } catch (error) {
     console.error('[ORDERS SYNC] Error:', error);
     return res.status(500).json({ success: false, error: 'Sync failed: ' + error.message });
+  }
+}
+
+// ─── GET SUMMARY ─────────────────────────────────────────────────────────────
+// Returns pre-aggregated monthly summary from cache. Fast single KV read.
+async function handleGetSummary(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const summary = await kv.get('orders:monthly-summary');
+    return res.status(200).json({ success: true, summary: summary || [] });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to get summary: ' + error.message });
+  }
+}
+
+// ─── REBUILD SUMMARY ─────────────────────────────────────────────────────────
+// Core logic extracted so it can be called from sync without auth overhead.
+async function rebuildSummaryCache() {
+  const index = await kv.get('orders:index') || [];
+  const buckets = await Promise.all(index.map(m => kv.get(`orders:${m}`)));
+  const allOrders = buckets.flat().filter(Boolean);
+
+  const aggMap = {};
+  for (const o of allOrders) {
+    const key = `${o.orderDate.slice(0, 7)}|${o.sku}`;
+    if (!aggMap[key]) aggMap[key] = { yearMonth: o.orderDate.slice(0, 7), sku: o.sku, revenue: 0, units: 0 };
+    aggMap[key].revenue += o.itemTotal || 0;
+    aggMap[key].units   += o.quantity  || 0;
+  }
+
+  const summary = Object.values(aggMap).sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
+  await kv.set('orders:monthly-summary', summary);
+  console.log(`[SUMMARY] Rebuilt: ${summary.length} SKU-month records from ${allOrders.length} orders`);
+  return summary;
+}
+
+// HTTP handler — auth-gated, calls rebuildSummaryCache()
+async function handleRebuildSummary(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const summary = await rebuildSummaryCache();
+    return res.status(200).json({ success: true, records: summary.length });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to rebuild summary: ' + error.message });
   }
 }
 
