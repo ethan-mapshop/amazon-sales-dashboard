@@ -1432,6 +1432,12 @@
     <div id="salesvolume-page" class="page">
       <h2 class="section-title" style="margin-bottom: 1.5rem;">Sales & Volume</h2>
 
+      <!-- Persistent info blurb -->
+      <div id="sv-data-blurb" style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.875rem; color: var(--text-secondary);">
+        <span>ℹ️</span>
+        <span>Amazon data loaded through yesterday. Most recent data available: <strong id="sv-latest-date" style="color: var(--text-primary);">—</strong></span>
+      </div>
+
       <!-- Sub-tabs -->
       <div class="tabs" style="margin-bottom: 2rem;">
         <button class="tab active" id="sv-tab-monthly" onclick="showSVTab('monthly')">Monthly Overview</button>
@@ -1577,6 +1583,27 @@
             <canvas id="volume-chart-sv" style="max-height: 250px;"></canvas>
           </div>
         </div>
+      </div>
+
+      <!-- Backfill Card -->
+      <div class="card" style="margin-top: 2rem;">
+        <h3 class="section-title" style="margin-bottom: 1.5rem;">Load Order Data</h3>
+        <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1.5rem;">
+          Fetch and store orders from Amazon for a specific date range. Use this to load historical data or fill in any gaps the daily sync missed.
+        </p>
+        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Start Date</label>
+            <input type="date" id="backfill-start" style="padding: 0.625rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.875rem;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">End Date</label>
+            <input type="date" id="backfill-end" style="padding: 0.625rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.875rem;">
+          </div>
+          <button id="backfill-btn" class="btn btn-primary" onclick="runOrdersBackfill()">Fetch Orders</button>
+          <button class="btn btn-secondary" onclick="testOrdersSync()" style="font-size: 0.8rem;">Sync Yesterday</button>
+        </div>
+        <div id="backfill-log" style="display: none; margin-top: 1.5rem; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.8rem; max-height: 250px; overflow-y: auto; line-height: 1.8;"></div>
       </div>
 
       </div><!-- /sv-monthly -->
@@ -1726,27 +1753,6 @@
 
       </div><!-- /sv-priceimpact -->
 
-      <!-- Backfill Card -->
-      <div class="card" style="margin-top: 2rem;">
-        <h3 class="section-title" style="margin-bottom: 1.5rem;">Load Historical Data</h3>
-        <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1.5rem;">
-          Fetch and store historical orders from Amazon for a date range. Run this once to populate past data. The daily sync will keep it up to date automatically.
-        </p>
-        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
-          <div>
-            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Start Date</label>
-            <input type="date" id="backfill-start" style="padding: 0.625rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: 'Work Sans', sans-serif; font-size: 0.875rem;">
-          </div>
-          <div>
-            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">End Date</label>
-            <input type="date" id="backfill-end" style="padding: 0.625rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: 'Work Sans', sans-serif; font-size: 0.875rem;">
-          </div>
-          <button id="backfill-btn" class="btn btn-primary" onclick="runOrdersBackfill()">Run Backfill</button>
-          <button class="btn btn-secondary" onclick="testOrdersSync()" style="font-size: 0.8rem;">Test Yesterday's Sync</button>
-        </div>
-        <div id="backfill-log" style="display: none; margin-top: 1.5rem; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.8rem; max-height: 250px; overflow-y: auto; line-height: 1.8;">
-        </div>
-      </div>
     </div>
     
     <!-- OVERVIEW PAGE -->
@@ -9322,14 +9328,23 @@
       if (!accessToken) return;
       
       try {
-        // Load orders data from Upstash
-        const ordersResponse = await fetch('/api/orders?action=get', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        
-        if (ordersResponse.ok) {
-          const data = await ordersResponse.json();
+        // Try summary cache first (fast single KV read for Monthly Overview)
+        // Always load full orders too so PCI tab has individual records
+        const [summaryRes, ordersRes] = await Promise.all([
+          fetch('/api/orders?action=get-summary', { headers: { 'Authorization': `Bearer ${accessToken}` } }),
+          fetch('/api/orders?action=get',         { headers: { 'Authorization': `Bearer ${accessToken}` } })
+        ]);
+
+        if (ordersRes.ok) {
+          const data = await ordersRes.json();
           svOrdersData = data.orders || [];
+          updateSVDataBlurb(svOrdersData);
+        }
+
+        // Store summary separately for Monthly Overview rendering
+        if (summaryRes.ok) {
+          const summaryData = await summaryRes.json();
+          window._svMonthlySummary = summaryData.summary || null;
         }
         
         // Load products (Child + Non-Variable only)
@@ -9411,12 +9426,39 @@
         ? new Set(svAllProducts.filter(p => p.brand === selectedBrand).map(p => p.sku))
         : null;
 
-      // Filter orders by SKU or brand — never by date here
+      // For YTD/MTD cards we need individual order records (date-level filtering)
       let orders = svOrdersData;
       if (selectedSKU) {
         orders = orders.filter(o => o.sku === selectedSKU);
       } else if (brandSKUs) {
         orders = orders.filter(o => brandSKUs.has(o.sku));
+      }
+
+      // For monthly chart/list, use the pre-aggregated summary cache if available
+      // (much faster — one KV read vs scanning thousands of records per month)
+      // Summary records: { yearMonth, sku, revenue, units }
+      // We normalize them to look like order records for the monthly aggregation below
+      const summaryCache = window._svMonthlySummary;
+      let monthlySource; // what we use for the rolling 13-month chart/list
+      if (summaryCache && summaryCache.length > 0) {
+        // Filter summary by SKU or brand
+        let filtered = summaryCache;
+        if (selectedSKU) {
+          filtered = filtered.filter(s => s.sku === selectedSKU);
+        } else if (brandSKUs) {
+          filtered = filtered.filter(s => brandSKUs.has(s.sku));
+        }
+        // Convert to a shape the monthly aggregation can use
+        monthlySource = filtered.map(s => ({
+          orderDate: s.yearMonth + '-01', // approximate — only month matters
+          _yearMonth: s.yearMonth,
+          sku: s.sku,
+          itemTotal: s.revenue,
+          quantity: s.units,
+          _fromSummary: true
+        }));
+      } else {
+        monthlySource = orders; // fallback to full orders
       }
 
       // Determine the anchor: the last day of the selected month, or yesterday
@@ -9535,15 +9577,24 @@
         });
       }
 
-      // Calculate monthly data
+      // Calculate monthly data — use summary cache if available, else full orders
       const monthlyData = months.map(m => {
-        const monthOrders = orders.filter(o => {
-          const orderMonth = parseInt(o.orderDate.split('-')[1]);
-          const orderYear = parseInt(o.orderDate.split('-')[0]);
-          return orderYear === m.year && orderMonth === m.month;
-        });
-        const sales = monthOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
-        const volume = monthOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+        const ym = `${m.year}-${String(m.month).padStart(2, '0')}`;
+        let sales, volume;
+        if (monthlySource[0]?._fromSummary) {
+          // Summary records already aggregated per SKU-month — just sum them
+          const recs = monthlySource.filter(s => s._yearMonth === ym);
+          sales  = recs.reduce((sum, s) => sum + s.itemTotal, 0);
+          volume = recs.reduce((sum, s) => sum + s.quantity,  0);
+        } else {
+          const monthOrders = monthlySource.filter(o => {
+            const orderMonth = parseInt(o.orderDate.split('-')[1]);
+            const orderYear  = parseInt(o.orderDate.split('-')[0]);
+            return orderYear === m.year && orderMonth === m.month;
+          });
+          sales  = monthOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+          volume = monthOrders.reduce((sum, o) => sum + (o.quantity  || 0), 0);
+        }
         return { ...m, sales, volume };
       });
 
@@ -10523,6 +10574,142 @@
       URL.revokeObjectURL(url);
 
       showFeedback(feedback, 'success', `✓ Exported ${rows.length} price change${rows.length !== 1 ? 's' : ''}`);
+    }
+
+
+    // ── ORDERS BACKFILL + SYNC ────────────────────────────────────────────────
+
+    // Runs day-by-day from the browser to avoid Vercel's 60s function timeout.
+    async function runOrdersBackfill() {
+      if (!accessToken) { alert('Please sign in first.'); return; }
+
+      const startDate = document.getElementById('backfill-start').value;
+      const endDate   = document.getElementById('backfill-end').value;
+
+      if (!startDate || !endDate) { alert('Please select a start and end date.'); return; }
+      if (startDate > endDate)    { alert('Start date must be before end date.'); return; }
+
+      const btn = document.getElementById('backfill-btn');
+      const log = document.getElementById('backfill-log');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      log.style.display = 'block';
+      log.innerHTML = '';
+
+      const addLine = (msg, color) => {
+        const el = document.createElement('div');
+        el.style.color = color || 'var(--text-primary)';
+        el.textContent = msg;
+        log.appendChild(el);
+        log.scrollTop = log.scrollHeight;
+      };
+
+      // Build list of all dates in range
+      const dates = [];
+      const cursor = new Date(startDate + 'T12:00:00Z');
+      const stop   = new Date(endDate   + 'T12:00:00Z');
+      while (cursor <= stop) {
+        dates.push(cursor.toISOString().split('T')[0]);
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+
+      addLine(`Fetching ${dates.length} day(s): ${startDate} → ${endDate}`, 'var(--text-secondary)');
+
+      let totalRecords = 0;
+      let errors = 0;
+
+      for (let i = 0; i < dates.length; i++) {
+        const date = dates[i];
+        try {
+          const res  = await fetch(`/api/orders?action=sync&date=${date}`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          const data = await res.json();
+
+          if (data.success) {
+            totalRecords += data.newRecords;
+            addLine(`✓ ${date} — ${data.newRecords} line items (${totalRecords} total, ${i + 1}/${dates.length})`, 'var(--success)');
+          } else {
+            errors++;
+            addLine(`⚠ ${date} — ${data.error}`, 'var(--error)');
+          }
+        } catch (err) {
+          errors++;
+          addLine(`⚠ ${date} — ${err.message}`, 'var(--error)');
+        }
+      }
+
+      if (errors === 0) {
+        addLine(`COMPLETE — ${totalRecords} order line items stored across ${dates.length} days`, 'var(--success)');
+      } else {
+        addLine(`DONE with ${errors} error(s) — ${totalRecords} line items stored`, 'var(--warning)');
+      }
+
+      btn.disabled   = false;
+      btn.textContent = 'Fetch Orders';
+
+      // Rebuild cache then reload the page data
+      await rebuildMonthlySummaryCache();
+      await loadSalesVolumeData();
+    }
+
+    async function testOrdersSync() {
+      if (!accessToken) { alert('Please sign in first.'); return; }
+
+      const log = document.getElementById('backfill-log');
+      log.style.display = 'block';
+      log.innerHTML = '<div style="color:var(--text-secondary);">Syncing yesterday…</div>';
+
+      try {
+        const res  = await fetch('/api/orders?action=sync', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          log.innerHTML = `<div style="color:var(--success);">✓ Sync complete — ${data.newRecords} order line items stored for ${data.date}</div>`;
+          await rebuildMonthlySummaryCache();
+          await loadSalesVolumeData();
+        } else {
+          log.innerHTML = `<div style="color:var(--error);">✗ Sync failed: ${data.error}</div>`;
+        }
+      } catch (err) {
+        log.innerHTML = `<div style="color:var(--error);">✗ Error: ${err.message}</div>`;
+      }
+    }
+
+    // ── MONTHLY SUMMARY CACHE ─────────────────────────────────────────────────
+    // Stores pre-aggregated { yearMonth, sku, brand, revenue, units } in Upstash
+    // so Monthly Overview loads in one KV read instead of 12+.
+
+    async function loadMonthlySummaryCache() {
+      try {
+        const res = await fetch('/api/orders?action=get-summary', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.summary || null;
+      } catch { return null; }
+    }
+
+    async function rebuildMonthlySummaryCache() {
+      try {
+        await fetch('/api/orders?action=rebuild-summary', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+      } catch (err) {
+        console.warn('Could not rebuild summary cache:', err.message);
+      }
+    }
+
+    // Update the persistent info blurb with the most recent order date
+    function updateSVDataBlurb(orders) {
+      const el = document.getElementById('sv-latest-date');
+      if (!el) return;
+      if (!orders || orders.length === 0) { el.textContent = 'No data loaded'; return; }
+      const latest = orders.reduce((max, o) => o.orderDate > max ? o.orderDate : max, '');
+      el.textContent = latest || '—';
     }
 
   </script>
