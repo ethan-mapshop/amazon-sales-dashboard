@@ -9371,6 +9371,9 @@
         // Render data
         renderSalesVolumeData();
 
+        // Populate export brand list now that svAllProducts is loaded
+        populatePCIExportBrands();
+
         // Pre-load PCI data in background so it's ready when tab is clicked
         initPCI();
         
@@ -9986,7 +9989,6 @@
       if (pciPriceChanges.length > 0) {
         // Already loaded — just re-render table
         renderPCIFilters();
-        populatePCIExportBrands();
         loadPCITable();
         return;
       }
@@ -10381,14 +10383,16 @@
     });
 
     function populatePCIExportBrands() {
-      const brands = [...new Set(pciPriceChanges.map(pc => pciSkuMap[pc.sku]?.brand).filter(Boolean))].sort();
       const container = document.getElementById('pci-export-brand-checkboxes');
-      if (!container || container.children.length > 0) return; // already populated
+      if (!container) return;
+      // Use svAllProducts (loaded on page open) so brands are available immediately
+      const brands = [...new Set(svAllProducts.map(p => p.brand).filter(Boolean))].sort();
       container.innerHTML = brands.map(b => `
         <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem;">
           <input type="checkbox" class="pci-export-brand-cb" value="${b}" checked onchange="updatePCIBrandLabel()">
           ${b}
         </label>`).join('');
+      updatePCIBrandLabel();
     }
 
     function updatePCIBrandLabel() {
