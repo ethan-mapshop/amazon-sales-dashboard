@@ -3315,7 +3315,7 @@
       const data = uploadedData[type];
       const sheetConfig = SHEET_CONFIGS[type];
       
-      if (!data || !accessToken || !config.spreadsheetId) return;
+      if (!data || !accessToken || !SPREADSHEET_ID) return;
       
       const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
@@ -3323,7 +3323,7 @@
       hideStatus(type);
       
       try {
-        const spreadsheetId = config.spreadsheetId;
+        const spreadsheetId = SPREADSHEET_ID;
         const sheetName = sheetConfig.sheetName;
         
         // Get existing data
@@ -3552,7 +3552,7 @@
     }
     
     async function loadProducts() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -3589,7 +3589,7 @@
     }
     
     async function loadProductCampaigns() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdSpend`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdSpend`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -3614,7 +3614,7 @@
     }
     
     async function loadBrandCampaigns() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdSpend`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdSpend`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -3639,7 +3639,7 @@
     }
     
     async function loadProductMappings() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -3678,7 +3678,7 @@
     }
     
     async function loadBrandMappings() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -3976,7 +3976,7 @@
             ? mapping.skus.map(sku => [campaign, mapping.brand || '', sku])
             : [[campaign, mapping.brand, '']];
           
-          const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping:append?valueInputOption=RAW`;
+          const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping:append?valueInputOption=RAW`;
           await fetch(url, {
             method: 'POST',
             headers: {
@@ -4005,7 +4005,7 @@
         await deleteBrandMappings(campaign);
         
         // Add new mapping
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping:append?valueInputOption=RAW`;
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping:append?valueInputOption=RAW`;
         await fetch(url, {
           method: 'POST',
           headers: {
@@ -4025,7 +4025,7 @@
     }
     
     async function deleteProductMappings(campaign) {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -4037,7 +4037,7 @@
       if (rows.length <= 1) {
         // Make sure headers exist
         if (rows.length === 0) {
-          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping?valueInputOption=RAW`;
+          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping?valueInputOption=RAW`;
           await fetch(updateUrl, {
             method: 'PUT',
             headers: {
@@ -4063,7 +4063,7 @@
       }
       
       // Clear and rewrite with headers always included
-      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping:clear`;
+      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping:clear`;
       await fetch(clearUrl, {
         method: 'POST',
         headers: {
@@ -4073,7 +4073,7 @@
       });
       
       // Always write back at least the headers
-      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping?valueInputOption=RAW`;
+      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping?valueInputOption=RAW`;
       await fetch(updateUrl, {
         method: 'PUT',
         headers: {
@@ -4085,7 +4085,7 @@
     }
     
     async function deleteBrandMappings(campaign) {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`;
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
@@ -4097,7 +4097,7 @@
       if (rows.length <= 1) {
         // Make sure headers exist
         if (rows.length === 0) {
-          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping?valueInputOption=RAW`;
+          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping?valueInputOption=RAW`;
           await fetch(updateUrl, {
             method: 'PUT',
             headers: {
@@ -4123,7 +4123,7 @@
       }
       
       // Clear and rewrite with headers always included
-      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping:clear`;
+      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping:clear`;
       await fetch(clearUrl, {
         method: 'POST',
         headers: {
@@ -4133,7 +4133,7 @@
       });
       
       // Always write back at least the headers
-      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping?valueInputOption=RAW`;
+      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping?valueInputOption=RAW`;
       await fetch(updateUrl, {
         method: 'PUT',
         headers: {
@@ -4556,7 +4556,7 @@
           fetchFromKV('shipping', startDate, endDate),
           fetchFromKV('productads', startDate, endDate),
           fetchFromKV('brandads', startDate, endDate),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
         ]);
@@ -4624,10 +4624,10 @@
         
         // Load mapping data for ad spend allocation
         const [productMappingRes, brandMappingRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
         ]);
@@ -5015,7 +5015,7 @@
       if (select.options.length > 1) return; // Already initialized
       
       try {
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
@@ -5424,13 +5424,13 @@
         fetchFromKV('shipping', startDate, endDate),
         fetchFromKV('productads', startDate, endDate),
         fetchFromKV('brandads', startDate, endDate),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, {
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }),
-        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, {
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         })
       ]);
@@ -6699,9 +6699,9 @@
           fetchFromKV('shipping'),
           fetchFromKV('productads'),
           fetchFromKV('brandads'),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/ProductAdMapping`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/BrandAdMapping`, { headers })
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, { headers })
         ]);
         
         // Convert KV format to Sheets format
@@ -9696,10 +9696,10 @@
 
       try {
         const [priceChangesRes, productsRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/PriceChanges`, {
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/PriceChanges`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
         ]);
