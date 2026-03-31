@@ -9242,14 +9242,14 @@
       const selectedSKU = document.getElementById('sv-product-filter').value;
       const selectedBrand = document.getElementById('sv-brand-filter').value;
       const selectedYear = document.getElementById('sv-year-filter').value;
-      const selectedMonth = document.getElementById('sv-month-filter').value;
+      const selectedMonth = document.getElementById('sv-month-filter').value; // 'YYYY-MM' or ''
 
       // Build SKU set for brand filtering (when brand selected but no specific product)
       const brandSKUs = selectedBrand && !selectedSKU
         ? new Set(svAllProducts.filter(p => p.brand === selectedBrand).map(p => p.sku))
         : null;
 
-      // Filter orders by SKU or brand
+      // Filter orders by SKU or brand — never by date here
       let orders = svOrdersData;
       if (selectedSKU) {
         orders = orders.filter(o => o.sku === selectedSKU);
@@ -9257,101 +9257,122 @@
         orders = orders.filter(o => brandSKUs.has(o.sku));
       }
 
-      // Filter by year/month
+      // Determine the anchor: the last day of the selected month, or yesterday
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      let anchor; // always 1st of the "current" month for the rolling window
+      let anchorLastDay; // last day of that month (for YTD/MTD end dates)
+
       if (selectedMonth) {
-        orders = orders.filter(o => o.orderDate.slice(0, 7) === selectedMonth);
+        // e.g. '2026-01' => anchor = Jan 1 2026, anchorLastDay = Jan 31 2026
+        const [y, m] = selectedMonth.split('-').map(Number);
+        anchor = new Date(y, m - 1, 1);
+        anchorLastDay = new Date(y, m, 0); // day 0 of next month = last day of this month
       } else if (selectedYear) {
-        orders = orders.filter(o => o.orderDate.startsWith(selectedYear));
+        // Year selected: use Dec 31 of that year (or yesterday if current year)
+        const y = parseInt(selectedYear);
+        const today = new Date();
+        if (y === today.getFullYear()) {
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
+          anchorLastDay = yesterday;
+        } else {
+          anchor = new Date(y, 11, 1); // Dec
+          anchorLastDay = new Date(y, 11, 31);
+        }
+      } else {
+        // Default: yesterday
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
+        anchorLastDay = yesterday;
       }
-      
-      // Calculate dates
-      const today = new Date();
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      
-      const currentYear = today.getFullYear();
-      const previousYear = currentYear - 1;
-      const currentMonth = today.getMonth(); // 0-indexed
-      
-      // YTD dates
+
+      const anchorYear = anchor.getFullYear();
+      const anchorMonth = anchor.getMonth(); // 0-indexed
+      const previousYear = anchorYear - 1;
+
+      // Format a date as YYYY-MM-DD
+      const fmt = d => d.toISOString().split('T')[0];
+
+      // YTD: Jan 1 → anchorLastDay, both years
       const ytdPrevStart = `${previousYear}-01-01`;
-      const ytdPrevEnd = `${previousYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-      const ytdCurrStart = `${currentYear}-01-01`;
-      const ytdCurrEnd = `${currentYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-      
-      // MTD dates
-      const mtdPrevStart = `${previousYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-01`;
+      const ytdPrevEnd = `${previousYear}-${String(anchorLastDay.getMonth() + 1).padStart(2, '0')}-${String(anchorLastDay.getDate()).padStart(2, '0')}`;
+      const ytdCurrStart = `${anchorYear}-01-01`;
+      const ytdCurrEnd = fmt(anchorLastDay);
+
+      // MTD: 1st of anchor month → anchorLastDay, both years
+      const mtdMonthStr = String(anchorMonth + 1).padStart(2, '0');
+      const mtdPrevStart = `${previousYear}-${mtdMonthStr}-01`;
       const mtdPrevEnd = ytdPrevEnd;
-      const mtdCurrStart = `${currentYear}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-01`;
+      const mtdCurrStart = `${anchorYear}-${mtdMonthStr}-01`;
       const mtdCurrEnd = ytdCurrEnd;
-      
+
       // Calculate YTD
       const ytdPrevOrders = orders.filter(o => o.orderDate >= ytdPrevStart && o.orderDate <= ytdPrevEnd);
       const ytdCurrOrders = orders.filter(o => o.orderDate >= ytdCurrStart && o.orderDate <= ytdCurrEnd);
-      
+
       const ytdPrevSales = ytdPrevOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
       const ytdCurrSales = ytdCurrOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
       const ytdPrevVolume = ytdPrevOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
       const ytdCurrVolume = ytdCurrOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
-      
+
       const ytdSalesChange = ytdPrevSales > 0 ? ((ytdCurrSales - ytdPrevSales) / ytdPrevSales) * 100 : 0;
       const ytdVolumeChange = ytdPrevVolume > 0 ? ((ytdCurrVolume - ytdPrevVolume) / ytdPrevVolume) * 100 : 0;
-      
+
       // Calculate MTD
       const mtdPrevOrders = orders.filter(o => o.orderDate >= mtdPrevStart && o.orderDate <= mtdPrevEnd);
       const mtdCurrOrders = orders.filter(o => o.orderDate >= mtdCurrStart && o.orderDate <= mtdCurrEnd);
-      
+
       const mtdPrevSales = mtdPrevOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
       const mtdCurrSales = mtdCurrOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
       const mtdPrevVolume = mtdPrevOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
       const mtdCurrVolume = mtdCurrOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
-      
+
       const mtdSalesChange = mtdPrevSales > 0 ? ((mtdCurrSales - mtdPrevSales) / mtdPrevSales) * 100 : 0;
       const mtdVolumeChange = mtdPrevVolume > 0 ? ((mtdCurrVolume - mtdPrevVolume) / mtdPrevVolume) * 100 : 0;
-      
+
       // Update YTD cards
+      document.getElementById('ytd-sales-prev-label').textContent = `${previousYear}:`;
+      document.getElementById('ytd-sales-curr-label').textContent = `${anchorYear}:`;
       document.getElementById('ytd-sales-prev').textContent = '$' + ytdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('ytd-sales-curr').textContent = '$' + ytdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('ytd-sales-change').textContent = (ytdSalesChange >= 0 ? '+' : '') + ytdSalesChange.toFixed(1) + '%';
       document.getElementById('ytd-sales-change').style.color = ytdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
-      
+
       document.getElementById('ytd-volume-prev').textContent = ytdPrevVolume.toLocaleString();
       document.getElementById('ytd-volume-curr').textContent = ytdCurrVolume.toLocaleString();
       document.getElementById('ytd-volume-change').textContent = (ytdVolumeChange >= 0 ? '+' : '') + ytdVolumeChange.toFixed(1) + '%';
       document.getElementById('ytd-volume-change').style.color = ytdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
-      
+
       // Update MTD cards
-      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const currentMonthName = monthNames[yesterday.getMonth()];
-      
-      document.getElementById('mtd-sales-prev-label').textContent = `${currentMonthName} ${previousYear.toString().slice(2)}:`;
-      document.getElementById('mtd-sales-curr-label').textContent = `${currentMonthName} ${currentYear.toString().slice(2)}:`;
+      const anchorMonthName = monthNames[anchorMonth];
+      document.getElementById('mtd-sales-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}:`;
+      document.getElementById('mtd-sales-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}:`;
       document.getElementById('mtd-sales-prev').textContent = '$' + mtdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('mtd-sales-curr').textContent = '$' + mtdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('mtd-sales-change').textContent = (mtdSalesChange >= 0 ? '+' : '') + mtdSalesChange.toFixed(1) + '%';
       document.getElementById('mtd-sales-change').style.color = mtdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
-      
-      document.getElementById('mtd-volume-prev-label').textContent = `${currentMonthName} ${previousYear.toString().slice(2)}:`;
-      document.getElementById('mtd-volume-curr-label').textContent = `${currentMonthName} ${currentYear.toString().slice(2)}:`;
+
+      document.getElementById('mtd-volume-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}:`;
+      document.getElementById('mtd-volume-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}:`;
       document.getElementById('mtd-volume-prev').textContent = mtdPrevVolume.toLocaleString();
       document.getElementById('mtd-volume-curr').textContent = mtdCurrVolume.toLocaleString();
       document.getElementById('mtd-volume-change').textContent = (mtdVolumeChange >= 0 ? '+' : '') + mtdVolumeChange.toFixed(1) + '%';
       document.getElementById('mtd-volume-change').style.color = mtdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
-      
-      // Generate rolling 12 months
-      // Use the 1st of the current month as the anchor to avoid JS date overflow
-      // (e.g. Mar 30 - 1 month = Mar 2 instead of Feb 28)
+
+      // Generate rolling 13 months ending at anchor month
       const months = [];
-      const anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
       for (let i = 12; i >= 0; i--) {
-        const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+        const d = new Date(anchorYear, anchorMonth - i, 1);
         months.push({
           year: d.getFullYear(),
           month: d.getMonth() + 1,
           label: `${monthNames[d.getMonth()]} ${d.getFullYear().toString().slice(2)}`
         });
       }
-      
+
       // Calculate monthly data
       const monthlyData = months.map(m => {
         const monthOrders = orders.filter(o => {
@@ -9359,13 +9380,11 @@
           const orderYear = parseInt(o.orderDate.split('-')[0]);
           return orderYear === m.year && orderMonth === m.month;
         });
-        
         const sales = monthOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
         const volume = monthOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
-        
         return { ...m, sales, volume };
       });
-      
+
       // Render monthly list
       const monthlyList = document.getElementById('monthly-list');
       monthlyList.innerHTML = monthlyData.map(m => `
@@ -9377,11 +9396,11 @@
           </div>
         </div>
       `).join('');
-      
+
       // Render charts
       if (svSalesChart) svSalesChart.destroy();
       if (svVolumeChart) svVolumeChart.destroy();
-      
+
       const salesCtx = document.getElementById('sales-chart-sv').getContext('2d');
       svSalesChart = new Chart(salesCtx, {
         type: 'line',
@@ -9402,16 +9421,12 @@
           scales: {
             y: {
               beginAtZero: true,
-              ticks: {
-                callback: function(value) {
-                  return '$' + value.toLocaleString();
-                }
-              }
+              ticks: { callback: value => '$' + value.toLocaleString() }
             }
           }
         }
       });
-      
+
       const volumeCtx = document.getElementById('volume-chart-sv').getContext('2d');
       svVolumeChart = new Chart(volumeCtx, {
         type: 'line',
@@ -9432,121 +9447,11 @@
           scales: {
             y: {
               beginAtZero: true,
-              ticks: {
-                callback: function(value) {
-                  return value.toLocaleString();
-                }
-              }
+              ticks: { callback: value => value.toLocaleString() }
             }
           }
         }
       });
-    }
-    
-    // ORDERS BACKFILL
-    // Runs day-by-day from the browser to avoid Vercel's 60s function timeout.
-    // Each day is one fast API call; the frontend loops through all days.
-    async function runOrdersBackfill() {
-      if (!accessToken) { alert('Please sign in first.'); return; }
-
-      const startDate = document.getElementById('backfill-start').value;
-      const endDate = document.getElementById('backfill-end').value;
-
-      if (!startDate || !endDate) {
-        alert('Please select a start and end date.');
-        return;
-      }
-      if (startDate > endDate) {
-        alert('Start date must be before end date.');
-        return;
-      }
-
-      const btn = document.getElementById('backfill-btn');
-      const log = document.getElementById('backfill-log');
-
-      btn.disabled = true;
-      btn.textContent = 'Running…';
-      log.style.display = 'block';
-      log.innerHTML = '';
-
-      const addLine = (msg, color) => {
-        const line = document.createElement('div');
-        line.style.color = color || 'var(--text-primary)';
-        line.textContent = msg;
-        log.appendChild(line);
-        log.scrollTop = log.scrollHeight;
-      };
-
-      // Build list of all dates in range
-      const dates = [];
-      const cursor = new Date(startDate);
-      const stop = new Date(endDate);
-      while (cursor <= stop) {
-        dates.push(cursor.toISOString().split('T')[0]);
-        cursor.setDate(cursor.getDate() + 1);
-      }
-
-      addLine(`Starting backfill: ${startDate} → ${endDate} (${dates.length} days)`, 'var(--text-secondary)');
-
-      let totalRecords = 0;
-      let errors = 0;
-
-      for (let i = 0; i < dates.length; i++) {
-        const date = dates[i];
-        try {
-          const response = await fetch(`/api/orders?action=sync&date=${date}`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          });
-          const data = await response.json();
-
-          if (data.success) {
-            totalRecords += data.newRecords;
-            addLine(`✓ ${date} — ${data.newRecords} line items (${totalRecords} total, ${i + 1}/${dates.length} days)`, 'var(--success)');
-          } else {
-            errors++;
-            addLine(`⚠ ${date} — ${data.error}`, 'var(--error)');
-          }
-        } catch (error) {
-          errors++;
-          addLine(`⚠ ${date} — ${error.message}`, 'var(--error)');
-        }
-      }
-
-      if (errors === 0) {
-        addLine(`COMPLETE — ${totalRecords} order line items stored across ${dates.length} days`, 'var(--success)');
-      } else {
-        addLine(`DONE with ${errors} error(s) — ${totalRecords} line items stored`, 'var(--warning)');
-      }
-
-      btn.disabled = false;
-      btn.textContent = 'Run Backfill';
-
-      // Reload chart data now that orders are in Upstash
-      await loadSalesVolumeData();
-    }
-
-    async function testOrdersSync() {
-      if (!accessToken) { alert('Please sign in first.'); return; }
-
-      const log = document.getElementById('backfill-log');
-      log.style.display = 'block';
-      log.innerHTML = '<div style="color: var(--text-secondary);">Testing yesterday\'s sync…</div>';
-
-      try {
-        const response = await fetch('/api/orders?action=sync', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        const data = await response.json();
-
-        if (data.success) {
-          log.innerHTML = `<div style="color: var(--success);">✓ Sync successful — ${data.newRecords} order line items stored for ${data.date}</div>`;
-          await loadSalesVolumeData();
-        } else {
-          log.innerHTML = `<div style="color: var(--error);">✗ Sync failed: ${data.error}</div>`;
-        }
-      } catch (error) {
-        log.innerHTML = `<div style="color: var(--error);">✗ Error: ${error.message}</div>`;
-      }
     }
 
     // PRICE ANALYSIS PAGE
