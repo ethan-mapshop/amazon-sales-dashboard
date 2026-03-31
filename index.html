@@ -1431,7 +1431,51 @@
     <!-- SALES & VOLUME PAGE -->
     <div id="salesvolume-page" class="page">
       <h2 class="section-title" style="margin-bottom: 2rem;">Sales & Volume</h2>
-      
+
+      <!-- Filters -->
+      <div class="card" style="margin-bottom: 2rem;">
+        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
+            <select id="sv-brand-filter" onchange="filterSVProducts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 160px;">
+              <option value="">All Brands</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
+            <select id="sv-product-filter" onchange="renderSalesVolumeData()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 240px;">
+              <option value="">All Products</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Year</label>
+            <select id="sv-year-filter" onchange="renderSalesVolumeData()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 100px;">
+              <option value="">All Years</option>
+              <option value="2026">2026</option>
+              <option value="2027">2027</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Month</label>
+            <select id="sv-month-filter" onchange="renderSalesVolumeData()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 130px;">
+              <option value="">All Months</option>
+              <option value="2026-01">Jan 2026</option>
+              <option value="2026-02">Feb 2026</option>
+              <option value="2026-03">Mar 2026</option>
+              <option value="2026-04">Apr 2026</option>
+              <option value="2026-05">May 2026</option>
+              <option value="2026-06">Jun 2026</option>
+              <option value="2026-07">Jul 2026</option>
+              <option value="2026-08">Aug 2026</option>
+              <option value="2026-09">Sep 2026</option>
+              <option value="2026-10">Oct 2026</option>
+              <option value="2026-11">Nov 2026</option>
+              <option value="2026-12">Dec 2026</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <!-- YTD and MTD Comparison Cards -->
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
         <div class="card">
@@ -1499,24 +1543,6 @@
                 <div id="mtd-volume-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-      
-      <!-- Filters -->
-      <div class="card" style="margin-bottom: 2rem;">
-        <div style="display: grid; grid-template-columns: 200px 300px; gap: 1rem;">
-          <div>
-            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
-            <select id="sv-brand-filter" onchange="filterSVProducts()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-              <option value="">All Brands</option>
-            </select>
-          </div>
-          <div>
-            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
-            <select id="sv-product-filter" onchange="renderSalesVolumeData()" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-              <option value="">All Products</option>
-            </select>
           </div>
         </div>
       </div>
@@ -9214,11 +9240,28 @@
     
     function renderSalesVolumeData() {
       const selectedSKU = document.getElementById('sv-product-filter').value;
-      
-      // Filter orders by selected SKU
+      const selectedBrand = document.getElementById('sv-brand-filter').value;
+      const selectedYear = document.getElementById('sv-year-filter').value;
+      const selectedMonth = document.getElementById('sv-month-filter').value;
+
+      // Build SKU set for brand filtering (when brand selected but no specific product)
+      const brandSKUs = selectedBrand && !selectedSKU
+        ? new Set(svAllProducts.filter(p => p.brand === selectedBrand).map(p => p.sku))
+        : null;
+
+      // Filter orders by SKU or brand
       let orders = svOrdersData;
       if (selectedSKU) {
         orders = orders.filter(o => o.sku === selectedSKU);
+      } else if (brandSKUs) {
+        orders = orders.filter(o => brandSKUs.has(o.sku));
+      }
+
+      // Filter by year/month
+      if (selectedMonth) {
+        orders = orders.filter(o => o.orderDate.slice(0, 7) === selectedMonth);
+      } else if (selectedYear) {
+        orders = orders.filter(o => o.orderDate.startsWith(selectedYear));
       }
       
       // Calculate dates
