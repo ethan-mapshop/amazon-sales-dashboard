@@ -1617,7 +1617,7 @@
         </div>
 
         <!-- Detail: Summary Cards + Charts (shown when a change is selected) -->
-        <div id="pci-charts" style="display: none; margin-bottom: 2rem;">
+        <div id="pci-charts" style="margin-bottom: 2rem;">
 
           <!-- Summary Cards -->
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
@@ -10161,22 +10161,31 @@
 
     function renderPCICharts() {
       const index = parseInt(document.getElementById('pci-change-select').value);
-      if (isNaN(index)) return;
+      if (isNaN(index) || index === '') return;
 
       const r = window._pciResults[index];
       const windowDays = parseInt(document.getElementById('pci-window').value);
       if (!r) return;
 
+      // Recalculate metrics fresh using current windowDays (not cached values)
+      const beforeStart = offsetDate(r.date, -windowDays);
+      const beforeEnd   = offsetDate(r.date, -1);
+      const afterStart  = r.date;
+      const afterEnd    = offsetDate(r.date, windowDays - 1);
+
+      const freshBefore = calcOrderMetrics(svOrdersData, r.sku, beforeStart, beforeEnd, windowDays);
+      const freshAfter  = calcOrderMetrics(svOrdersData, r.sku, afterStart, afterEnd, windowDays);
+
       // Update summary cards
       const daysBefore = windowDays;
       const daysAfter = Math.min(windowDays, daysBetween(r.date, new Date().toISOString().split('T')[0]));
 
-      const revBefore = daysAfter > 0 ? r.before.revenue / daysBefore : 0;
-      const revAfter  = daysAfter > 0 ? r.after.revenue / daysAfter : 0;
-      const unitsBefore = r.before.units / daysBefore;
-      const unitsAfter  = daysAfter > 0 ? r.after.units / daysAfter : 0;
+      const revBefore   = daysBefore > 0 ? freshBefore.revenue / daysBefore : 0;
+      const revAfter    = daysAfter  > 0 ? freshAfter.revenue  / daysAfter  : 0;
+      const unitsBefore = daysBefore > 0 ? freshBefore.units   / daysBefore : 0;
+      const unitsAfter  = daysAfter  > 0 ? freshAfter.units    / daysAfter  : 0;
 
-      const revChangePct = revBefore > 0 ? ((revAfter - revBefore) / revBefore * 100) : 0;
+      const revChangePct   = revBefore   > 0 ? ((revAfter   - revBefore)   / revBefore   * 100) : 0;
       const unitsChangePct = unitsBefore > 0 ? ((unitsAfter - unitsBefore) / unitsBefore * 100) : 0;
 
       document.getElementById('pci-summary-rev-before').textContent = '$' + revBefore.toFixed(2);
@@ -10250,8 +10259,6 @@
           }
         }
       });
-
-      document.getElementById('pci-charts').style.display = 'block';
 
       // Destroy old charts
       ['pciRollingRevChart','pciRollingUnitsChart','pciCumRevChart','pciCumUnitsChart'].forEach(k => {
