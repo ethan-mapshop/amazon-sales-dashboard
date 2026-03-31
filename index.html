@@ -1430,7 +1430,16 @@
     <!-- OVERVIEW PAGE -->
     <!-- SALES & VOLUME PAGE -->
     <div id="salesvolume-page" class="page">
-      <h2 class="section-title" style="margin-bottom: 2rem;">Sales & Volume</h2>
+      <h2 class="section-title" style="margin-bottom: 1.5rem;">Sales & Volume</h2>
+
+      <!-- Sub-tabs -->
+      <div class="tabs" style="margin-bottom: 2rem;">
+        <button class="tab active" id="sv-tab-monthly" onclick="showSVTab('monthly')">Monthly Overview</button>
+        <button class="tab" id="sv-tab-priceimpact" onclick="showSVTab('priceimpact')">Price Change Impacts</button>
+      </div>
+
+      <!-- MONTHLY OVERVIEW SUB-TAB -->
+      <div id="sv-monthly" class="sv-subtab">
 
       <!-- Filters -->
       <div class="card" style="margin-bottom: 2rem;">
@@ -1569,6 +1578,114 @@
           </div>
         </div>
       </div>
+
+      </div><!-- /sv-monthly -->
+
+      <!-- PRICE CHANGE IMPACTS SUB-TAB -->
+      <div id="sv-priceimpact" class="sv-subtab" style="display:none;">
+
+        <!-- Filters -->
+        <div class="card" style="margin-bottom: 2rem;">
+          <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
+              <select id="pci-brand-filter" onchange="filterPCIProducts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 160px;">
+                <option value="all">All Brands</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
+              <select id="pci-product-filter" onchange="loadPCITable()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 240px;">
+                <option value="all">All Products</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Comparison Window</label>
+              <select id="pci-window" onchange="loadPCITable()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 120px;">
+                <option value="30">30 days</option>
+                <option value="60">60 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Summary Table -->
+        <div class="card" style="margin-bottom: 2rem;">
+          <div id="pci-table-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view price change impacts</div>
+          </div>
+        </div>
+
+        <!-- Detail Charts (shown when a row is selected) -->
+        <div id="pci-charts" style="display: none;">
+          <div class="card" style="margin-bottom: 1.5rem;">
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change to Analyze</label>
+                <select id="pci-change-select" onchange="renderPCICharts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 320px;">
+                  <option value="">Select a price change...</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Summary Cards -->
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
+            <div class="card">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="pci-summary-rev-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="pci-summary-rev-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="pci-summary-rev-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Units/Day</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="pci-summary-units-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="pci-summary-units-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="pci-summary-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Change</div>
+              <div id="pci-summary-price" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
+              <div id="pci-summary-price-pct" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">-</div>
+            </div>
+            <div class="card">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
+              <div id="pci-summary-days" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="pci-summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
+          </div>
+
+          <!-- Charts -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div class="card">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Daily Revenue ($)</h3>
+              <canvas id="pci-revenue-chart"></canvas>
+            </div>
+            <div class="card">
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Daily Units Sold</h3>
+              <canvas id="pci-units-chart"></canvas>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /sv-priceimpact -->
 
       <!-- Backfill Card -->
       <div class="card" style="margin-top: 2rem;">
@@ -9214,6 +9331,9 @@
         
         // Render data
         renderSalesVolumeData();
+
+        // Pre-load PCI data in background so it's ready when tab is clicked
+        initPCI();
         
       } catch (error) {
         console.error('Error loading sales & volume data:', error);
@@ -9802,6 +9922,371 @@
       
       container.innerHTML = html;
     }
+
+    // ── SALES & VOLUME SUBTABS ────────────────────────────────────────────────
+
+    function showSVTab(tab) {
+      document.querySelectorAll('.sv-subtab').forEach(el => el.style.display = 'none');
+      document.querySelectorAll('#salesvolume-page .tab').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('sv-' + tab).style.display = 'block';
+      document.getElementById('sv-tab-' + tab).classList.add('active');
+
+      if (tab === 'priceimpact' && svAllProducts.length > 0) {
+        initPCI();
+      }
+    }
+
+    // ── PRICE CHANGE IMPACTS ──────────────────────────────────────────────────
+
+    let pciRevenueChart = null;
+    let pciUnitsChart = null;
+    let pciPriceChanges = []; // parsed from Sheets
+    let pciSkuMap = {};       // sku -> { brand, productName }
+
+    async function initPCI() {
+      if (!accessToken) return;
+      if (pciPriceChanges.length > 0) {
+        // Already loaded — just re-render table
+        renderPCIFilters();
+        loadPCITable();
+        return;
+      }
+
+      try {
+        const [priceChangesRes, productsRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/PriceChanges`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheetId}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+
+        if (!priceChangesRes.ok) {
+          document.getElementById('pci-table-content').innerHTML =
+            '<div style="padding:4rem;text-align:center;color:var(--error);">PriceChanges sheet not found.</div>';
+          return;
+        }
+
+        const [pcData, prodData] = await Promise.all([priceChangesRes.json(), productsRes.json()]);
+        pciPriceChanges = parsePriceChanges(pcData); // reuse existing parser
+
+        // Build sku map from products sheet
+        const products = parseProducts(prodData);
+        pciSkuMap = {};
+        products.forEach(p => { pciSkuMap[p.sku] = { brand: p.brand, productName: p.name }; });
+
+        renderPCIFilters();
+        loadPCITable();
+
+      } catch (err) {
+        console.error('PCI init error:', err);
+        document.getElementById('pci-table-content').innerHTML =
+          `<div style="padding:4rem;text-align:center;color:var(--error);">Error: ${err.message}</div>`;
+      }
+    }
+
+    function renderPCIFilters() {
+      const brands = [...new Set(
+        pciPriceChanges.map(pc => pciSkuMap[pc.sku]?.brand).filter(Boolean)
+      )].sort();
+
+      const brandSelect = document.getElementById('pci-brand-filter');
+      brandSelect.innerHTML = '<option value="all">All Brands</option>';
+      brands.forEach(b => brandSelect.innerHTML += `<option value="${b}">${b}</option>`);
+
+      filterPCIProducts();
+    }
+
+    function filterPCIProducts() {
+      const selectedBrand = document.getElementById('pci-brand-filter').value;
+      const productSelect = document.getElementById('pci-product-filter');
+
+      const productNames = [...new Set(
+        pciPriceChanges
+          .filter(pc => selectedBrand === 'all' || pciSkuMap[pc.sku]?.brand === selectedBrand)
+          .map(pc => pciSkuMap[pc.sku]?.productName)
+          .filter(Boolean)
+      )].sort();
+
+      productSelect.innerHTML = '<option value="all">All Products</option>';
+      productNames.forEach(n => productSelect.innerHTML += `<option value="${n}">${n}</option>`);
+
+      loadPCITable();
+    }
+
+    function loadPCITable() {
+      const brandFilter = document.getElementById('pci-brand-filter').value;
+      const productFilter = document.getElementById('pci-product-filter').value;
+      const windowDays = parseInt(document.getElementById('pci-window').value);
+      const container = document.getElementById('pci-table-content');
+
+      if (!svOrdersData.length) {
+        container.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--text-secondary);">No orders data loaded yet. Run a backfill first.</div>';
+        return;
+      }
+
+      // Filter price changes
+      let changes = pciPriceChanges.filter(pc => {
+        const info = pciSkuMap[pc.sku];
+        if (!info) return false;
+        if (brandFilter !== 'all' && info.brand !== brandFilter) return false;
+        if (productFilter !== 'all' && info.productName !== productFilter) return false;
+        return true;
+      });
+
+      // Calculate before/after metrics from orders data
+      const results = changes.map(pc => {
+        const changeDate = pc.date; // YYYY-MM-DD string
+        const beforeStart = offsetDate(changeDate, -windowDays);
+        const beforeEnd = offsetDate(changeDate, -1);
+        const afterStart = changeDate;
+        const afterEnd = offsetDate(changeDate, windowDays - 1);
+
+        const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
+        const after  = calcOrderMetrics(svOrdersData, pc.sku, afterStart, afterEnd, windowDays);
+
+        return {
+          date: pc.date,
+          sku: pc.sku,
+          brand: pciSkuMap[pc.sku]?.brand || 'Unknown',
+          productName: pciSkuMap[pc.sku]?.productName || pc.sku,
+          oldPrice: pc.oldPrice,
+          newPrice: pc.newPrice,
+          changePercent: pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0,
+          before,
+          after
+        };
+      });
+
+      results.sort((a, b) => {
+        if (a.brand !== b.brand) return a.brand.localeCompare(b.brand);
+        if (a.productName !== b.productName) return a.productName.localeCompare(b.productName);
+        return a.date.localeCompare(b.date);
+      });
+
+      // Populate chart change selector
+      const changeSelect = document.getElementById('pci-change-select');
+      changeSelect.innerHTML = '<option value="">Select a price change...</option>';
+      results.forEach((r, i) => {
+        changeSelect.innerHTML += `<option value="${i}">${r.date} — ${r.productName} ($${r.oldPrice.toFixed(2)} → $${r.newPrice.toFixed(2)})</option>`;
+      });
+      // Store results for chart use
+      window._pciResults = results;
+      window._pciWindowDays = windowDays;
+
+      if (results.length === 0) {
+        container.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--text-secondary);">No price changes found for selected filters.</div>';
+        document.getElementById('pci-charts').style.display = 'none';
+        return;
+      }
+
+      // Render table (Revenue + Units only, no Margin/Profit)
+      let html = `
+        <div style="overflow-x: auto;">
+          <table class="data-table" style="width:100%; font-family:'Roboto Mono',monospace; font-size:0.85rem;">
+            <thead>
+              <tr>
+                <th colspan="6" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Price Change</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Before (${windowDays}d)</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">After (${windowDays}d)</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;">Impact</th>
+              </tr>
+              <tr style="background:var(--bg-secondary);">
+                <th style="text-align:left;padding:0.5rem;">Date</th>
+                <th style="text-align:left;padding:0.5rem;">Brand</th>
+                <th style="text-align:left;padding:0.5rem;">Product</th>
+                <th style="text-align:center;padding:0.5rem;">Old $</th>
+                <th style="text-align:center;padding:0.5rem;">New $</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Δ%</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue Δ</th>
+                <th style="text-align:center;padding:0.5rem;">Units Δ</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+      results.forEach((r, i) => {
+        const revChange = r.before.revenue > 0 ? ((r.after.revenue - r.before.revenue) / r.before.revenue * 100) : 0;
+        const unitsChange = r.before.units > 0 ? ((r.after.units - r.before.units) / r.before.units * 100) : 0;
+        const revColor = revChange > 0 ? 'var(--success)' : revChange < 0 ? 'var(--error)' : 'inherit';
+        const unitsColor = unitsChange > 0 ? 'var(--success)' : unitsChange < 0 ? 'var(--error)' : 'inherit';
+        const rowStyle = `cursor:pointer; transition: background 0.15s;`;
+
+        html += `
+          <tr style="${rowStyle}" onclick="selectPCIChange(${i})" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
+            <td style="padding:0.75rem;white-space:nowrap;">${r.date}</td>
+            <td style="padding:0.75rem;">${shortenBrandName(r.brand)}</td>
+            <td style="padding:0.75rem;">${r.productName}</td>
+            <td style="text-align:center;padding:0.75rem;">$${r.oldPrice.toFixed(2)}</td>
+            <td style="text-align:center;padding:0.75rem;">$${r.newPrice.toFixed(2)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
+            <td style="text-align:center;padding:0.75rem;">$${formatNumber(r.before.revenue)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.before.units}</td>
+            <td style="text-align:center;padding:0.75rem;">$${formatNumber(r.after.revenue)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.after.units}</td>
+            <td style="text-align:center;padding:0.75rem;color:${revColor};font-weight:500;">${revChange > 0 ? '+' : ''}${revChange.toFixed(1)}%</td>
+            <td style="text-align:center;padding:0.75rem;color:${unitsColor};font-weight:500;">${unitsChange > 0 ? '+' : ''}${unitsChange.toFixed(1)}%</td>
+          </tr>`;
+      });
+
+      html += `</tbody></table></div>
+        <div style="margin-top:0.75rem;font-size:0.8rem;color:var(--text-secondary);">Click any row to see daily charts</div>`;
+      container.innerHTML = html;
+      document.getElementById('pci-charts').style.display = 'block';
+    }
+
+    function selectPCIChange(index) {
+      const changeSelect = document.getElementById('pci-change-select');
+      changeSelect.value = index;
+      renderPCICharts();
+      // Scroll to charts
+      document.getElementById('pci-charts').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function renderPCICharts() {
+      const index = parseInt(document.getElementById('pci-change-select').value);
+      if (isNaN(index)) return;
+
+      const r = window._pciResults[index];
+      const windowDays = window._pciWindowDays;
+      if (!r) return;
+
+      // Update summary cards
+      const daysBefore = windowDays;
+      const daysAfter = Math.min(windowDays, daysBetween(r.date, new Date().toISOString().split('T')[0]));
+
+      const revBefore = daysAfter > 0 ? r.before.revenue / daysBefore : 0;
+      const revAfter  = daysAfter > 0 ? r.after.revenue / daysAfter : 0;
+      const unitsBefore = r.before.units / daysBefore;
+      const unitsAfter  = daysAfter > 0 ? r.after.units / daysAfter : 0;
+
+      const revChangePct = revBefore > 0 ? ((revAfter - revBefore) / revBefore * 100) : 0;
+      const unitsChangePct = unitsBefore > 0 ? ((unitsAfter - unitsBefore) / unitsBefore * 100) : 0;
+
+      document.getElementById('pci-summary-rev-before').textContent = '$' + revBefore.toFixed(2);
+      document.getElementById('pci-summary-rev-after').textContent = '$' + revAfter.toFixed(2);
+      document.getElementById('pci-summary-rev-change').textContent = (revChangePct >= 0 ? '+' : '') + revChangePct.toFixed(1) + '%';
+      document.getElementById('pci-summary-rev-change').style.color = revChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pci-summary-units-before').textContent = unitsBefore.toFixed(1);
+      document.getElementById('pci-summary-units-after').textContent = unitsAfter.toFixed(1);
+      document.getElementById('pci-summary-units-change').textContent = (unitsChangePct >= 0 ? '+' : '') + unitsChangePct.toFixed(1) + '%';
+      document.getElementById('pci-summary-units-change').style.color = unitsChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pci-summary-price').textContent = `$${r.oldPrice.toFixed(2)} → $${r.newPrice.toFixed(2)}`;
+      document.getElementById('pci-summary-price-pct').textContent = (r.changePercent >= 0 ? '+' : '') + r.changePercent.toFixed(1) + '%';
+
+      const daysSince = daysBetween(r.date, new Date().toISOString().split('T')[0]);
+      document.getElementById('pci-summary-days').textContent = daysSince;
+      document.getElementById('pci-summary-change-date').textContent = `Changed ${r.date}`;
+
+      // Build daily data series: windowDays before + windowDays after
+      const startDate = offsetDate(r.date, -windowDays);
+      const endDate = offsetDate(r.date, windowDays - 1);
+      const dailyLabels = [];
+      const dailyRevenue = [];
+      const dailyUnits = [];
+
+      let cursor = startDate;
+      while (cursor <= endDate) {
+        const dayOrders = svOrdersData.filter(o => o.sku === r.sku && o.orderDate === cursor);
+        dailyLabels.push(cursor.slice(5)); // MM-DD
+        dailyRevenue.push(dayOrders.reduce((s, o) => s + (o.itemTotal || 0), 0));
+        dailyUnits.push(dayOrders.reduce((s, o) => s + (o.quantity || 0), 0));
+        cursor = offsetDate(cursor, 1);
+      }
+
+      // Index of change date in the labels array
+      const changeIdx = windowDays; // exactly windowDays in
+
+      const annotationLine = {
+        type: 'line',
+        xMin: changeIdx - 0.5,
+        xMax: changeIdx - 0.5,
+        borderColor: 'var(--accent-orange)',
+        borderWidth: 2,
+        borderDash: [4, 4],
+        label: {
+          content: 'Price Change',
+          display: true,
+          position: 'start',
+          color: 'var(--accent-orange)',
+          font: { size: 11 }
+        }
+      };
+
+      const chartOpts = (yLabel, isCurrency) => ({
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          annotation: { annotations: { changeDay: annotationLine } }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { callback: v => isCurrency ? '$' + v.toLocaleString() : v.toLocaleString() }
+          }
+        }
+      });
+
+      if (pciRevenueChart) pciRevenueChart.destroy();
+      if (pciUnitsChart) pciUnitsChart.destroy();
+
+      pciRevenueChart = new Chart(document.getElementById('pci-revenue-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: dailyLabels,
+          datasets: [{
+            data: dailyRevenue,
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.3, pointRadius: 2
+          }]
+        },
+        options: chartOpts('Revenue ($)', true)
+      });
+
+      pciUnitsChart = new Chart(document.getElementById('pci-units-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: dailyLabels,
+          datasets: [{
+            data: dailyUnits,
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.3, pointRadius: 2
+          }]
+        },
+        options: chartOpts('Units', false)
+      });
+    }
+
+    // Returns { revenue, units } for a SKU within a date range from orders data
+    function calcOrderMetrics(orders, sku, startDate, endDate, windowDays) {
+      const filtered = orders.filter(o => o.sku === sku && o.orderDate >= startDate && o.orderDate <= endDate);
+      return {
+        revenue: filtered.reduce((s, o) => s + (o.itemTotal || 0), 0),
+        units: filtered.reduce((s, o) => s + (o.quantity || 0), 0)
+      };
+    }
+
+    // Returns a YYYY-MM-DD string offset by N days from a YYYY-MM-DD string
+    function offsetDate(dateStr, days) {
+      const d = new Date(dateStr + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().split('T')[0];
+    }
+
+    function daysBetween(dateStrA, dateStrB) {
+      const a = new Date(dateStrA + 'T12:00:00Z');
+      const b = new Date(dateStrB + 'T12:00:00Z');
+      return Math.max(0, Math.round((b - a) / (1000 * 60 * 60 * 24)));
+    }
+
   </script>
 </body>
 </html>
