@@ -1052,64 +1052,13 @@
       margin-left: 200px;
     }
     
-    /* Top bar — sibling of .main-content, butts up against the sidebar
-       (body.margin-left: 200px) and spans the rest of the viewport so
-       the header reads as one continuous band with the sidebar. Height
-       matches the sidebar brand block so the bottom borders align. */
-    #top-bar {
-      position: sticky;
-      top: 0;
-      height: 5rem;
-      background: var(--bg-secondary);
-      border-bottom: 1px solid var(--border);
-      padding: 0 2rem;
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      gap: 1.5rem;
-      z-index: 50;
+    /* Sidebar footer: auth control pinned to the bottom of the nav. */
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border);
     }
-    
-    #top-bar-content {
-      max-width: 1400px;
-      width: 100%;
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      gap: 1.5rem;
-    }
-    
-    .top-bar-item {
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .top-bar-timestamp {
-      color: var(--text-primary);
-    }
-    
-    .top-bar-btn {
-      padding: 0.5rem 1rem;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      color: var(--text-primary);
-      font-size: 0.875rem;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .top-bar-btn:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: var(--accent-orange);
-    }
-    
+
     /* Main content wrapper */
     .main-content {
       max-width: 1400px;
@@ -1121,8 +1070,9 @@
        "✓ Signed In" at rest, swaps to "Sign Out" on hover. */
     .signed-in-btn {
       position: relative;
-      padding: 0.5rem 1rem;
-      background: var(--bg-secondary);
+      width: 100%;
+      padding: 0.625rem 1rem;
+      background: transparent;
       border: 1px solid var(--success);
       border-radius: 6px;
       color: var(--success);
@@ -1131,9 +1081,8 @@
       font-weight: 600;
       cursor: pointer;
       transition: border-color 0.2s, color 0.2s;
-      display: inline-flex;
+      display: flex;
       align-items: center;
-      min-width: 8rem;
       justify-content: center;
     }
 
