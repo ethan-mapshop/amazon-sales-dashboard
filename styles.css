@@ -1117,10 +1117,10 @@
     }
 
     /* Top row inside the page header: title with the data-freshness
-       blurb sitting directly next to it. */
+       blurb sitting directly next to it, vertically centered. */
     .page-header-top {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       gap: 1.5rem;
       padding-top: 0.75rem;
       flex-shrink: 0;
@@ -1138,11 +1138,17 @@
       flex-shrink: 0;
     }
 
+    /* Tabs inside the page header get slightly more visual weight so
+       they sit comfortably alongside the 1.125rem section title. */
+    .page-header .tab {
+      font-size: 0.95rem;
+    }
+
     /* Compact inline data-freshness blurb for the header — icon and
        two data points on one line with a subtle separator. */
     .header-data-blurb {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       gap: 0.5rem;
       font-size: 0.8rem;
       color: var(--text-secondary);
