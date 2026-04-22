@@ -112,15 +112,6 @@
       padding: 2rem;
       margin-bottom: 2rem;
     }
-
-    /* Flat variant: drops the floating-panel chrome so the page reads
-       as one content area under the sidebar. Keeps vertical rhythm. */
-    .card.card-flat {
-      background: transparent;
-      border: none;
-      border-radius: 0;
-      padding: 0;
-    }
     
     .section-title {
       font-size: 1.125rem;
