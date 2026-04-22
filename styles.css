@@ -1052,8 +1052,10 @@
       margin-left: 200px;
     }
     
-    /* Top bar — height matches the sidebar brand block so their
-       bottom borders line up exactly. */
+    /* Top bar — sibling of .main-content, butts up against the sidebar
+       (body.margin-left: 200px) and spans the rest of the viewport so
+       the header reads as one continuous band with the sidebar. Height
+       matches the sidebar brand block so the bottom borders align. */
     #top-bar {
       position: sticky;
       top: 0;
@@ -1061,7 +1063,6 @@
       background: var(--bg-secondary);
       border-bottom: 1px solid var(--border);
       padding: 0 2rem;
-      margin: 0 -2rem 2rem -2rem;
       display: flex;
       justify-content: flex-end;
       align-items: center;
@@ -1113,7 +1114,7 @@
     .main-content {
       max-width: 1400px;
       margin: 0 auto;
-      padding: 0 2rem 2rem 2rem;
+      padding: 2rem;
     }
 
     /* Signed-in pill doubles as the sign-out trigger:
