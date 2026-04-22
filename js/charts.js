@@ -28,32 +28,31 @@
         
         // CACHE: Fetch all sheets ONCE at the beginning
         console.log('Fetching all sheet data (one-time load)...');
-        const headers = { 'Authorization': `Bearer ${accessToken}` };
-        
-        // Fetch transaction data from KV, config from Google Sheets
-        const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes, productMappingRes, brandMappingRes] = await Promise.all([
-          fetchFromKV('transactions'),
-          fetchFromKV('shipping'),
-          fetchFromKV('productads'),
-          fetchFromKV('brandads'),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, { headers }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, { headers })
+        const sheet = (name) => fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${name}`,
+          { headers: { 'Authorization': `Bearer ${accessToken}` } }
+        );
+
+        const [transactionsRes, shippingRes, productAdsRes, brandAdsRes, productsRes, productMappingRes, brandMappingRes] = await Promise.all([
+          sheet('Transactions'),
+          sheet('ShippingCosts'),
+          sheet('ProductAdSpend'),
+          sheet('BrandAdSpend'),
+          sheet('Products'),
+          sheet('ProductAdMapping'),
+          sheet('BrandAdMapping')
         ]);
-        
-        // Convert KV format to Sheets format
-        const transactionsData = kvToSheetsFormat(transactionsKV);
-        const shippingData = kvToSheetsFormat(shippingKV);
-        const productAdsData = kvToSheetsFormat(productAdsKV);
-        const brandAdsData = kvToSheetsFormat(brandAdsKV);
-        
-        if (!productsRes.ok) throw new Error('Failed to load products');
-        
-        const [productsData, productMappingData, brandMappingData] = await Promise.all([
-          productsRes.json(),
-          productMappingRes.json(),
-          brandMappingRes.json()
-        ]);
+
+        if (!transactionsRes.ok) throw new Error('Failed to load Transactions');
+        if (!productsRes.ok) throw new Error('Failed to load Products');
+
+        const transactionsData = await transactionsRes.json();
+        const productsData     = await productsRes.json();
+        const shippingData     = shippingRes.ok       ? await shippingRes.json()       : { values: [] };
+        const productAdsData   = productAdsRes.ok     ? await productAdsRes.json()     : { values: [] };
+        const brandAdsData     = brandAdsRes.ok       ? await brandAdsRes.json()       : { values: [] };
+        const productMappingData = productMappingRes.ok ? await productMappingRes.json() : { values: [] };
+        const brandMappingData   = brandMappingRes.ok   ? await brandMappingRes.json()   : { values: [] };
         
         console.log('All sheets loaded, processing 12 months...');
         
