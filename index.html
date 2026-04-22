@@ -283,79 +283,71 @@
         </div>
       </div>
 
-      <!-- YTD and MTD Comparison Cards -->
-      <div style="display: grid; grid-template-columns: 280px 280px; gap: 1.5rem; margin-bottom: 2rem; justify-content: start;">
+      <!-- YTD and MTD Comparison Tables -->
+      <div style="display: grid; grid-template-columns: 380px 380px; gap: 2rem; margin-bottom: 2rem; justify-content: start;">
         <div class="card card-flat">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Year-to-Date Comparison</h3>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-            <div>
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Sales</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-sales-prev-label">2025:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-sales-prev">$0</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-sales-curr-label">2026:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-sales-curr">$0</span>
-                </div>
-                <div id="ytd-sales-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
-              </div>
-            </div>
-            <div>
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Volume</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-volume-prev-label">2025:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-volume-prev">0</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="ytd-volume-curr-label">2026:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="ytd-volume-curr">0</span>
-                </div>
-                <div id="ytd-volume-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
-              </div>
-            </div>
-          </div>
+          <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr>
+                <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;"></th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales</th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="ytd-sales-prev-label" style="padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary);">2025</td>
+                <td id="ytd-sales-prev" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$0</td>
+                <td id="ytd-volume-prev" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">0</td>
+              </tr>
+              <tr>
+                <td id="ytd-sales-curr-label" style="padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary);">2026</td>
+                <td id="ytd-sales-curr" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$0</td>
+                <td id="ytd-volume-curr" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">0</td>
+              </tr>
+              <tr>
+                <td style="padding: 0.75rem; color: var(--text-secondary);">Change</td>
+                <td id="ytd-sales-change" style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                <td id="ytd-volume-change" style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        
+
         <div class="card card-flat">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Month-to-Date Comparison</h3>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-            <div>
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Sales</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-sales-prev-label">Mar 25:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-sales-prev">$0</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-sales-curr-label">Mar 26:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-sales-curr">$0</span>
-                </div>
-                <div id="mtd-sales-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
-              </div>
-            </div>
-            <div>
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Volume</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-volume-prev-label">Mar 25:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-volume-prev">0</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);" id="mtd-volume-curr-label">Mar 26:</span>
-                  <span style="font-size: 1rem; font-weight: 600;" id="mtd-volume-curr">0</span>
-                </div>
-                <div id="mtd-volume-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
-              </div>
-            </div>
-          </div>
+          <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr>
+                <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;"></th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales</th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="mtd-sales-prev-label" style="padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary);">Mar 25</td>
+                <td id="mtd-sales-prev" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$0</td>
+                <td id="mtd-volume-prev" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">0</td>
+              </tr>
+              <tr>
+                <td id="mtd-sales-curr-label" style="padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary);">Mar 26</td>
+                <td id="mtd-sales-curr" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$0</td>
+                <td id="mtd-volume-curr" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">0</td>
+              </tr>
+              <tr>
+                <td style="padding: 0.75rem; color: var(--text-secondary);">Change</td>
+                <td id="mtd-sales-change" style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                <td id="mtd-volume-change" style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
       
       <!-- Main Content: Monthly List and Charts -->
-      <div style="display: grid; grid-template-columns: 400px minmax(400px, 700px); gap: 2rem; align-items: stretch; max-width: 1200px;">
+      <div style="display: grid; grid-template-columns: 400px 1fr; gap: 2rem; align-items: stretch;">
         <!-- Monthly Breakdown (table styled like Profitability Overview) -->
         <div class="card card-flat" style="display: flex; flex-direction: column;">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Monthly Breakdown</h3>

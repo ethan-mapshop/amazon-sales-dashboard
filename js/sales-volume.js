@@ -219,8 +219,8 @@
       const mtdVolumeChange = mtdPrevVolume > 0 ? ((mtdCurrVolume - mtdPrevVolume) / mtdPrevVolume) * 100 : 0;
 
       // Update YTD cards
-      document.getElementById('ytd-sales-prev-label').textContent = `${previousYear}:`;
-      document.getElementById('ytd-sales-curr-label').textContent = `${anchorYear}:`;
+      document.getElementById('ytd-sales-prev-label').textContent = `${previousYear}`;
+      document.getElementById('ytd-sales-curr-label').textContent = `${anchorYear}`;
       document.getElementById('ytd-sales-prev').textContent = '$' + ytdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('ytd-sales-curr').textContent = '$' + ytdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('ytd-sales-change').textContent = (ytdSalesChange >= 0 ? '+' : '') + ytdSalesChange.toFixed(1) + '%';
@@ -233,15 +233,20 @@
 
       // Update MTD cards
       const anchorMonthName = monthNames[anchorMonth];
-      document.getElementById('mtd-sales-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}:`;
-      document.getElementById('mtd-sales-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}:`;
+      document.getElementById('mtd-sales-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}`;
+      document.getElementById('mtd-sales-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}`;
       document.getElementById('mtd-sales-prev').textContent = '$' + mtdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('mtd-sales-curr').textContent = '$' + mtdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
       document.getElementById('mtd-sales-change').textContent = (mtdSalesChange >= 0 ? '+' : '') + mtdSalesChange.toFixed(1) + '%';
       document.getElementById('mtd-sales-change').style.color = mtdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
 
-      document.getElementById('mtd-volume-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}:`;
-      document.getElementById('mtd-volume-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}:`;
+      // mtd-volume-*-label IDs are no longer rendered in the table — the
+      // label cells are shared with the sales row. Guard the updates so the
+      // function stays safe if these elements are ever restored.
+      const mtdVolPrev = document.getElementById('mtd-volume-prev-label');
+      const mtdVolCurr = document.getElementById('mtd-volume-curr-label');
+      if (mtdVolPrev) mtdVolPrev.textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}`;
+      if (mtdVolCurr) mtdVolCurr.textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}`;
       document.getElementById('mtd-volume-prev').textContent = mtdPrevVolume.toLocaleString();
       document.getElementById('mtd-volume-curr').textContent = mtdCurrVolume.toLocaleString();
       document.getElementById('mtd-volume-change').textContent = (mtdVolumeChange >= 0 ? '+' : '') + mtdVolumeChange.toFixed(1) + '%';
