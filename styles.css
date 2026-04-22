@@ -1052,13 +1052,15 @@
       margin-left: 200px;
     }
     
-    /* Top bar */
+    /* Top bar — height matches the sidebar brand block so their
+       bottom borders line up exactly. */
     #top-bar {
       position: sticky;
       top: 0;
+      height: 5rem;
       background: var(--bg-secondary);
       border-bottom: 1px solid var(--border);
-      padding: 1rem 2rem;
+      padding: 0 2rem;
       margin: 0 -2rem 2rem -2rem;
       display: flex;
       justify-content: flex-end;
@@ -1111,8 +1113,53 @@
     .main-content {
       max-width: 1400px;
       margin: 0 auto;
-      padding: 2rem;
+      padding: 0 2rem 2rem 2rem;
     }
+
+    /* Signed-in pill doubles as the sign-out trigger:
+       "✓ Signed In" at rest, swaps to "Sign Out" on hover. */
+    .signed-in-btn {
+      position: relative;
+      padding: 0.5rem 1rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--success);
+      border-radius: 6px;
+      color: var(--success);
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+      display: inline-flex;
+      align-items: center;
+      min-width: 8rem;
+      justify-content: center;
+    }
+
+    .signed-in-btn .signed-in-label,
+    .signed-in-btn .sign-out-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: opacity 0.15s;
+    }
+
+    .signed-in-btn .sign-out-label {
+      position: absolute;
+      opacity: 0;
+    }
+
+    .signed-in-btn .signed-in-check {
+      font-size: 1.1rem;
+    }
+
+    .signed-in-btn:hover {
+      border-color: var(--accent-orange);
+      color: var(--accent-orange);
+    }
+
+    .signed-in-btn:hover .signed-in-label { opacity: 0; }
+    .signed-in-btn:hover .sign-out-label  { opacity: 1; }
     
     
     /* ==================== INTEGRATIONS PAGE ==================== */

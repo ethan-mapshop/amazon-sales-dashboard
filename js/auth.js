@@ -96,10 +96,13 @@
     
     function displayUserInfo(userInfo) {
       document.getElementById('authSection').innerHTML = `
-        <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--success); border-radius: 6px;">
-          <span style="color: var(--success); font-size: 1.2rem;">✓</span>
-          <span style="font-size: 0.875rem; font-weight: 600; color: var(--success);">Signed In</span>
-        </div>
+        <button class="signed-in-btn" onclick="signOut()" title="Click to sign out">
+          <span class="signed-in-label">
+            <span class="signed-in-check">✓</span>
+            <span class="signed-in-text">Signed In</span>
+          </span>
+          <span class="sign-out-label">Sign Out</span>
+        </button>
       `;
     }
     
