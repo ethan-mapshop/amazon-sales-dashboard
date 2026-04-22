@@ -232,7 +232,7 @@
       <div id="sv-monthly" class="sv-subtab">
 
       <!-- Filters -->
-      <div class="card" style="margin-bottom: 2rem;">
+      <div class="card card-flat" style="margin-bottom: 2rem;">
         <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
           <div>
             <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
@@ -284,8 +284,8 @@
       </div>
 
       <!-- YTD and MTD Comparison Cards -->
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
-        <div class="card">
+      <div style="display: grid; grid-template-columns: 280px 280px; gap: 1.5rem; margin-bottom: 2rem; justify-content: start;">
+        <div class="card card-flat">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Year-to-Date Comparison</h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
             <div>
@@ -319,7 +319,7 @@
           </div>
         </div>
         
-        <div class="card">
+        <div class="card card-flat">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Month-to-Date Comparison</h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
             <div>
@@ -355,30 +355,45 @@
       </div>
       
       <!-- Main Content: Monthly List and Charts -->
-      <div style="display: grid; grid-template-columns: 300px 1fr; gap: 2rem; align-items: start;">
-        <!-- Monthly List -->
-        <div class="card">
+      <div style="display: grid; grid-template-columns: 400px minmax(400px, 700px); gap: 2rem; align-items: stretch; max-width: 1200px;">
+        <!-- Monthly Breakdown (table styled like Profitability Overview) -->
+        <div class="card card-flat" style="display: flex; flex-direction: column;">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Monthly Breakdown</h3>
-          <div id="monthly-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <!-- Monthly data will be populated here -->
+          <div style="flex: 1; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Month</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume</th>
+                </tr>
+              </thead>
+              <tbody id="monthly-list">
+                <!-- Monthly data will be populated here -->
+              </tbody>
+            </table>
           </div>
         </div>
-        
-        <!-- Charts -->
-        <div style="display: grid; grid-template-rows: 1fr 1fr; gap: 1.5rem; height: 100%;">
-          <div class="card" style="min-height: 0;">
+
+        <!-- Charts (explicit heights so the breakdown stretches to match) -->
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+          <div class="card card-flat" style="height: 260px; display: flex; flex-direction: column;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales ($)</h3>
-            <canvas id="sales-chart-sv" style="max-height: 250px;"></canvas>
+            <div style="flex: 1; min-height: 0;">
+              <canvas id="sales-chart-sv"></canvas>
+            </div>
           </div>
-          <div class="card" style="min-height: 0;">
+          <div class="card card-flat" style="height: 260px; display: flex; flex-direction: column;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume (Units)</h3>
-            <canvas id="volume-chart-sv" style="max-height: 250px;"></canvas>
+            <div style="flex: 1; min-height: 0;">
+              <canvas id="volume-chart-sv"></canvas>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Backfill Card -->
-      <div class="card" style="margin-top: 2rem;">
+      <div class="card card-flat" style="margin-top: 2rem;">
         <h3 class="section-title" style="margin-bottom: 1.5rem;">Load Order Data</h3>
         <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1.5rem;">
           Fetch and store orders from Amazon for a specific date range. Use this to load historical data or fill in any gaps the daily sync missed.

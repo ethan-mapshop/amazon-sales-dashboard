@@ -279,16 +279,14 @@
         return { ...m, sales, volume };
       });
 
-      // Render monthly list
+      // Render monthly breakdown as table rows (styled like Profitability Overview tables)
       const monthlyList = document.getElementById('monthly-list');
       monthlyList.innerHTML = monthlyData.map(m => `
-        <div style="display: flex; justify-content: space-between; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">
-          <span style="font-weight: 500;">${m.label}</span>
-          <div style="display: flex; gap: 1rem;">
-            <span>$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span>
-            <span style="color: var(--text-secondary);">${m.volume} units</span>
-          </div>
-        </div>
+        <tr>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); font-weight: 500;">${m.label}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volume.toLocaleString()}</td>
+        </tr>
       `).join('');
 
       // Render charts
