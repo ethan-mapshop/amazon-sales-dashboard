@@ -1,4 +1,11 @@
-    // Load Overview Data - Updated to use KV for transactions/shipping/ads
+    // Load Overview Data — pulls from Google Sheets directly.
+    // TODO: migrate to /api/* endpoints once server-side aggregation is in place.
+    const ZERO_METRICS = Object.freeze({
+      fbm:   { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 },
+      fba:   { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 },
+      total: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 }
+    });
+
     async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null) {
       if (!accessToken) {
         alert('Please sign in first');
@@ -21,29 +28,32 @@
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
       
       try {
-        // Load transaction data from KV API, config data from Google Sheets
-        const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes] = await Promise.all([
-          fetchFromKV('transactions', startDate, endDate),
-          fetchFromKV('shipping', startDate, endDate),
-          fetchFromKV('productads', startDate, endDate),
-          fetchFromKV('brandads', startDate, endDate),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          })
+        const sheet = (name) => fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${name}`,
+          { headers: { 'Authorization': `Bearer ${accessToken}` } }
+        );
+
+        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes] = await Promise.all([
+          sheet('Transactions'),
+          sheet('Products'),
+          sheet('ProductAdSpend'),
+          sheet('BrandAdSpend'),
+          sheet('ShippingCosts')
         ]);
-        
-        // Convert KV format to Sheets format for existing parse functions
-        const transactionsData = kvToSheetsFormat(transactionsKV);
-        const shippingData = kvToSheetsFormat(shippingKV);
-        const productAdsData = kvToSheetsFormat(productAdsKV);
-        const brandAdsData = kvToSheetsFormat(brandAdsKV);
-        
-        if (!productsRes.ok) throw new Error('Failed to load products');
+
+        if (!transactionsRes.ok) throw new Error('Failed to load Transactions');
+        if (!productsRes.ok) throw new Error('Failed to load Products');
+
+        const transactionsData = await transactionsRes.json();
         const productsData = await productsRes.json();
+        const productAdsData = productAdsRes.ok ? await productAdsRes.json() : { values: [] };
+        const brandAdsData   = brandAdsRes.ok   ? await brandAdsRes.json()   : { values: [] };
+        const shippingData   = shippingRes.ok   ? await shippingRes.json()   : { values: [] };
         
         const transactionsRows = transactionsData.values || [];
         
         if (transactionsRows.length <= 1) {
+          if (returnData) return ZERO_METRICS;
           container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">No transaction data available</div>';
           return;
         }
@@ -402,6 +412,7 @@
         
       } catch (error) {
         console.error('Error loading overview:', error);
+        if (returnData) return ZERO_METRICS;
         container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
       }
     }
