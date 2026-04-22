@@ -1006,17 +1006,38 @@
       z-index: 100;
       display: flex;
       flex-direction: column;
-      padding: 1.5rem 0;
+      padding: 0 0 1.5rem 0;
       overflow-y: auto;
     }
-    
+
+    /* Sidebar brand block. Explicit height matches .page-header so the
+       two bottom borders line up horizontally across the viewport. */
     .sidebar-brand {
-      font-size: 1.25rem;
+      height: 5rem;
+      padding: 0 1rem;
+      margin-bottom: 1rem;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
+    .sidebar-brand .brand-main {
+      font-size: 1.125rem;
       font-weight: 700;
       color: var(--text-primary);
-      padding: 0 1.5rem 2rem 1.5rem;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 1.5rem;
+      line-height: 1.2;
+    }
+
+    .sidebar-brand .brand-sub {
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-top: 0.25rem;
     }
     
     .nav-group-label {
@@ -1073,6 +1094,36 @@
       max-width: 1400px;
       margin: 0 auto;
       padding: 2rem;
+    }
+
+    /* Flat pages span the full main-content width and left-justify —
+       the centered 1400px column looks stranded without card chrome. */
+    .main-content:has(#overview-page.active) {
+      max-width: none;
+      margin: 0;
+    }
+
+    /* Page header: matches the sidebar brand block height so their
+       bottom borders align; breaks out of .main-content padding so
+       the bottom divider spans the full page width. */
+    .page-header {
+      height: 5rem;
+      margin: -2rem -2rem 2rem -2rem;
+      padding: 0 2rem;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .page-header .section-title {
+      margin-top: 1rem;
+      margin-bottom: 0;
+    }
+
+    .page-header .tabs {
+      margin-bottom: 0;
+      border-bottom: none;
     }
 
     /* Signed-in pill doubles as the sign-out trigger:

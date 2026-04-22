@@ -14,7 +14,10 @@
   
   <!-- SIDEBAR -->
   <nav id="sidebar">
-    <div class="sidebar-brand">Map Shop</div>
+    <div class="sidebar-brand">
+      <span class="brand-main">Map Shop</span>
+      <span class="brand-sub">Amazon Dashboard</span>
+    </div>
 
     <div class="nav-group-label">Reporting</div>
     <a class="nav-item" onclick="showPage('salesvolume')">Sales &amp; Volume</a>
@@ -546,16 +549,18 @@
     <!-- OVERVIEW PAGE -->
     <div id="overview-page" class="page active">
       <div class="card card-flat">
-        <h2 class="section-title">Profitability Overview</h2>
-        
-        <!-- Tabs -->
-        <div class="tabs">
-          <button id="ytd-tab" class="tab active" onclick="showYTD()">
-            Year-to-Date Profitability
-          </button>
-          <button id="monthly-tab" class="tab" onclick="showMonthly()">
-            Monthly Profitability
-          </button>
+        <div class="page-header">
+          <h2 class="section-title">Profitability Overview</h2>
+
+          <!-- Tabs -->
+          <div class="tabs">
+            <button id="monthly-tab" class="tab active" onclick="showMonthly()">
+              Monthly Profitability
+            </button>
+            <button id="ytd-tab" class="tab" onclick="showYTD()">
+              Year-to-Date Profitability
+            </button>
+          </div>
         </div>
         
         <!-- Year-to-Date View -->
