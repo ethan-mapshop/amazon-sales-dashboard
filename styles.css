@@ -1098,7 +1098,8 @@
 
     /* Flat pages span the full main-content width and left-justify —
        the centered 1400px column looks stranded without card chrome. */
-    .main-content:has(#overview-page.active) {
+    .main-content:has(#overview-page.active),
+    .main-content:has(#salesvolume-page.active) {
       max-width: none;
       margin: 0;
     }
