@@ -1116,14 +1116,14 @@
       justify-content: space-between;
     }
 
-    /* Top row inside the page header: title on the left, data-freshness
-       blurb on the right. */
+    /* Top row inside the page header: title with the data-freshness
+       blurb sitting directly next to it. */
     .page-header-top {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 2rem;
+      align-items: baseline;
+      gap: 1.5rem;
       padding-top: 0.75rem;
+      flex-shrink: 0;
     }
 
     .page-header .section-title {
@@ -1135,22 +1135,27 @@
     .page-header .tabs {
       margin-bottom: 0;
       border-bottom: none;
+      flex-shrink: 0;
     }
 
-    /* Compact inline version of the data-freshness blurb for the header.
-       No box chrome — just the icon and two stacked data lines. */
+    /* Compact inline data-freshness blurb for the header — icon and
+       two data points on one line with a subtle separator. */
     .header-data-blurb {
       display: flex;
-      align-items: center;
+      align-items: baseline;
       gap: 0.5rem;
       font-size: 0.8rem;
-      line-height: 1.35;
       color: var(--text-secondary);
+      flex-wrap: wrap;
     }
 
     .header-data-blurb strong {
       color: var(--text-primary);
       font-weight: 600;
+    }
+
+    .header-data-blurb .blurb-sep {
+      opacity: 0.4;
     }
 
     /* Signed-in pill doubles as the sign-out trigger:
