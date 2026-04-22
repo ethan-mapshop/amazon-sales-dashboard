@@ -1116,14 +1116,41 @@
       justify-content: space-between;
     }
 
+    /* Top row inside the page header: title on the left, data-freshness
+       blurb on the right. */
+    .page-header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+      padding-top: 0.75rem;
+    }
+
     .page-header .section-title {
-      margin-top: 1rem;
+      margin-top: 0;
       margin-bottom: 0;
+      flex-shrink: 0;
     }
 
     .page-header .tabs {
       margin-bottom: 0;
       border-bottom: none;
+    }
+
+    /* Compact inline version of the data-freshness blurb for the header.
+       No box chrome — just the icon and two stacked data lines. */
+    .header-data-blurb {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      line-height: 1.35;
+      color: var(--text-secondary);
+    }
+
+    .header-data-blurb strong {
+      color: var(--text-primary);
+      font-weight: 600;
     }
 
     /* Signed-in pill doubles as the sign-out trigger:
