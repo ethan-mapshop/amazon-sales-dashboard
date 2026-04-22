@@ -1,0 +1,7673 @@
+    const SHEET_CONFIGS = {
+      products: {
+        sheetName: 'Products',
+        uniqueKey: 'sku',
+        requiredColumns: ['sku'],
+        skipRows: 0,
+        allowUpdates: true
+      },
+      transactions: {
+        sheetName: 'Transactions',
+        uniqueKey: 'order id',
+        requiredColumns: ['order id'],
+        skipRows: 7,
+        allowUpdates: false
+      },
+      shipping: {
+        sheetName: 'ShippingCosts',
+        uniqueKey: 'Order #',
+        requiredColumns: ['Order #'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      productads: {
+        sheetName: 'ProductAdSpend',
+        uniqueKey: null,
+        requiredColumns: ['Campaign Name'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      brandads: {
+        sheetName: 'BrandAdSpend',
+        uniqueKey: null,
+        requiredColumns: ['Campaign Name'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      productadmapping: {
+        sheetName: 'ProductAdMapping',
+        uniqueKey: null,
+        requiredColumns: ['Campaign Name'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      brandadmapping: {
+        sheetName: 'BrandAdMapping',
+        uniqueKey: null,
+        requiredColumns: ['Campaign Name'],
+        skipRows: 0,
+        allowUpdates: false
+      }
+    };
+
+    let uploadedData = {};
+    let accessToken = null;
+    let tokenClient = null;
+    let lastUpdatedAt = ''; // For Phase 3 - timestamp of last data refresh
+    
+    // PHASE 1 STUB FUNCTIONS
+    function triggerRefresh() {
+      // Phase 3: Will call /api/refresh endpoint
+      console.log('Refresh triggered - will be implemented in Phase 3');
+      alert('Manual refresh will be available in Phase 3');
+    }
+    
+    function toggleChat() {
+      // Phase 5: Will toggle chat panel
+      console.log('Chat toggle - will be implemented in Phase 5');
+    }
+    
+    // Hardcoded configuration
+    const SPREADSHEET_ID = '10EDxzRhOdmu2ldvYHpoVSI0iuJoucy7OZFjM8sfgs80';
+    const DEFAULT_CLIENT_ID = '617399879817-55qv09jv9h3qqkthr7ic6m3beiirvp8u.apps.googleusercontent.com';
+    
+    let config = {
+      clientId: localStorage.getItem('customClientId') || DEFAULT_CLIENT_ID,
+      spreadsheetId: SPREADSHEET_ID
+    };
+
+    // Mapping data
+    let campaigns = { product: [], brand: [] };
+    let mappings = { product: {}, brand: {} };
+    let products = [];
+    let brands = [];
+    let currentFilter = { product: 'all', brand: 'all' };
+    let selectedCampaign = { product: null, brand: null };
+
+    // Page navigation
+    function showPage(pageName) {
+      // Hide all pages
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      
+      // Remove active from all sidebar nav items
+      document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+      
+      // Show the requested page
+      document.getElementById(`${pageName}-page`).classList.add('active');
+      
+      // Set active sidebar item by onclick attribute
+      document.querySelectorAll('.nav-item').forEach(item => {
+        const onclick = item.getAttribute('onclick');
+        if (onclick && onclick.includes(`'${pageName}'`)) {
+          item.classList.add('active');
+        }
+      });
+      
+      // Save current page to localStorage
+      localStorage.setItem('currentPage', pageName);
+      
+      // Page-specific initialization
+      if (pageName === 'mapping' && accessToken) {
+        loadMappingData();
+      }
+      
+      if (pageName === 'overview') {
+        showMonthly(); // Default to Monthly view
+        if (accessToken) {
+          generateMonthlyReport(); // Auto-load last month's data
+        }
+      }
+      
+      if (pageName === 'brandproduct') {
+        showBPMonthly(); // Default to Monthly view
+        if (accessToken) {
+          generateBPMonthlyReport(); // Auto-load last month's data
+        }
+      }
+      
+      if (pageName === 'charts' && accessToken) {
+        loadChartsData(); // Load chart data
+      }
+      
+      if (pageName === 'salesvolume' && accessToken) {
+        loadSalesVolumeData();
+      }
+      
+      if (pageName === 'integrations' && accessToken) {
+        loadCredentialStatus(); // Load credential status
+      }
+      
+      if (pageName === 'listing' && accessToken) {
+        loadChangeLogASINs(); // Load ASINs for dropdown
+        loadChangeLog(); // Load change log table
+      }
+    }
+    
+    // Client ID management
+    function showClientIdChange() {
+      document.getElementById('clientIdChange').style.display = 'block';
+      const customId = localStorage.getItem('customClientId');
+      if (customId && customId !== DEFAULT_CLIENT_ID) {
+        document.getElementById('customClientId').value = customId;
+      }
+    }
+    
+    function cancelClientIdChange() {
+      document.getElementById('clientIdChange').style.display = 'none';
+      document.getElementById('customClientId').value = '';
+    }
+    
+    function saveCustomClientId() {
+      const newClientId = document.getElementById('customClientId').value.trim();
+      if (!newClientId) {
+        alert('Please enter a valid Client ID');
+        return;
+      }
+      localStorage.setItem('customClientId', newClientId);
+      config.clientId = newClientId;
+      document.getElementById('clientIdDisplay').innerHTML = `
+        <span>Custom client configured ✓</span>
+        <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
+      `;
+      cancelClientIdChange();
+      tokenClient = null;
+      initializeGoogleAuth();
+      alert('Client ID updated! Please sign in again.');
+    }
+    
+    function resetClientId() {
+      localStorage.removeItem('customClientId');
+      config.clientId = DEFAULT_CLIENT_ID;
+      document.getElementById('clientIdDisplay').innerHTML = `
+        <span>Default client configured ✓</span>
+        <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
+      `;
+      cancelClientIdChange();
+      tokenClient = null;
+      initializeGoogleAuth();
+      alert('Reset to default Client ID! Please sign in again.');
+    }
+    
+    updateAuthUI();
+    
+    // Tab switching (upload tabs)
+    document.querySelectorAll('.tab[data-tab]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const parent = tab.closest('.card');
+        parent.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        parent.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        tab.classList.add('active');
+        const tabName = tab.dataset.tab;
+        parent.querySelector(`#${tabName}-content`).classList.add('active');
+      });
+    });
+    
+    // Tab switching (mapping tabs)
+    document.querySelectorAll('.tab[data-mapping-tab]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const parent = tab.closest('.card');
+        parent.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        parent.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        tab.classList.add('active');
+        const tabName = tab.dataset.mappingTab;
+        parent.querySelector(`#${tabName}-mapping`).classList.add('active');
+      });
+    });
+    
+    // Google Auth
+    function initializeGoogleAuth() {
+      if (!config.clientId) return;
+      
+      // Show sign-in button immediately
+      const signInBtn = document.getElementById('signInBtn');
+      if (signInBtn) signInBtn.style.display = 'inline-flex';
+      
+      // Check for saved token
+      const savedToken = localStorage.getItem('googleAccessToken');
+      const tokenExpiry = localStorage.getItem('tokenExpiry');
+      
+      if (savedToken && tokenExpiry && Date.now() < parseInt(tokenExpiry)) {
+        accessToken = savedToken;
+        displayUserInfo(null);
+        enableUpload();
+        return; // Already signed in
+      }
+      
+      // Only initialize token client if google.accounts is available
+      if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: config.clientId,
+          scope: 'https://www.googleapis.com/auth/spreadsheets',
+          callback: (response) => {
+            if (response.access_token) {
+              accessToken = response.access_token;
+              // Save token (expires in 1 hour)
+              localStorage.setItem('googleAccessToken', accessToken);
+              localStorage.setItem('tokenExpiry', Date.now() + 3600000); // 1 hour
+              // Show signed in state
+              displayUserInfo(null);
+              enableUpload();
+            } else {
+              showAuthError('Failed to get access token');
+            }
+          },
+        });
+      }
+    }
+    
+    // Try to initialize on DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', () => {
+      initializeGoogleAuth();
+      
+      // Restore saved page and tab
+      const savedPage = localStorage.getItem('currentPage');
+      const savedListingTab = localStorage.getItem('currentListingTab');
+      
+      if (savedPage && document.getElementById(`${savedPage}-page`)) {
+        showPage(savedPage);
+        
+        // If it's the listing page, restore the sub-tab
+        if (savedPage === 'listing' && savedListingTab) {
+          setTimeout(() => {
+            const tabButton = Array.from(document.querySelectorAll('#listing-page .tab'))
+              .find(btn => btn.getAttribute('onclick')?.includes(`'${savedListingTab}'`));
+            if (tabButton) {
+              tabButton.click();
+            }
+          }, 100);
+        }
+      } else {
+        // Default to Overview Monthly
+        showMonthly();
+        setTimeout(() => {
+          if (accessToken) {
+            generateMonthlyReport();
+          }
+        }, 100);
+      }
+    });
+    
+    // Also try on window load as backup
+    window.addEventListener('load', () => {
+      // Wait a bit for Google API to be ready
+      setTimeout(() => {
+        if (!tokenClient && config.clientId) {
+          initializeGoogleAuth();
+        }
+      }, 200);
+    });
+    
+    function updateAuthUI() {
+      if (config.clientId && !tokenClient) initializeGoogleAuth();
+    }
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      const signInBtn = document.getElementById('signInBtn');
+      if (signInBtn) {
+        signInBtn.addEventListener('click', () => {
+          if (tokenClient) tokenClient.requestAccessToken();
+        });
+      }
+    });
+    
+    function displayUserInfo(userInfo) {
+      document.getElementById('authSection').innerHTML = `
+        <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--success); border-radius: 6px;">
+          <span style="color: var(--success); font-size: 1.2rem;">✓</span>
+          <span style="font-size: 0.875rem; font-weight: 600; color: var(--success);">Signed In</span>
+        </div>
+      `;
+    }
+    
+    function signOut() {
+      accessToken = null;
+      localStorage.removeItem('googleAccessToken');
+      localStorage.removeItem('tokenExpiry');
+      location.reload();
+    }
+    
+    function showAuthError(message) {
+      // Just show the sign in button on error
+      document.getElementById('authSection').innerHTML = `
+        <div class="auth-section" style="padding: 1rem;">
+          <button class="btn btn-google" id="signInBtn" style="padding: 0.625rem 1.25rem; font-size: 0.875rem;">
+            <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Sign In
+          </button>
+        </div>
+      `;
+      
+      // Re-attach click handler
+      const newBtn = document.getElementById('signInBtn');
+      if (newBtn) {
+        newBtn.addEventListener('click', () => {
+          if (tokenClient) tokenClient.requestAccessToken();
+        });
+      }
+    }
+    
+    function enableUpload() {
+      document.querySelectorAll('.upload-zone').forEach(zone => {
+        zone.classList.remove('disabled');
+      });
+    }
+    
+    // File upload handling
+    document.querySelectorAll('.upload-zone').forEach(zone => {
+      const type = zone.dataset.type;
+      const fileInput = zone.querySelector('.file-input');
+      
+      zone.addEventListener('click', () => {
+        if (!accessToken) return;
+        fileInput.click();
+      });
+      
+      zone.addEventListener('dragover', (e) => {
+        if (!accessToken) return;
+        e.preventDefault();
+        zone.style.borderColor = 'var(--accent-orange)';
+      });
+      
+      zone.addEventListener('dragleave', () => {
+        zone.style.borderColor = '';
+      });
+      
+      zone.addEventListener('drop', (e) => {
+        if (!accessToken) return;
+        e.preventDefault();
+        zone.style.borderColor = '';
+        if (e.dataTransfer.files.length > 0) {
+          handleFile(e.dataTransfer.files[0], type);
+        }
+      });
+      
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+          handleFile(e.target.files[0], type);
+        }
+      });
+    });
+    
+    document.querySelectorAll('.clear-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.type;
+        uploadedData[type] = null;
+        
+        const fileInput = document.querySelector(`.upload-zone[data-type="${type}"] .file-input`);
+        fileInput.value = '';
+        
+        const fileInfo = document.querySelector(`.file-info[data-type="${type}"]`);
+        fileInfo.classList.remove('active');
+        fileInfo.innerHTML = '';
+        
+        document.querySelector(`.preview-table[data-type="${type}"]`).style.display = 'none';
+        document.querySelector(`.process-btn[data-type="${type}"]`).disabled = true;
+        btn.style.display = 'none';
+        hideStatus(type);
+      });
+    });
+    
+    // Date conversion utilities
+    function parseAmazonDate(dateStr) {
+      // Parse Amazon date formats to ISO date
+      // Handles: "Dec 1, 2025 12:07:15 AM PST" and "12/1/2025 12:00:00 AM"
+      if (!dateStr) return null;
+      
+      // Try numeric format first: "12/1/2025 12:00:00 AM"
+      const numericMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (numericMatch) {
+        const month = numericMatch[1].padStart(2, '0');
+        const day = numericMatch[2].padStart(2, '0');
+        const year = numericMatch[3];
+        return `${year}-${month}-${day}`;
+      }
+      
+      // Try text format: "Dec 1, 2025 12:07:15 AM PST"
+      const textMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+      if (textMatch) {
+        const monthStr = textMatch[1];
+        const day = textMatch[2].padStart(2, '0');
+        const year = textMatch[3];
+        
+        // Convert month name to number
+        const months = {
+          'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+          'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+          'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+        };
+        
+        const month = months[monthStr.toLowerCase().substring(0, 3)];
+        if (!month) return null;
+        
+        return `${year}-${month}-${day}`;
+      }
+      
+      return null;
+    }
+    
+    function excelSerialToISODate(serial) {
+      // Convert Excel serial number to ISO date (YYYY-MM-DD)
+      // Avoiding timezone issues by calculating directly
+      if (!serial || isNaN(serial)) return null;
+      
+      // Excel's epoch is December 30, 1899 (serial 0)
+      // Calculate days since epoch
+      const days = Math.floor(serial);
+      
+      // Excel bug: treats 1900 as a leap year (it wasn't)
+      // So dates after Feb 28, 1900 need adjustment
+      const adjustedDays = days > 59 ? days - 1 : days;
+      
+      // Calculate from epoch using UTC to avoid timezone shifts
+      const epochDate = Date.UTC(1899, 11, 30); // Dec 30, 1899
+      const millisecondsPerDay = 24 * 60 * 60 * 1000;
+      const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+      const date = new Date(targetTime);
+      
+      // Use UTC methods to extract date parts (no timezone conversion)
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(date.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    
+    function detectAndSkipMetadata(jsonData) {
+      // Check if first row contains Amazon metadata
+      if (jsonData.length === 0) return { data: jsonData, skipped: 0 };
+      
+      const firstRow = jsonData[0];
+      const firstValue = Object.values(firstRow)[0];
+      
+      // If first value contains metadata text, this file has the 7-row header
+      if (firstValue && typeof firstValue === 'string' && 
+          firstValue.includes('Includes Amazon Marketplace')) {
+        // Skip first 7 rows and re-read
+        return { needsReparse: true, skipRows: 7 };
+      }
+      
+      return { data: jsonData, skipped: 0 };
+    }
+    
+    function handleFile(file, type) {
+      const reader = new FileReader();
+      const sheetConfig = SHEET_CONFIGS[type];
+      
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          
+          let jsonData;
+          let skipRows = sheetConfig.skipRows;
+          
+          // First pass - check for metadata
+          let initialData = XLSX.utils.sheet_to_json(firstSheet);
+          const metadataCheck = detectAndSkipMetadata(initialData);
+          
+          if (metadataCheck.needsReparse) {
+            // File has metadata, skip those rows
+            skipRows = metadataCheck.skipRows;
+          }
+          
+          // Parse with correct skip
+          if (skipRows > 0) {
+            const range = XLSX.utils.decode_range(firstSheet['!ref']);
+            range.s.r = skipRows;
+            const newRange = XLSX.utils.encode_range(range);
+            jsonData = XLSX.utils.sheet_to_json(firstSheet, { range: newRange });
+          } else {
+            jsonData = initialData;
+          }
+          
+          if (jsonData.length === 0) {
+            showStatus(type, 'error', 'The file appears to be empty');
+            return;
+          }
+          
+          // Validate columns
+          const fileCols = Object.keys(jsonData[0]);
+          const missingCols = sheetConfig.requiredColumns.filter(col => 
+            !fileCols.includes(col)
+          );
+          
+          if (missingCols.length > 0) {
+            showStatus(type, 'error', `Missing columns: ${missingCols.join(', ')}`);
+            return;
+          }
+          
+          // Normalize and convert dates
+          uploadedData[type] = jsonData.map(row => {
+            const normalized = {};
+            Object.keys(row).forEach(key => {
+              let value = row[key];
+              
+              // Convert dates based on report type
+              if (type === 'transactions' && key === 'date/time') {
+                value = parseAmazonDate(value) || value;
+              } else if (type === 'shipping' && key === 'Ship Date') {
+                value = parseAmazonDate(value) || value;
+              } else if ((type === 'productads' || type === 'brandads') && key === 'Date') {
+                value = excelSerialToISODate(value) || value;
+              }
+              
+              normalized[key] = value;
+            });
+            return normalized;
+          });
+          
+          // Display info
+          const fileInfo = document.querySelector(`.file-info[data-type="${type}"]`);
+          fileInfo.innerHTML = `
+            <div class="file-name">${file.name}</div>
+            <div class="file-stats">
+              <span>Size: ${formatBytes(file.size)}</span>
+              <span>Rows: ${uploadedData[type].length}</span>
+              ${skipRows > 0 ? `<span>Skipped: ${skipRows} metadata rows</span>` : ''}
+            </div>
+          `;
+          fileInfo.classList.add('active');
+          
+          document.querySelector(`.clear-btn[data-type="${type}"]`).style.display = 'inline-block';
+          
+          // Preview
+          displayPreview(uploadedData[type].slice(0, 5), type);
+          
+          document.querySelector(`.process-btn[data-type="${type}"]`).disabled = !accessToken;
+          hideStatus(type);
+          
+        } catch (error) {
+          showStatus(type, 'error', `Error: ${error.message}`);
+        }
+      };
+      
+      reader.readAsArrayBuffer(file);
+    }
+    
+    function displayPreview(rows, type) {
+      const container = document.querySelector(`.preview-table[data-type="${type}"]`);
+      
+      if (rows.length === 0) return;
+      
+      const headers = Object.keys(rows[0]).slice(0, 10);
+      
+      let html = '<h3 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase;">Preview (first 5 rows, 10 columns)</h3>';
+      html += '<table><thead><tr>';
+      headers.forEach(h => html += `<th>${h}</th>`);
+      html += '</tr></thead><tbody>';
+      
+      rows.forEach(row => {
+        html += '<tr>';
+        headers.forEach(h => {
+          const val = String(row[h] || '');
+          const display = val.length > 30 ? val.substring(0, 30) + '...' : val;
+          html += `<td>${display}</td>`;
+        });
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+      container.style.display = 'block';
+    }
+    
+    // Process buttons
+    document.querySelectorAll('.process-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const type = btn.dataset.type;
+        await processUpload(type);
+      });
+    });
+    
+    async function processUpload(type) {
+      const data = uploadedData[type];
+      const sheetConfig = SHEET_CONFIGS[type];
+      
+      if (!data || !accessToken || !SPREADSHEET_ID) return;
+      
+      const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
+      btn.disabled = true;
+      btn.innerHTML = 'Processing<span class="loading"></span>';
+      hideStatus(type);
+      
+      try {
+        const spreadsheetId = SPREADSHEET_ID;
+        const sheetName = sheetConfig.sheetName;
+        
+        // Get existing data
+        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}`;
+        const getResponse = await fetch(getUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!getResponse.ok) throw new Error(`Failed to read ${sheetName} sheet`);
+        
+        const existingSheet = await getResponse.json();
+        const existingRows = existingSheet.values || [];
+        
+        if (existingRows.length === 0) throw new Error(`${sheetName} sheet appears empty`);
+        
+        const headers = existingRows[0];
+        
+        let addedCount = 0;
+        let updatedCount = 0;
+        let skippedCount = 0;
+        
+        if (sheetConfig.allowUpdates && sheetConfig.uniqueKey) {
+          // Products: update or add
+          const keyIndex = headers.indexOf(sheetConfig.uniqueKey);
+          if (keyIndex === -1) throw new Error(`${sheetConfig.uniqueKey} column not found`);
+          
+          const keyToRowIndex = {};
+          for (let i = 1; i < existingRows.length; i++) {
+            const key = existingRows[i][keyIndex];
+            if (key) keyToRowIndex[key] = i;
+          }
+          
+          const updates = [];
+          const newRows = [];
+          
+          data.forEach(item => {
+            const key = item[sheetConfig.uniqueKey];
+            const rowData = headers.map(h => item[h] || '');
+            
+            if (keyToRowIndex[key] !== undefined) {
+              const rowIndex = keyToRowIndex[key];
+              updates.push({
+                range: `${sheetName}!A${rowIndex + 1}:${String.fromCharCode(65 + headers.length - 1)}${rowIndex + 1}`,
+                values: [rowData]
+              });
+              updatedCount++;
+            } else {
+              newRows.push(rowData);
+              addedCount++;
+            }
+          });
+          
+          if (updates.length > 0) {
+            const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
+            await fetch(updateUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                valueInputOption: 'RAW',
+                data: updates
+              })
+            });
+          }
+          
+          if (newRows.length > 0) {
+            const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+            await fetch(appendUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ values: newRows })
+            });
+          }
+          
+          showStatus(type, 'success', 
+            `✓ Success! Added ${addedCount}, updated ${updatedCount} (${data.length} total)`
+          );
+          
+        } else if (sheetConfig.uniqueKey) {
+          // Transactions/Shipping: check duplicates, append new
+          const keyIndex = headers.findIndex(h => h.includes(sheetConfig.uniqueKey));
+          if (keyIndex === -1) throw new Error(`${sheetConfig.uniqueKey} column not found`);
+          
+          const existingKeys = new Set();
+          for (let i = 1; i < existingRows.length; i++) {
+            const key = existingRows[i][keyIndex];
+            if (key) existingKeys.add(key);
+          }
+          
+          const newData = data.filter(item => {
+            const key = item[sheetConfig.uniqueKey];
+            if (existingKeys.has(key)) {
+              skippedCount++;
+              return false;
+            }
+            return true;
+          });
+          
+          if (newData.length === 0) {
+            showStatus(type, 'error', `All ${data.length} items already exist`);
+            return;
+          }
+          
+          const newRows = newData.map(item => headers.map(h => item[h] || ''));
+          
+          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+          await fetch(appendUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: newRows })
+          });
+          
+          const msg = skippedCount > 0
+            ? `✓ Success! Added ${newData.length} (skipped ${skippedCount} duplicates)`
+            : `✓ Success! Added ${newData.length} items`;
+          
+          showStatus(type, 'success', msg);
+          
+        } else {
+          // Ad spend & mappings: just append everything
+          const newRows = data.map(item => headers.map(h => item[h] || ''));
+          
+          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
+          await fetch(appendUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: newRows })
+          });
+          
+          showStatus(type, 'success', `✓ Success! Added ${data.length} items`);
+        }
+        
+        // Reload mapping data if we're on mapping page and uploaded mapping data
+        if ((type === 'productadmapping' || type === 'brandadmapping') && 
+            document.getElementById('mapping-page').classList.contains('active')) {
+          setTimeout(() => loadMappingData(), 1000);
+        }
+        
+      } catch (error) {
+        showStatus(type, 'error', `Error: ${error.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Process & Upload';
+      }
+    }
+    
+    function showStatus(type, statusType, message) {
+      const el = document.querySelector(`.status-message[data-type="${type}"]`);
+      el.className = `status-message status-${statusType} active`;
+      el.textContent = message;
+    }
+    
+    function hideStatus(type) {
+      document.querySelector(`.status-message[data-type="${type}"]`).classList.remove('active');
+    }
+    
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    // MAPPING INTERFACE
+    async function loadMappingData() {
+      console.log('Loading mapping data...');
+      
+      // Show loading state
+      document.getElementById('product-campaigns-list').innerHTML = 
+        '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">Loading campaigns...</div>';
+      document.getElementById('brand-campaigns-list').innerHTML = 
+        '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">Loading campaigns...</div>';
+      
+      try {
+        // Load products, brands, campaigns, and mappings in parallel
+        await Promise.all([
+          loadProducts(),
+          loadProductCampaigns(),
+          loadBrandCampaigns(),
+          loadProductMappings(),
+          loadBrandMappings()
+        ]);
+        
+        console.log('Data loaded:', {
+          products: products.length,
+          brands: brands.length,
+          productCampaigns: campaigns.product.length,
+          brandCampaigns: campaigns.brand.length,
+          productMappings: Object.keys(mappings.product).length,
+          brandMappings: Object.keys(mappings.brand).length
+        });
+        
+        renderProductCampaigns();
+        renderBrandCampaigns();
+        updateStats('product');
+        updateStats('brand');
+        
+      } catch (error) {
+        console.error('Error loading mapping data:', error);
+        
+        // Show error in the UI
+        document.getElementById('product-campaigns-list').innerHTML = 
+          `<div style="padding: 2rem; text-align: center; color: var(--error);">
+            Error loading data: ${error.message}<br>
+            <button class="btn btn-secondary" onclick="loadMappingData()" style="margin-top: 1rem;">Retry</button>
+          </div>`;
+        
+        document.getElementById('brand-campaigns-list').innerHTML = 
+          `<div style="padding: 2rem; text-align: center; color: var(--error);">
+            Error loading data: ${error.message}<br>
+            <button class="btn btn-secondary" onclick="loadMappingData()" style="margin-top: 1rem;">Retry</button>
+          </div>`;
+      }
+    }
+    
+    async function loadProducts() {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      if (!response.ok) throw new Error('Failed to load products');
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      if (rows.length > 1) {
+        const headers = rows[0];
+        const skuIndex = headers.indexOf('sku');
+        const brandIndex = headers.indexOf('brand');
+        const nameIndex = headers.indexOf('name');
+        
+        products = [];
+        brands = new Set();
+        
+        for (let i = 1; i < rows.length; i++) {
+          const sku = rows[i][skuIndex];
+          const brand = rows[i][brandIndex];
+          const name = rows[i][nameIndex];
+          
+          if (sku) {
+            products.push({ sku, brand, name });
+          }
+          if (brand) {
+            brands.add(brand);
+          }
+        }
+        
+        brands = Array.from(brands).sort();
+      }
+    }
+    
+    async function loadProductCampaigns() {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdSpend`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      if (!response.ok) throw new Error('Failed to load product campaigns');
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      if (rows.length > 1) {
+        const headers = rows[0];
+        const campaignIndex = headers.indexOf('Campaign Name');
+        
+        const campaignSet = new Set();
+        for (let i = 1; i < rows.length; i++) {
+          const campaign = rows[i][campaignIndex];
+          if (campaign) campaignSet.add(campaign);
+        }
+        
+        campaigns.product = Array.from(campaignSet).sort();
+      }
+    }
+    
+    async function loadBrandCampaigns() {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdSpend`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      if (!response.ok) throw new Error('Failed to load brand campaigns');
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      if (rows.length > 1) {
+        const headers = rows[0];
+        const campaignIndex = headers.indexOf('Campaign Name');
+        
+        const campaignSet = new Set();
+        for (let i = 1; i < rows.length; i++) {
+          const campaign = rows[i][campaignIndex];
+          if (campaign) campaignSet.add(campaign);
+        }
+        
+        campaigns.brand = Array.from(campaignSet).sort();
+      }
+    }
+    
+    async function loadProductMappings() {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      if (!response.ok) {
+        mappings.product = {};
+        return;
+      }
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      mappings.product = {};
+      
+      if (rows.length > 1) {
+        const headers = rows[0];
+        const campaignIndex = headers.indexOf('Campaign Name');
+        const brandIndex = headers.indexOf('Brand');
+        const skuIndex = headers.indexOf('SKU');
+        
+        for (let i = 1; i < rows.length; i++) {
+          const campaign = rows[i][campaignIndex];
+          const brand = rows[i][brandIndex];
+          const sku = rows[i][skuIndex];
+          
+          if (!campaign) continue;
+          
+          if (!mappings.product[campaign]) {
+            mappings.product[campaign] = { brand: '', skus: [] };
+          }
+          
+          if (brand) mappings.product[campaign].brand = brand;
+          if (sku) mappings.product[campaign].skus.push(sku);
+        }
+      }
+    }
+    
+    async function loadBrandMappings() {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      if (!response.ok) {
+        mappings.brand = {};
+        return;
+      }
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      mappings.brand = {};
+      
+      if (rows.length > 1) {
+        const headers = rows[0];
+        const campaignIndex = headers.indexOf('Campaign Name');
+        const brandIndex = headers.indexOf('Brand');
+        
+        for (let i = 1; i < rows.length; i++) {
+          const campaign = rows[i][campaignIndex];
+          const brand = rows[i][brandIndex];
+          
+          if (campaign && brand) {
+            mappings.brand[campaign] = brand;
+          }
+        }
+      }
+    }
+    
+    function renderProductCampaigns(searchTerm = '') {
+      const container = document.getElementById('product-campaigns-list');
+      const filter = currentFilter.product;
+      
+      // Get all unique campaigns from both ad spend and mappings
+      const allCampaigns = new Set([...campaigns.product, ...Object.keys(mappings.product)]);
+      let filtered = Array.from(allCampaigns).sort();
+      
+      if (searchTerm) {
+        filtered = filtered.filter(c => c.toLowerCase().includes(searchTerm.toLowerCase()));
+      }
+      
+      if (filter === 'mapped') {
+        filtered = filtered.filter(c => {
+          const m = mappings.product[c];
+          return m && (m.brand || m.skus.length > 0);
+        });
+      } else if (filter === 'unmapped') {
+        filtered = filtered.filter(c => {
+          const m = mappings.product[c];
+          return !m || (!m.brand && m.skus.length === 0);
+        });
+      }
+      
+      if (filtered.length === 0) {
+        container.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No campaigns found</div>';
+        return;
+      }
+      
+      container.innerHTML = filtered.map(campaign => {
+        const mapped = mappings.product[campaign];
+        const isMapped = mapped && (mapped.brand || mapped.skus.length > 0);
+        const isSelected = selectedCampaign.product === campaign;
+        
+        return `
+          <div class="campaign-item ${isSelected ? 'selected' : ''} ${!isMapped ? 'unmapped' : ''}" 
+               onclick="selectProductCampaign('${campaign.replace(/'/g, "\\'")}')">
+            <div class="campaign-name">${campaign}</div>
+            <div class="campaign-meta">
+              ${isMapped ? `Brand: ${mapped.brand || 'None'} • ${mapped.skus.length} SKU(s)` : 'Unmapped'}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+    
+    function renderBrandCampaigns(searchTerm = '') {
+      const container = document.getElementById('brand-campaigns-list');
+      const filter = currentFilter.brand;
+      
+      // Get all unique campaigns from both ad spend and mappings
+      const allCampaigns = new Set([...campaigns.brand, ...Object.keys(mappings.brand)]);
+      let filtered = Array.from(allCampaigns).sort();
+      
+      if (searchTerm) {
+        filtered = filtered.filter(c => c.toLowerCase().includes(searchTerm.toLowerCase()));
+      }
+      
+      if (filter === 'mapped') {
+        filtered = filtered.filter(c => mappings.brand[c]);
+      } else if (filter === 'unmapped') {
+        filtered = filtered.filter(c => !mappings.brand[c]);
+      }
+      
+      if (filtered.length === 0) {
+        container.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No campaigns found</div>';
+        return;
+      }
+      
+      container.innerHTML = filtered.map(campaign => {
+        const brand = mappings.brand[campaign];
+        const isMapped = !!brand;
+        const isSelected = selectedCampaign.brand === campaign;
+        
+        return `
+          <div class="campaign-item ${isSelected ? 'selected' : ''} ${!isMapped ? 'unmapped' : ''}" 
+               onclick="selectBrandCampaign('${campaign.replace(/'/g, "\\'")}')">
+            <div class="campaign-name">${campaign}</div>
+            <div class="campaign-meta">
+              ${isMapped ? `Brand: ${brand}` : 'Unmapped'}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+    
+    function selectProductCampaign(campaign) {
+      selectedCampaign.product = campaign;
+      renderProductCampaigns(document.getElementById('product-search').value);
+      showProductEditor(campaign);
+    }
+    
+    function selectBrandCampaign(campaign) {
+      selectedCampaign.brand = campaign;
+      renderBrandCampaigns(document.getElementById('brand-search').value);
+      showBrandEditor(campaign);
+    }
+    
+    function showProductEditor(campaign) {
+      const editor = document.getElementById('product-editor');
+      const mapping = mappings.product[campaign] || { brand: '', skus: [] };
+      
+      editor.innerHTML = `
+        <div class="card" style="margin: 0;">
+          <h3 style="margin-bottom: 1.5rem; font-size: 1.125rem;">${campaign}</h3>
+          
+          <div class="config-group">
+            <label>Brand</label>
+            <select id="product-brand-select" onchange="updateProductBrand('${campaign.replace(/'/g, "\\'")}', this.value)">
+              <option value="">-- Select Brand --</option>
+              ${brands.map(b => `<option value="${b}" ${b === mapping.brand ? 'selected' : ''}>${b}</option>`).join('')}
+            </select>
+          </div>
+          
+          <div class="config-group">
+            <label>Products (SKUs)</label>
+            <div class="tag-input-container">
+              <div class="tags" id="product-sku-tags" onclick="document.getElementById('product-sku-input').focus()">
+                ${mapping.skus.map(sku => `
+                  <div class="tag">
+                    <span>${sku}</span>
+                    <span class="tag-remove" onclick="removeProductSku('${campaign.replace(/'/g, "\\'")}', '${sku}')">✕</span>
+                  </div>
+                `).join('')}
+                <input 
+                  type="text" 
+                  class="tag-input" 
+                  id="product-sku-input" 
+                  placeholder="Type SKU or search..."
+                  onkeydown="handleProductSkuInput(event, '${campaign.replace(/'/g, "\\'")}')"
+                  oninput="showProductSkuSuggestions(this.value)"
+                >
+              </div>
+              <div class="tag-suggestions" id="product-sku-suggestions"></div>
+            </div>
+            <p class="hint">${mapping.skus.length} SKU(s) mapped</p>
+          </div>
+          
+          <div class="button-group">
+            <button class="btn btn-primary" onclick="saveProductMapping('${campaign.replace(/'/g, "\\'")}')">
+              Save Mapping
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function showBrandEditor(campaign) {
+      const editor = document.getElementById('brand-editor');
+      const brand = mappings.brand[campaign] || '';
+      
+      editor.innerHTML = `
+        <div class="card" style="margin: 0;">
+          <h3 style="margin-bottom: 1.5rem; font-size: 1.125rem;">${campaign}</h3>
+          
+          <div class="config-group">
+            <label>Brand</label>
+            <select id="brand-select" onchange="updateBrandMapping('${campaign.replace(/'/g, "\\'")}', this.value)">
+              <option value="">-- Select Brand --</option>
+              ${brands.map(b => `<option value="${b}" ${b === brand ? 'selected' : ''}>${b}</option>`).join('')}
+            </select>
+          </div>
+          
+          <div class="button-group">
+            <button class="btn btn-primary" onclick="saveBrandMapping('${campaign.replace(/'/g, "\\'")}')">
+              Save Mapping
+            </button>
+          </div>
+        </div>
+      `;
+    }
+    
+    function updateProductBrand(campaign, brand) {
+      if (!mappings.product[campaign]) {
+        mappings.product[campaign] = { brand: '', skus: [] };
+      }
+      mappings.product[campaign].brand = brand;
+    }
+    
+    function handleProductSkuInput(event, campaign) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const input = event.target;
+        const sku = input.value.trim();
+        if (sku) {
+          addProductSku(campaign, sku);
+          input.value = '';
+          document.getElementById('product-sku-suggestions').classList.remove('active');
+        }
+      } else if (event.key === 'Escape') {
+        document.getElementById('product-sku-suggestions').classList.remove('active');
+      }
+    }
+    
+    function showProductSkuSuggestions(searchTerm) {
+      const container = document.getElementById('product-sku-suggestions');
+      
+      if (!searchTerm) {
+        container.classList.remove('active');
+        return;
+      }
+      
+      const filtered = products.filter(p => 
+        p.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.name.toLowerCase().includes(searchTerm.toLowerCase())
+      ).slice(0, 10);
+      
+      if (filtered.length === 0) {
+        container.classList.remove('active');
+        return;
+      }
+      
+      container.innerHTML = filtered.map(p => `
+        <div class="tag-suggestion" onclick="addProductSkuFromSuggestion('${p.sku}')">
+          <strong>${p.sku}</strong> - ${p.name}
+        </div>
+      `).join('');
+      
+      container.classList.add('active');
+    }
+    
+    function addProductSkuFromSuggestion(sku) {
+      const campaign = selectedCampaign.product;
+      if (!campaign) return;
+      
+      addProductSku(campaign, sku);
+      document.getElementById('product-sku-input').value = '';
+      document.getElementById('product-sku-suggestions').classList.remove('active');
+      document.getElementById('product-sku-input').focus();
+    }
+    
+    function addProductSku(campaign, sku) {
+      if (!mappings.product[campaign]) {
+        mappings.product[campaign] = { brand: '', skus: [] };
+      }
+      
+      if (!mappings.product[campaign].skus.includes(sku)) {
+        mappings.product[campaign].skus.push(sku);
+        showProductEditor(campaign);
+      }
+    }
+    
+    function removeProductSku(campaign, sku) {
+      if (mappings.product[campaign]) {
+        mappings.product[campaign].skus = mappings.product[campaign].skus.filter(s => s !== sku);
+        showProductEditor(campaign);
+      }
+    }
+    
+    function updateBrandMapping(campaign, brand) {
+      mappings.brand[campaign] = brand;
+    }
+    
+    async function saveProductMapping(campaign) {
+      const mapping = mappings.product[campaign];
+      if (!mapping) return;
+      
+      try {
+        // Delete existing mappings for this campaign
+        await deleteProductMappings(campaign);
+        
+        // Add new mappings (one row per SKU)
+        if (mapping.brand || mapping.skus.length > 0) {
+          const rows = mapping.skus.length > 0
+            ? mapping.skus.map(sku => [campaign, mapping.brand || '', sku])
+            : [[campaign, mapping.brand, '']];
+          
+          const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping:append?valueInputOption=RAW`;
+          await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: rows })
+          });
+        }
+        
+        alert('Product mapping saved!');
+        renderProductCampaigns(document.getElementById('product-search').value);
+        updateStats('product');
+        
+      } catch (error) {
+        alert('Failed to save mapping: ' + error.message);
+      }
+    }
+    
+    async function saveBrandMapping(campaign) {
+      const brand = mappings.brand[campaign];
+      if (!brand) return;
+      
+      try {
+        // Delete existing mapping for this campaign
+        await deleteBrandMappings(campaign);
+        
+        // Add new mapping
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping:append?valueInputOption=RAW`;
+        await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ values: [[campaign, brand]] })
+        });
+        
+        alert('Brand mapping saved!');
+        renderBrandCampaigns(document.getElementById('brand-search').value);
+        updateStats('brand');
+        
+      } catch (error) {
+        alert('Failed to save mapping: ' + error.message);
+      }
+    }
+    
+    async function deleteProductMappings(campaign) {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      // If sheet is empty or only has headers, nothing to delete
+      if (rows.length <= 1) {
+        // Make sure headers exist
+        if (rows.length === 0) {
+          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping?valueInputOption=RAW`;
+          await fetch(updateUrl, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: [['Campaign Name', 'Brand', 'SKU']] })
+          });
+        }
+        return;
+      }
+      
+      const headers = rows[0];
+      const campaignIndex = headers.findIndex(h => h.toLowerCase().includes('campaign name'));
+      
+      if (campaignIndex === -1) return;
+      
+      const filteredRows = [headers];
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i][campaignIndex] !== campaign) {
+          filteredRows.push(rows[i]);
+        }
+      }
+      
+      // Clear and rewrite with headers always included
+      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping:clear`;
+      await fetch(clearUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Always write back at least the headers
+      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping?valueInputOption=RAW`;
+      await fetch(updateUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: filteredRows })
+      });
+    }
+    
+    async function deleteBrandMappings(campaign) {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      
+      const data = await response.json();
+      const rows = data.values || [];
+      
+      // If sheet is empty or only has headers, nothing to delete
+      if (rows.length <= 1) {
+        // Make sure headers exist
+        if (rows.length === 0) {
+          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping?valueInputOption=RAW`;
+          await fetch(updateUrl, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: [['Campaign Name', 'Brand']] })
+          });
+        }
+        return;
+      }
+      
+      const headers = rows[0];
+      const campaignIndex = headers.findIndex(h => h.toLowerCase().includes('campaign name'));
+      
+      if (campaignIndex === -1) return;
+      
+      const filteredRows = [headers];
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i][campaignIndex] !== campaign) {
+          filteredRows.push(rows[i]);
+        }
+      }
+      
+      // Clear and rewrite with headers always included
+      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping:clear`;
+      await fetch(clearUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Always write back at least the headers
+      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping?valueInputOption=RAW`;
+      await fetch(updateUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: filteredRows })
+      });
+    }
+    
+    function updateStats(type) {
+      // Get all unique campaigns from BOTH ad spend data and mappings
+      const allCampaigns = new Set([
+        ...campaigns[type],
+        ...Object.keys(mappings[type])
+      ]);
+      
+      const total = allCampaigns.size;
+      
+      console.log(`${type} - campaigns from ad spend:`, campaigns[type].length);
+      console.log(`${type} - campaigns from mappings:`, Object.keys(mappings[type]).length);
+      console.log(`${type} - total unique:`, total);
+      
+      // Count how many have valid mappings
+      const mapped = Array.from(allCampaigns).filter(campaign => {
+        if (type === 'product') {
+          const m = mappings[type][campaign];
+          return m && (m.brand || m.skus.length > 0);
+        } else {
+          return mappings[type][campaign];
+        }
+      }).length;
+      
+      const unmapped = total - mapped;
+      
+      console.log(`Updating ${type} stats:`, { total, mapped, unmapped });
+      
+      document.getElementById(`${type}-total-count`).textContent = total;
+      document.getElementById(`${type}-mapped-count`).textContent = mapped;
+      document.getElementById(`${type}-unmapped-count`).textContent = unmapped;
+    }
+    
+    // Search functionality
+    document.getElementById('product-search').addEventListener('input', (e) => {
+      renderProductCampaigns(e.target.value);
+    });
+    
+    document.getElementById('brand-search').addEventListener('input', (e) => {
+      renderBrandCampaigns(e.target.value);
+    });
+    
+    // Filter tabs
+    document.querySelectorAll('#product-mapping .filter-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('#product-mapping .filter-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentFilter.product = tab.dataset.filter;
+        renderProductCampaigns(document.getElementById('product-search').value);
+      });
+    });
+    
+    document.querySelectorAll('#brand-mapping .filter-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('#brand-mapping .filter-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentFilter.brand = tab.dataset.filter;
+        renderBrandCampaigns(document.getElementById('brand-search').value);
+      });
+    });
+    
+    // OVERVIEW PAGE
+    // Helper function to format numbers with thousands separators
+    function formatNumber(num) {
+      return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    
+    // Helper function to set date range presets
+    
+    // Tab switching functions
+    function showYTD() {
+      document.getElementById('ytd-view').style.display = 'block';
+      document.getElementById('monthly-view').style.display = 'none';
+      document.getElementById('ytd-tab').classList.add('active');
+      document.getElementById('monthly-tab').classList.remove('active');
+      
+      // Initialize year dropdown if not already done
+      initializeYearDropdown();
+    }
+    
+    function showMonthly() {
+      document.getElementById('ytd-view').style.display = 'none';
+      document.getElementById('monthly-view').style.display = 'block';
+      document.getElementById('ytd-tab').classList.remove('active');
+      document.getElementById('monthly-tab').classList.add('active');
+      
+      // Initialize dropdowns if not already done
+      initializeMonthlyDropdowns();
+    }
+    
+    // Initialize year dropdown for YTD view
+    function initializeYearDropdown() {
+      const select = document.getElementById('ytd-year-select');
+      if (select.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear; year >= currentYear - 5; year--) {
+          const option = document.createElement('option');
+          option.value = year;
+          option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        }
+      }
+    }
+    
+    // Initialize month and year dropdowns for Monthly view
+    function initializeMonthlyDropdowns() {
+      const yearSelect = document.getElementById('monthly-year-select');
+      if (yearSelect.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear; year >= currentYear - 5; year--) {
+          const option = document.createElement('option');
+          option.value = year;
+          option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
+          yearSelect.appendChild(option);
+        }
+      }
+      
+      // Set to last month
+      const now = new Date();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      document.getElementById('monthly-month-select').value = lastMonth.getMonth();
+      document.getElementById('monthly-year-select').value = lastMonth.getFullYear();
+    }
+    
+    // YTD preset buttons
+    function setYTDYear(preset) {
+      const today = new Date();
+      const select = document.getElementById('ytd-year-select');
+      
+      if (preset === 'lastYear') {
+        select.value = today.getFullYear() - 1;
+      } else if (preset === 'thisYear') {
+        select.value = today.getFullYear();
+      }
+      
+      generateYTDReport();
+    }
+    
+    // Monthly preset buttons
+    function setMonthlyDate(preset) {
+      const today = new Date();
+      const monthSelect = document.getElementById('monthly-month-select');
+      const yearSelect = document.getElementById('monthly-year-select');
+      
+      if (preset === 'lastMonth') {
+        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        monthSelect.value = lastMonth.getMonth();
+        yearSelect.value = lastMonth.getFullYear();
+      } else if (preset === 'thisMonth') {
+        monthSelect.value = today.getMonth();
+        yearSelect.value = today.getFullYear();
+      }
+      
+      generateMonthlyReport();
+    }
+    
+    // Generate YTD report
+    async function generateYTDReport() {
+      const year = document.getElementById('ytd-year-select').value;
+      if (!year) {
+        console.error('No year selected');
+        return;
+      }
+      
+      const container = document.getElementById('ytd-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        // Calculate YTD date range
+        const today = new Date();
+        const selectedYear = parseInt(year);
+        const isCurrentYear = selectedYear === today.getFullYear();
+        
+        // For current year: Jan 1 to end of last complete month
+        // For past years: Jan 1 to Dec 31
+        const startDate = `${year}-01-01`;
+        let endDate;
+        
+        if (isCurrentYear) {
+          // Get last complete month (if today is Feb 5, use Jan 31)
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+          const endOfLastMonth = new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0);
+          endDate = endOfLastMonth.toISOString().split('T')[0];
+        } else {
+          endDate = `${year}-12-31`;
+        }
+        
+        // Previous year comparison - same month range
+        const prevYear = selectedYear - 1;
+        const prevStartDate = `${prevYear}-01-01`;
+        let prevEndDate;
+        
+        if (isCurrentYear) {
+          // Same last complete month in previous year
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const prevLastCompleteMonthYear = today.getMonth() === 0 ? prevYear - 1 : prevYear;
+          const prevEndOfLastMonth = new Date(prevLastCompleteMonthYear, lastCompleteMonth + 1, 0);
+          prevEndDate = prevEndOfLastMonth.toISOString().split('T')[0];
+        } else {
+          prevEndDate = `${prevYear}-12-31`;
+        }
+        
+        // Load both periods
+        const [currentData, prevData] = await Promise.all([
+          loadOverviewData(startDate, endDate, 'ytd-content', true),
+          loadOverviewData(prevStartDate, prevEndDate, 'ytd-content', true)
+        ]);
+        
+        // Calculate YoY comparisons
+        const comparisons = calculateYTDComparisons(currentData, prevData);
+        
+        // Now load current data again but render it with comparisons
+        await loadOverviewData(startDate, endDate, 'ytd-content', false, comparisons);
+        
+      } catch (error) {
+        console.error('Error generating YTD report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // Calculate YTD YoY comparisons
+    function calculateYTDComparisons(current, previous) {
+      const calcChange = (curr, prev) => {
+        if (!prev || prev === 0) return null;
+        return ((curr - prev) / Math.abs(prev)) * 100;
+      };
+      
+      return {
+        fbm: {
+          income: { yoy: calcChange(current.fbm.income, previous.fbm.income) },
+          opex: { yoy: calcChange(current.fbm.opex, previous.fbm.opex) },
+          productCosts: { yoy: calcChange(current.fbm.productCosts, previous.fbm.productCosts) },
+          adSpend: { yoy: calcChange(current.fbm.adSpend, previous.fbm.adSpend) },
+          profit: { yoy: calcChange(current.fbm.profit, previous.fbm.profit) },
+          margin: { yoy: calcChange(current.fbm.margin, previous.fbm.margin) }
+        },
+        fba: {
+          income: { yoy: calcChange(current.fba.income, previous.fba.income) },
+          opex: { yoy: calcChange(current.fba.opex, previous.fba.opex) },
+          productCosts: { yoy: calcChange(current.fba.productCosts, previous.fba.productCosts) },
+          adSpend: { yoy: calcChange(current.fba.adSpend, previous.fba.adSpend) },
+          profit: { yoy: calcChange(current.fba.profit, previous.fba.profit) },
+          margin: { yoy: calcChange(current.fba.margin, previous.fba.margin) }
+        },
+        total: {
+          income: { yoy: calcChange(current.total.income, previous.total.income) },
+          opex: { yoy: calcChange(current.total.opex, previous.total.opex) },
+          productCosts: { yoy: calcChange(current.total.productCosts, previous.total.productCosts) },
+          adSpend: { yoy: calcChange(current.total.adSpend, previous.total.adSpend) },
+          profit: { yoy: calcChange(current.total.profit, previous.total.profit) },
+          margin: { yoy: calcChange(current.total.margin, previous.total.margin) }
+        }
+      };
+    }
+    
+    // Generate Monthly report
+    async function generateMonthlyReport() {
+      const month = parseInt(document.getElementById('monthly-month-select').value);
+      const year = parseInt(document.getElementById('monthly-year-select').value);
+      
+      if (isNaN(month) || isNaN(year)) {
+        console.error('Invalid month or year');
+        return;
+      }
+      
+      const container = document.getElementById('monthly-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        // Current month
+        const currentStart = new Date(year, month, 1);
+        const currentEnd = new Date(year, month + 1, 0);
+        const currentStartStr = currentStart.toISOString().split('T')[0];
+        const currentEndStr = currentEnd.toISOString().split('T')[0];
+        
+        // Previous month (for MoM)
+        const prevMonth = month === 0 ? 11 : month - 1;
+        const prevYear = month === 0 ? year - 1 : year;
+        const prevStart = new Date(prevYear, prevMonth, 1);
+        const prevEnd = new Date(prevYear, prevMonth + 1, 0);
+        const prevStartStr = prevStart.toISOString().split('T')[0];
+        const prevEndStr = prevEnd.toISOString().split('T')[0];
+        
+        // Same month last year (for YoY)
+        const yoyYear = year - 1;
+        const yoyStart = new Date(yoyYear, month, 1);
+        const yoyEnd = new Date(yoyYear, month + 1, 0);
+        const yoyStartStr = yoyStart.toISOString().split('T')[0];
+        const yoyEndStr = yoyEnd.toISOString().split('T')[0];
+        
+        // Load all three periods
+        const [currentData, prevData, yoyData] = await Promise.all([
+          loadOverviewData(currentStartStr, currentEndStr, 'monthly-content', true),
+          loadOverviewData(prevStartStr, prevEndStr, 'monthly-content', true),
+          loadOverviewData(yoyStartStr, yoyEndStr, 'monthly-content', true)
+        ]);
+        
+        // Calculate comparisons
+        const comparisons = calculateComparisons(currentData, prevData, yoyData);
+        
+        // Now load current month data again but this time render it with comparisons
+        await loadOverviewData(currentStartStr, currentEndStr, 'monthly-content', false, comparisons);
+        
+      } catch (error) {
+        console.error('Error generating monthly report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // Calculate comparison percentages
+    function calculateComparisons(current, previous, yoy) {
+      const calcChange = (curr, prev) => {
+        if (!prev || prev === 0) return null;
+        return ((curr - prev) / Math.abs(prev)) * 100;
+      };
+      
+      return {
+        fbm: {
+          income: { yoy: calcChange(current.fbm.income, yoy.fbm.income), mom: calcChange(current.fbm.income, previous.fbm.income) },
+          opex: { yoy: calcChange(current.fbm.opex, yoy.fbm.opex), mom: calcChange(current.fbm.opex, previous.fbm.opex) },
+          productCosts: { yoy: calcChange(current.fbm.productCosts, yoy.fbm.productCosts), mom: calcChange(current.fbm.productCosts, previous.fbm.productCosts) },
+          adSpend: { yoy: calcChange(current.fbm.adSpend, yoy.fbm.adSpend), mom: calcChange(current.fbm.adSpend, previous.fbm.adSpend) },
+          profit: { yoy: calcChange(current.fbm.profit, yoy.fbm.profit), mom: calcChange(current.fbm.profit, previous.fbm.profit) },
+          margin: { yoy: calcChange(current.fbm.margin, yoy.fbm.margin), mom: calcChange(current.fbm.margin, previous.fbm.margin) }
+        },
+        fba: {
+          income: { yoy: calcChange(current.fba.income, yoy.fba.income), mom: calcChange(current.fba.income, yoy.fba.income) },
+          opex: { yoy: calcChange(current.fba.opex, yoy.fba.opex), mom: calcChange(current.fba.opex, previous.fba.opex) },
+          productCosts: { yoy: calcChange(current.fba.productCosts, yoy.fba.productCosts), mom: calcChange(current.fba.productCosts, previous.fba.productCosts) },
+          adSpend: { yoy: calcChange(current.fba.adSpend, yoy.fba.adSpend), mom: calcChange(current.fba.adSpend, previous.fba.adSpend) },
+          profit: { yoy: calcChange(current.fba.profit, yoy.fba.profit), mom: calcChange(current.fba.profit, previous.fba.profit) },
+          margin: { yoy: calcChange(current.fba.margin, yoy.fba.margin), mom: calcChange(current.fba.margin, previous.fba.margin) }
+        },
+        total: {
+          income: { yoy: calcChange(current.total.income, yoy.total.income), mom: calcChange(current.total.income, previous.total.income) },
+          opex: { yoy: calcChange(current.total.opex, yoy.total.opex), mom: calcChange(current.total.opex, previous.total.opex) },
+          productCosts: { yoy: calcChange(current.total.productCosts, yoy.total.productCosts), mom: calcChange(current.total.productCosts, previous.total.productCosts) },
+          adSpend: { yoy: calcChange(current.total.adSpend, yoy.total.adSpend), mom: calcChange(current.total.adSpend, previous.total.adSpend) },
+          profit: { yoy: calcChange(current.total.profit, yoy.total.profit), mom: calcChange(current.total.profit, previous.total.profit) },
+          margin: { yoy: calcChange(current.total.margin, yoy.total.margin), mom: calcChange(current.total.margin, previous.total.margin) }
+        }
+      };
+    }
+    
+    // HELPER FUNCTIONS FOR FETCHING FROM VERCEL KV API
+    
+    // Fetch data from Vercel KV via /api/data endpoint
+    async function fetchFromKV(type, startDate = null, endDate = null) {
+      let url = `/api/data?type=${type}`;
+      if (startDate && endDate) {
+        url += `&startDate=${startDate}&endDate=${endDate}`;
+      }
+      
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${type} from KV`);
+      }
+      
+      return await response.json();
+    }
+    
+    // Convert KV format (headers + rows arrays) to Google Sheets API format
+    function kvToSheetsFormat(kvData) {
+      if (!kvData || !kvData.headers || !kvData.rows) {
+        return { values: [] };
+      }
+      return {
+        values: [kvData.headers, ...kvData.rows]
+      };
+    }
+    
+    // Helper: Find header index case-insensitively
+    function findHeaderIndex(headers, searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      return headers.findIndex(h => h && h.toLowerCase() === lowerSearch);
+    }
+    
+    // Load Overview Data - Updated to use KV for transactions/shipping/ads
+    async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null) {
+      if (!accessToken) {
+        alert('Please sign in first');
+        return;
+      }
+      
+      if (!startDate || !endDate) {
+        alert('Please select a date range');
+        return;
+      }
+      
+      console.log('Loading data for container:', containerId);
+      const container = document.getElementById(containerId);
+      if (!container) {
+        console.error('Container not found:', containerId);
+        alert('Error: Container not found. Please refresh the page.');
+        return;
+      }
+      
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        // Load transaction data from KV API, config data from Google Sheets
+        const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes] = await Promise.all([
+          fetchFromKV('transactions', startDate, endDate),
+          fetchFromKV('shipping', startDate, endDate),
+          fetchFromKV('productads', startDate, endDate),
+          fetchFromKV('brandads', startDate, endDate),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+        
+        // Convert KV format to Sheets format for existing parse functions
+        const transactionsData = kvToSheetsFormat(transactionsKV);
+        const shippingData = kvToSheetsFormat(shippingKV);
+        const productAdsData = kvToSheetsFormat(productAdsKV);
+        const brandAdsData = kvToSheetsFormat(brandAdsKV);
+        
+        if (!productsRes.ok) throw new Error('Failed to load products');
+        const productsData = await productsRes.json();
+        
+        const transactionsRows = transactionsData.values || [];
+        
+        if (transactionsRows.length <= 1) {
+          container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">No transaction data available</div>';
+          return;
+        }
+        
+        // Parse transactions
+        const transactionsHeaders = transactionsRows[0];
+        const transactions = [];
+        
+        for (let i = 1; i < transactionsRows.length; i++) {
+          const transaction = {};
+          transactionsHeaders.forEach((header, index) => {
+            transaction[header] = transactionsRows[i][index] || '';
+          });
+          transactions.push(transaction);
+        }
+        
+        // Parse products (for costs and brand mappings)
+        const productCosts = {};
+        const skuToBrand = {};
+        const brandToSkus = {};
+        
+        // productsData already parsed above at line 3571
+        const productsRows = productsData.values || [];
+        if (productsRows.length > 1) {
+          const productsHeaders = productsRows[0];
+          const skuIndex = findHeaderIndex(productsHeaders, 'sku');
+          const costIndex = findHeaderIndex(productsHeaders, 'cost');
+          const brandIndex = findHeaderIndex(productsHeaders, 'brand');
+            
+            for (let i = 1; i < productsRows.length; i++) {
+              const sku = productsRows[i][skuIndex];
+              const cost = parseFloat(productsRows[i][costIndex]) || 0;
+              const brand = productsRows[i][brandIndex];
+              
+              // Store cost
+              if (sku) productCosts[sku] = cost;
+              
+              // Store brand mappings
+              if (sku && brand) {
+                skuToBrand[sku] = brand;
+                
+                if (!brandToSkus[brand]) {
+                  brandToSkus[brand] = [];
+                }
+                brandToSkus[brand].push(sku);
+              }
+            }
+          }
+        
+        // Load mapping data for ad spend allocation
+        const [productMappingRes, brandMappingRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+        
+        // Parse product mappings (Campaign Name -> SKUs)
+        const productCampaignToSkus = {};
+        if (productMappingRes.ok) {
+          const mappingData = await productMappingRes.json();
+          const mappingRows = mappingData.values || [];
+          if (mappingRows.length > 1) {
+            const headers = mappingRows[0];
+            const campaignIndex = headers.indexOf('Campaign Name');
+            const skuIndex = headers.indexOf('SKU');
+            
+            for (let i = 1; i < mappingRows.length; i++) {
+              const campaign = mappingRows[i][campaignIndex];
+              const sku = mappingRows[i][skuIndex];
+              
+              if (campaign && sku) {
+                if (!productCampaignToSkus[campaign]) {
+                  productCampaignToSkus[campaign] = [];
+                }
+                productCampaignToSkus[campaign].push(sku);
+              }
+            }
+          }
+        }
+        
+        // Parse brand mappings (Campaign Name -> Brand)
+        const brandCampaignToBrand = {};
+        if (brandMappingRes.ok) {
+          const mappingData = await brandMappingRes.json();
+          const mappingRows = mappingData.values || [];
+          if (mappingRows.length > 1) {
+            const headers = mappingRows[0];
+            const campaignIndex = headers.indexOf('Campaign Name');
+            const brandIndex = headers.indexOf('Brand');
+            
+            for (let i = 1; i < mappingRows.length; i++) {
+              const campaign = mappingRows[i][campaignIndex];
+              const brand = mappingRows[i][brandIndex];
+              
+              if (campaign && brand) {
+                brandCampaignToBrand[campaign] = brand;
+              }
+            }
+          }
+        }
+        
+        // Calculate FBA/FBM sales by SKU from filtered transactions
+        const skuSales = {}; // { sku: { fba: amount, fbm: amount } }
+        
+        const reportStart = new Date(startDate);
+        const reportEnd = new Date(endDate);
+        
+        transactions.forEach(t => {
+          const transDate = new Date(t[transactionsHeaders.find(h => h.includes('date'))]);
+          if (transDate >= reportStart && transDate <= reportEnd) {
+            const type = (t.type || '').trim();
+            const sku = t.sku || '';
+            const fulfillment = (t.fulfillment || '').trim();
+            const productSales = parseFloat(t['product sales'] || 0);
+            
+            if (type === 'Order' && sku && productSales > 0) {
+              if (!skuSales[sku]) {
+                skuSales[sku] = { fba: 0, fbm: 0 };
+              }
+              
+              if (fulfillment === 'Amazon') {
+                skuSales[sku].fba += productSales;
+              } else if (fulfillment === 'Seller') {
+                skuSales[sku].fbm += productSales;
+              }
+            }
+          }
+        });
+        
+        // Parse ad spend data with FBA/FBM allocation
+        let fbaAdSpend = 0;
+        let fbmAdSpend = 0;
+        let unallocatedAdSpend = 0;
+        const unallocatedProductCampaigns = {}; // Track which campaigns are unallocated
+        const unallocatedBrandCampaigns = {}; // Track which campaigns are unallocated
+        
+        // Product ads (already loaded from KV)
+        const productAdsRows = productAdsData.values || [];
+        if (productAdsRows.length > 1) {
+          const adsHeaders = productAdsRows[0];
+          const dateIndex = findHeaderIndex(adsHeaders, 'Date');
+          const campaignIndex = findHeaderIndex(adsHeaders, 'Campaign Name');
+          const spendIndex = findHeaderIndex(adsHeaders, 'Spend');
+            
+            for (let i = 1; i < productAdsRows.length; i++) {
+              const adDate = new Date(productAdsRows[i][dateIndex]);
+              const campaign = productAdsRows[i][campaignIndex];
+              const spend = parseFloat(productAdsRows[i][spendIndex]) || 0;
+              
+              if (adDate >= reportStart && adDate <= reportEnd && spend > 0) {
+                // Get SKUs for this campaign
+                const campaignSkus = productCampaignToSkus[campaign] || [];
+                
+                if (campaignSkus.length === 0) {
+                  // No mapping - unallocated
+                  unallocatedAdSpend += spend;
+                  if (!unallocatedProductCampaigns[campaign || '(blank)']) {
+                    unallocatedProductCampaigns[campaign || '(blank)'] = 0;
+                  }
+                  unallocatedProductCampaigns[campaign || '(blank)'] += spend;
+                } else {
+                  // Calculate FBA/FBM split based on sales
+                  let totalFba = 0;
+                  let totalFbm = 0;
+                  
+                  campaignSkus.forEach(sku => {
+                    if (skuSales[sku]) {
+                      totalFba += skuSales[sku].fba;
+                      totalFbm += skuSales[sku].fbm;
+                    }
+                  });
+                  
+                  const totalSales = totalFba + totalFbm;
+                  
+                  if (totalSales === 0) {
+                    // Campaign has mapping but no sales - unallocated
+                    unallocatedAdSpend += spend;
+                    if (!unallocatedProductCampaigns[campaign || '(blank)']) {
+                      unallocatedProductCampaigns[campaign || '(blank)'] = 0;
+                    }
+                    unallocatedProductCampaigns[campaign || '(blank)'] += spend;
+                  } else {
+                    // Allocate proportionally
+                    const fbaPercent = totalFba / totalSales;
+                    const fbmPercent = totalFbm / totalSales;
+                    
+                    fbaAdSpend += spend * fbaPercent;
+                    fbmAdSpend += spend * fbmPercent;
+                  }
+                }
+              }
+            }
+        } // End productAds parsing
+        
+        // Brand ads (already loaded from KV)
+        const brandAdsRows = brandAdsData.values || [];
+        if (brandAdsRows.length > 1) {
+          const adsHeaders = brandAdsRows[0];
+          const dateIndex = findHeaderIndex(adsHeaders, 'Date');
+          const campaignIndex = findHeaderIndex(adsHeaders, 'Campaign Name');
+          const spendIndex = findHeaderIndex(adsHeaders, 'Spend');
+            
+            for (let i = 1; i < brandAdsRows.length; i++) {
+              const adDate = new Date(brandAdsRows[i][dateIndex]);
+              const campaign = brandAdsRows[i][campaignIndex];
+              const spend = parseFloat(brandAdsRows[i][spendIndex]) || 0;
+              
+              if (adDate >= reportStart && adDate <= reportEnd && spend > 0) {
+                // Get brand for this campaign
+                const brand = brandCampaignToBrand[campaign];
+                
+                if (!brand) {
+                  // No mapping - unallocated
+                  unallocatedAdSpend += spend;
+                  if (!unallocatedBrandCampaigns[campaign || '(blank)']) {
+                    unallocatedBrandCampaigns[campaign || '(blank)'] = 0;
+                  }
+                  unallocatedBrandCampaigns[campaign || '(blank)'] += spend;
+                } else {
+                  // Get all SKUs for this brand
+                  const brandSkus = brandToSkus[brand] || [];
+                  
+                  if (brandSkus.length === 0) {
+                    // Brand has no SKUs - unallocated
+                    unallocatedAdSpend += spend;
+                    if (!unallocatedBrandCampaigns[campaign || '(blank)']) {
+                      unallocatedBrandCampaigns[campaign || '(blank)'] = 0;
+                    }
+                    unallocatedBrandCampaigns[campaign || '(blank)'] += spend;
+                  } else {
+                    // Calculate FBA/FBM split based on sales across all brand SKUs
+                    let totalFba = 0;
+                    let totalFbm = 0;
+                    
+                    brandSkus.forEach(sku => {
+                      if (skuSales[sku]) {
+                        totalFba += skuSales[sku].fba;
+                        totalFbm += skuSales[sku].fbm;
+                      }
+                    });
+                    
+                    const totalSales = totalFba + totalFbm;
+                    
+                    if (totalSales === 0) {
+                      // Brand has SKUs but no sales - unallocated
+                      unallocatedAdSpend += spend;
+                      if (!unallocatedBrandCampaigns[campaign || '(blank)']) {
+                        unallocatedBrandCampaigns[campaign || '(blank)'] = 0;
+                      }
+                      unallocatedBrandCampaigns[campaign || '(blank)'] += spend;
+                    } else {
+                      // Allocate proportionally
+                      const fbaPercent = totalFba / totalSales;
+                      const fbmPercent = totalFbm / totalSales;
+                      
+                      fbaAdSpend += spend * fbaPercent;
+                      fbmAdSpend += spend * fbmPercent;
+                    }
+                  }
+                }
+              }
+            }
+        }
+        
+        console.log('Ad Spend Allocation:', {
+          FBA: fbaAdSpend.toFixed(2),
+          FBM: fbmAdSpend.toFixed(2),
+          Unallocated: unallocatedAdSpend.toFixed(2),
+          Total: (fbaAdSpend + fbmAdSpend + unallocatedAdSpend).toFixed(2)
+        });
+        
+        // Log detailed breakdown of unallocated campaigns
+        if (unallocatedAdSpend > 0) {
+          console.log('\n=== UNALLOCATED AD SPEND BREAKDOWN ===');
+          
+          const productCampaignCount = Object.keys(unallocatedProductCampaigns).length;
+          const brandCampaignCount = Object.keys(unallocatedBrandCampaigns).length;
+          
+          if (productCampaignCount > 0) {
+            console.log('\nProduct Campaigns (no mapping or no sales):');
+            Object.entries(unallocatedProductCampaigns)
+              .sort((a, b) => b[1] - a[1]) // Sort by spend descending
+              .forEach(([campaign, spend]) => {
+                console.log(`  - ${campaign}: $${spend.toFixed(2)}`);
+              });
+          }
+          
+          if (brandCampaignCount > 0) {
+            console.log('\nBrand Campaigns (no mapping or no sales):');
+            Object.entries(unallocatedBrandCampaigns)
+              .sort((a, b) => b[1] - a[1]) // Sort by spend descending
+              .forEach(([campaign, spend]) => {
+                console.log(`  - ${campaign}: $${spend.toFixed(2)}`);
+              });
+          }
+          
+          console.log(`\nTotal Unallocated: $${unallocatedAdSpend.toFixed(2)}`);
+          console.log('=====================================\n');
+        }
+        
+        // Parse shipping costs data
+        let totalShippingCosts = 0;
+        
+        // Shipping costs (already loaded from KV)
+        const shippingRows = shippingData.values || [];
+        if (shippingRows.length > 1) {
+          const shippingHeaders = shippingRows[0];
+          const shipDateIndex = findHeaderIndex(shippingHeaders, 'Ship Date');
+          const shippingCostIndex = findHeaderIndex(shippingHeaders, 'Shipping Cost');
+            
+            for (let i = 1; i < shippingRows.length; i++) {
+              const shipDate = new Date(shippingRows[i][shipDateIndex]);
+              const shippingCost = parseFloat(shippingRows[i][shippingCostIndex]) || 0;
+              
+              // Check if ship date is within report period
+              const reportStart = new Date(startDate);
+              const reportEnd = new Date(endDate);
+              
+              if (shipDate >= reportStart && shipDate <= reportEnd) {
+                totalShippingCosts += shippingCost;
+              }
+            }
+          }
+        
+        // Filter transactions by date range
+        const dateColumn = transactionsHeaders.find(h => h.includes('date')) || transactionsHeaders[0];
+        
+        const filtered = transactions.filter(t => {
+          const transDate = t[dateColumn];
+          if (!transDate) return false;
+          
+          // Dates are now in ISO format (YYYY-MM-DD), can compare as strings
+          // But to be safe, convert to Date objects for proper comparison
+          const tDate = new Date(transDate + 'T00:00:00');
+          if (isNaN(tDate.getTime())) return false;
+          
+          const sDate = new Date(startDate + 'T00:00:00');
+          const eDate = new Date(endDate + 'T23:59:59');
+          
+          return tDate >= sDate && tDate <= eDate;
+        });
+        
+        // Calculate financial statement with product costs, ad spend, and shipping costs
+        const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
+        
+        // If returnData is true, return profitability metrics instead of rendering
+        if (returnData) {
+          return extractProfitabilityMetrics(statement);
+        }
+        
+        // Render the report
+        renderFinancialStatement(statement, startDate, endDate, container, comparisons);
+        
+      } catch (error) {
+        console.error('Error loading overview:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    
+    // ============================================
+    // BRAND & PRODUCT PROFITABILITY FUNCTIONS
+    // ============================================
+    
+    // Tab switching for Brand & Product page
+    function showBPYTD() {
+      document.getElementById('bp-ytd-view').style.display = 'block';
+      document.getElementById('bp-monthly-view').style.display = 'none';
+      document.getElementById('bp-ytd-tab').classList.add('active');
+      document.getElementById('bp-monthly-tab').classList.remove('active');
+      
+      initializeBPYTDDropdowns();
+    }
+    
+    function showBPMonthly() {
+      document.getElementById('bp-ytd-view').style.display = 'none';
+      document.getElementById('bp-monthly-view').style.display = 'block';
+      document.getElementById('bp-ytd-tab').classList.remove('active');
+      document.getElementById('bp-monthly-tab').classList.add('active');
+      
+      initializeBPMonthlyDropdowns();
+    }
+    
+    // Initialize dropdowns for BP YTD
+    async function initializeBPYTDDropdowns() {
+      // Initialize year dropdown
+      const yearSelect = document.getElementById('bp-ytd-year-select');
+      if (yearSelect.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear; year >= currentYear - 5; year--) {
+          const option = document.createElement('option');
+          option.value = year;
+          option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
+          yearSelect.appendChild(option);
+        }
+      }
+      
+      // Initialize brand dropdown
+      await initializeBrandDropdown('bp-ytd-brand-select');
+    }
+    
+    // Initialize dropdowns for BP Monthly
+    async function initializeBPMonthlyDropdowns() {
+      // Initialize year dropdown
+      const yearSelect = document.getElementById('bp-monthly-year-select');
+      if (yearSelect.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let year = currentYear; year >= currentYear - 5; year--) {
+          const option = document.createElement('option');
+          option.value = year;
+          option.text = year;
+          if (year === currentYear) {
+            option.selected = true;
+          }
+          yearSelect.appendChild(option);
+        }
+      }
+      
+      // Set to last month
+      const now = new Date();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      document.getElementById('bp-monthly-month-select').value = lastMonth.getMonth();
+      document.getElementById('bp-monthly-year-select').value = lastMonth.getFullYear();
+      
+      // Initialize brand dropdown
+      await initializeBrandDropdown('bp-monthly-brand-select');
+    }
+    
+    // Initialize brand dropdown from Products sheet
+    async function initializeBrandDropdown(selectId) {
+      if (!accessToken) return;
+      
+      const select = document.getElementById(selectId);
+      if (select.options.length > 1) return; // Already initialized
+      
+      try {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        const rows = data.values || [];
+        if (rows.length < 2) return;
+        
+        const headers = rows[0];
+        const brandIdx = headers.findIndex(h => h.toLowerCase() === 'brand');
+        
+        if (brandIdx === -1) return;
+        
+        // Get unique brands
+        const brands = new Set();
+        for (let i = 1; i < rows.length; i++) {
+          const brand = rows[i][brandIdx];
+          if (brand && brand.trim()) {
+            brands.add(brand.trim());
+          }
+        }
+        
+        // Add brand options
+        const sortedBrands = Array.from(brands).sort();
+        sortedBrands.forEach(brand => {
+          const option = document.createElement('option');
+          option.value = brand;
+          option.text = brand;
+          select.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error loading brands:', error);
+      }
+    }
+    
+    // Quick date setters for BP YTD
+    function setBPYTDYear(preset) {
+      const yearSelect = document.getElementById('bp-ytd-year-select');
+      const currentYear = new Date().getFullYear();
+      
+      if (preset === 'thisYear') {
+        yearSelect.value = currentYear;
+      } else if (preset === 'lastYear') {
+        yearSelect.value = currentYear - 1;
+      }
+      
+      generateBPYTDReport();
+    }
+    
+    // Quick date setters for BP Monthly
+    function setBPMonthlyDate(preset) {
+      const monthSelect = document.getElementById('bp-monthly-month-select');
+      const yearSelect = document.getElementById('bp-monthly-year-select');
+      const now = new Date();
+      
+      if (preset === 'thisMonth') {
+        monthSelect.value = now.getMonth();
+        yearSelect.value = now.getFullYear();
+      } else if (preset === 'lastMonth') {
+        const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        monthSelect.value = lastMonth.getMonth();
+        yearSelect.value = lastMonth.getFullYear();
+      }
+      
+      generateBPMonthlyReport();
+    }
+    
+    // Generate BP YTD Report
+    async function generateBPYTDReport() {
+      const year = parseInt(document.getElementById('bp-ytd-year-select').value);
+      const brandFilter = document.getElementById('bp-ytd-brand-select').value;
+      
+      if (isNaN(year)) {
+        console.error('Invalid year');
+        return;
+      }
+      
+      const container = document.getElementById('bp-ytd-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        const today = new Date();
+        const currentYear = today.getFullYear();
+        const isCurrentYear = year === currentYear;
+        
+        let startDate = `${year}-01-01`;
+        let endDate;
+        
+        if (isCurrentYear) {
+          // End at last complete month
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? year - 1 : year;
+          const endOfLastMonth = new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0);
+          endDate = endOfLastMonth.toISOString().split('T')[0];
+        } else {
+          endDate = `${year}-12-31`;
+        }
+        
+        // Load brand/product data
+        const brandProductData = await loadBrandProductData(startDate, endDate, brandFilter);
+        
+        // Render the table
+        renderBrandProductTable(brandProductData, 'bp-ytd-content');
+        
+      } catch (error) {
+        console.error('Error generating BP YTD report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // Generate BP Monthly Report
+    async function generateBPMonthlyReport() {
+      const month = parseInt(document.getElementById('bp-monthly-month-select').value);
+      const year = parseInt(document.getElementById('bp-monthly-year-select').value);
+      const brandFilter = document.getElementById('bp-monthly-brand-select').value;
+      
+      if (isNaN(month) || isNaN(year)) {
+        console.error('Invalid month or year');
+        return;
+      }
+      
+      const container = document.getElementById('bp-monthly-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      
+      try {
+        const startDate = new Date(year, month, 1).toISOString().split('T')[0];
+        const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
+        
+        // Load brand/product data
+        const brandProductData = await loadBrandProductData(startDate, endDate, brandFilter);
+        
+        // Render the table
+        renderBrandProductTable(brandProductData, 'bp-monthly-content');
+        
+      } catch (error) {
+        console.error('Error generating BP monthly report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+    
+    // ============================================
+    // PARSE HELPER FUNCTIONS (shared utilities)
+    // ============================================
+    
+    function parseProducts(productsData) {
+      const products = [];
+      const rows = productsData.values || [];
+      
+      if (rows.length < 2) return products;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const skuIdx = headers.indexOf('sku');
+      const nameIdx = headers.indexOf('name');
+      const brandIdx = headers.indexOf('brand');
+      const costIdx = headers.indexOf('cost');
+      const fulfillmentIdx = headers.indexOf('fulfillment');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row[skuIdx]) continue;
+        
+        products.push({
+          sku: row[skuIdx],
+          name: row[nameIdx] || '',
+          brand: row[brandIdx] || '',
+          cost: parseFloat(row[costIdx]) || 0,
+          fulfillmentType: row[fulfillmentIdx] || 'FBM'
+        });
+      }
+      
+      return products;
+    }
+    
+    function parseTransactions(transactionsData) {
+      const transactions = [];
+      const rows = transactionsData.values || [];
+      
+      if (rows.length < 2) return transactions;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date/time');
+      const typeIdx = headers.indexOf('type');
+      const orderIdIdx = headers.indexOf('order id');
+      const skuIdx = headers.indexOf('sku');
+      const descriptionIdx = headers.indexOf('description');
+      const quantityIdx = headers.indexOf('quantity');
+      const fulfillmentIdx = headers.indexOf('fulfillment');
+      const productSalesIdx = headers.indexOf('product sales');
+      const shippingCreditsIdx = headers.indexOf('shipping credits');
+      const giftWrapIdx = headers.indexOf('gift wrap credits');
+      const promoIdx = headers.indexOf('promotional rebates');
+      const sellingFeesIdx = headers.indexOf('selling fees');
+      const fbaFeesIdx = headers.indexOf('fba fees');
+      const otherIdx = headers.indexOf('other');
+      const totalIdx = headers.indexOf('total');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr) continue;
+        
+        // Parse date - handle multiple formats
+        let date = null;
+        
+        // Format 1: YYYY-MM-DD (already ISO format)
+        if (dateStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+          date = dateStr.substring(0, 10); // Take first 10 chars (YYYY-MM-DD)
+        }
+        // Format 2: "Dec 1, 2025 12:07:15 AM PST"
+        else {
+          const textMatch = dateStr.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+          if (textMatch) {
+            const monthStr = textMatch[1];
+            const day = textMatch[2].padStart(2, '0');
+            const year = textMatch[3];
+            
+            const months = {
+              'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+              'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+              'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+            };
+            
+            const month = months[monthStr.toLowerCase().substring(0, 3)];
+            if (month) {
+              date = `${year}-${month}-${day}`;
+            }
+          }
+        }
+        
+        if (!date) continue;
+        
+        transactions.push({
+          date: date,
+          type: row[typeIdx] || '',
+          orderId: row[orderIdIdx] || '',
+          sku: row[skuIdx] || '',
+          description: row[descriptionIdx] || '',
+          quantity: parseFloat(row[quantityIdx]) || 1,
+          fulfillment: row[fulfillmentIdx] || '',
+          'product sales': parseFloat(row[productSalesIdx]) || 0,
+          'shipping credits': parseFloat(row[shippingCreditsIdx]) || 0,
+          'gift wrap credits': parseFloat(row[giftWrapIdx]) || 0,
+          'promotional rebates': parseFloat(row[promoIdx]) || 0,
+          'selling fees': parseFloat(row[sellingFeesIdx]) || 0,
+          'fba fees': parseFloat(row[fbaFeesIdx]) || 0,
+          other: parseFloat(row[otherIdx]) || 0,
+          amount: parseFloat(row[totalIdx]) || 0
+        });
+      }
+      
+      return transactions;
+    }
+    
+    function parseProductAds(productAdsData) {
+      const ads = [];
+      const rows = productAdsData.values || [];
+      
+      if (rows.length < 2) return ads;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date');
+      const campaignIdx = headers.indexOf('campaign name');
+      const spendIdx = headers.indexOf('spend');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr || !row[campaignIdx]) continue; // Need campaign name for mapping
+        
+        // Parse date (handle Excel serial or ISO format)
+        let date = null;
+        if (typeof dateStr === 'number') {
+          // Excel serial date
+          const days = Math.floor(dateStr);
+          const adjustedDays = days > 59 ? days - 1 : days;
+          const epochDate = Date.UTC(1899, 11, 30);
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+          const d = new Date(targetTime);
+          const year = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          date = `${year}-${month}-${day}`;
+        } else {
+          date = dateStr.split('T')[0]; // ISO format
+        }
+        
+        if (!date) continue;
+        
+        ads.push({
+          date: date,
+          campaign: row[campaignIdx] || '',
+          spend: parseFloat(row[spendIdx]) || 0
+        });
+      }
+      
+      return ads;
+    }
+    
+    function parseBrandAds(brandAdsData) {
+      const ads = [];
+      const rows = brandAdsData.values || [];
+      
+      if (rows.length < 2) return ads;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date');
+      const campaignIdx = headers.indexOf('campaign name');
+      const spendIdx = headers.indexOf('spend');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr || !row[campaignIdx]) continue; // Need campaign name for mapping
+        
+        // Parse date (handle Excel serial or ISO format)
+        let date = null;
+        if (typeof dateStr === 'number') {
+          // Excel serial date
+          const days = Math.floor(dateStr);
+          const adjustedDays = days > 59 ? days - 1 : days;
+          const epochDate = Date.UTC(1899, 11, 30);
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+          const d = new Date(targetTime);
+          const year = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          date = `${year}-${month}-${day}`;
+        } else {
+          date = dateStr.split('T')[0]; // ISO format
+        }
+        
+        if (!date) continue;
+        
+        ads.push({
+          date: date,
+          campaign: row[campaignIdx] || '',
+          spend: parseFloat(row[spendIdx]) || 0
+        });
+      }
+      
+      return ads;
+    }
+    
+    function parseShippingCosts(shippingData) {
+      const costs = [];
+      const rows = shippingData.values || [];
+      
+      if (rows.length < 2) return costs;
+      
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dateIdx = headers.indexOf('date');
+      const skuIdx = headers.indexOf('sku');
+      const costIdx = headers.indexOf('cost');
+      
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const dateStr = row[dateIdx];
+        
+        if (!dateStr || !row[skuIdx]) continue;
+        
+        // Parse date (handle Excel serial or ISO format)
+        let date = null;
+        if (typeof dateStr === 'number') {
+          // Excel serial date
+          const days = Math.floor(dateStr);
+          const adjustedDays = days > 59 ? days - 1 : days;
+          const epochDate = Date.UTC(1899, 11, 30);
+          const millisecondsPerDay = 24 * 60 * 60 * 1000;
+          const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
+          const d = new Date(targetTime);
+          const year = d.getUTCFullYear();
+          const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          date = `${year}-${month}-${day}`;
+        } else {
+          date = dateStr.split('T')[0]; // ISO format
+        }
+        
+        if (!date) continue;
+        
+        costs.push({
+          date: date,
+          sku: row[skuIdx],
+          cost: parseFloat(row[costIdx]) || 0
+        });
+      }
+      
+      return costs;
+    }
+    
+    // Load and calculate brand/product data
+    async function loadBrandProductData(startDate, endDate, brandFilter) {
+      if (!accessToken) {
+        throw new Error('Please sign in first');
+      }
+      
+      // Load transaction data from KV, config from Google Sheets
+      const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes, productMappingRes, brandMappingRes] = await Promise.all([
+        fetchFromKV('transactions', startDate, endDate),
+        fetchFromKV('shipping', startDate, endDate),
+        fetchFromKV('productads', startDate, endDate),
+        fetchFromKV('brandads', startDate, endDate),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }),
+        fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        })
+      ]);
+      
+      // Convert KV format to Sheets format
+      const transactionsData = kvToSheetsFormat(transactionsKV);
+      const shippingData = kvToSheetsFormat(shippingKV);
+      const productAdsData = kvToSheetsFormat(productAdsKV);
+      const brandAdsData = kvToSheetsFormat(brandAdsKV);
+      
+      if (!productsRes.ok) throw new Error('Failed to load products');
+      
+      const [productsData, productMappingData, brandMappingData] = await Promise.all([
+        productsRes.json(),
+        productMappingRes.json(),
+        brandMappingRes.json()
+      ]);
+      
+      // Parse product ad mapping (Campaign Name -> SKUs)
+      const productCampaignToSkus = {};
+      if (productMappingData.values && productMappingData.values.length > 1) {
+        const headers = productMappingData.values[0].map(h => h.toLowerCase());
+        const campaignIdx = headers.indexOf('campaign name');
+        const skuIdx = headers.indexOf('sku');
+        
+        for (let i = 1; i < productMappingData.values.length; i++) {
+          const row = productMappingData.values[i];
+          const campaign = row[campaignIdx];
+          const sku = row[skuIdx];
+          
+          if (campaign && sku) {
+            if (!productCampaignToSkus[campaign]) {
+              productCampaignToSkus[campaign] = [];
+            }
+            productCampaignToSkus[campaign].push(sku);
+          }
+        }
+      }
+      
+      // Parse brand ad mapping (Campaign Name -> Brand)
+      const brandCampaignToBrand = {};
+      if (brandMappingData.values && brandMappingData.values.length > 1) {
+        const headers = brandMappingData.values[0].map(h => h.toLowerCase());
+        const campaignIdx = headers.indexOf('campaign name');
+        const brandIdx = headers.indexOf('brand');
+        
+        for (let i = 1; i < brandMappingData.values.length; i++) {
+          const row = brandMappingData.values[i];
+          const campaign = row[campaignIdx];
+          const brand = row[brandIdx];
+          
+          if (campaign && brand) {
+            brandCampaignToBrand[campaign] = brand;
+          }
+        }
+      }
+      
+      console.log('BP: Product campaign mappings:', Object.keys(productCampaignToSkus).length);
+      console.log('BP: Brand campaign mappings:', Object.keys(brandCampaignToBrand).length);
+      
+      // Debug: Show raw transaction data
+      if (transactionsData.values && transactionsData.values.length > 1) {
+        console.log('BP: Raw transaction sample:', transactionsData.values[1]);
+      }
+      
+      // Parse products
+      const products = parseProducts(productsData);
+      console.log('BP: Parsed products:', products.length);
+      if (products.length > 0) console.log('BP: Sample product:', products[0]);
+      
+      // Parse transactions and filter by date
+      const allTransactions = parseTransactions(transactionsData);
+      console.log('BP: Total transactions parsed:', allTransactions.length);
+      if (allTransactions.length > 0) {
+        const dates = allTransactions.map(t => t.date).filter(d => d).sort();
+        console.log('BP: Transaction date range:', dates[0], 'to', dates[dates.length - 1]);
+      }
+      
+      const transactions = allTransactions.filter(t => 
+        t.date >= startDate && t.date <= endDate
+      );
+      console.log('BP: Filtered transactions:', transactions.length, 'between', startDate, 'and', endDate);
+      if (transactions.length > 0) console.log('BP: Sample transaction:', transactions[0]);
+      // Parse ad spend
+      const productAds = parseProductAds(productAdsData).filter(a => 
+        a.date >= startDate && a.date <= endDate
+      );
+      const brandAds = parseBrandAds(brandAdsData).filter(a => 
+        a.date >= startDate && a.date <= endDate
+      );
+      
+      // Parse shipping costs
+      const shippingCosts = parseShippingCosts(shippingData).filter(s => 
+        s.date >= startDate && s.date <= endDate
+      );
+      
+      // Build brand/product structure
+      const brandData = {};
+      
+      // Group products by brand
+      products.forEach(product => {
+        if (brandFilter !== 'all' && product.brand !== brandFilter) return;
+        
+        if (!brandData[product.brand]) {
+          brandData[product.brand] = {
+            brandName: product.brand,
+            products: []
+          };
+        }
+        
+        // Find existing product (by name, since FBA/FBM versions have same name)
+        let existingProduct = brandData[product.brand].products.find(p => p.productName === product.name);
+        
+        if (!existingProduct) {
+          existingProduct = {
+            productName: product.name,
+            skus: [],
+            fbm: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 },
+            fba: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 },
+            total: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 }
+          };
+          brandData[product.brand].products.push(existingProduct);
+        }
+        
+        existingProduct.skus.push({
+          sku: product.sku,
+          fulfillmentType: product.fulfillmentType,
+          cost: product.cost
+        });
+      });
+      
+      // Calculate metrics for each product
+      Object.values(brandData).forEach(brand => {
+        brand.fbm = { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 };
+        brand.fba = { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 };
+        brand.total = { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 };
+        
+        brand.products.forEach(product => {
+          const fbmSkus = product.skus.filter(s => s.fulfillmentType === 'FBM').map(s => s.sku);
+          const fbaSkus = product.skus.filter(s => s.fulfillmentType === 'FBA').map(s => s.sku);
+          
+          console.log(`BP: Product "${product.productName}" - FBM SKUs:`, fbmSkus, 'FBA SKUs:', fbaSkus);
+          
+          // Calculate FBM metrics
+          if (fbmSkus.length > 0) {
+            const fbmTransactions = transactions.filter(t => fbmSkus.includes(t.sku));
+            const fbmShipping = shippingCosts.filter(s => fbmSkus.includes(s.sku));
+            
+            console.log(`BP: Product "${product.productName}" FBM - Found ${fbmTransactions.length} transactions`);
+            if (fbmTransactions.length > 0) console.log('BP: Sample FBM transaction:', fbmTransactions[0]);
+            
+            // Income (using transaction columns like Overview does)
+            product.fbm.income = fbmTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.fulfillment === 'Seller') {
+                sum += t['product sales'] || 0;
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Seller') {
+                sum += t['product sales'] || 0; // Refunds are negative
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
+              return sum;
+            }, 0);
+            
+            // OpEx (fees from transaction columns)
+            product.fbm.opex = fbmTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.fulfillment === 'Seller') {
+                sum += Math.abs(t['selling fees'] || 0);
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Seller') {
+                sum += Math.abs(t['selling fees'] || 0);
+              }
+              return sum;
+            }, 0);
+            
+            // Add shipping costs to opex
+            product.fbm.opex += fbmShipping.reduce((sum, s) => sum + s.cost, 0);
+            
+            // Product costs (COGS)
+            const fbmCostMap = {};
+            product.skus.filter(s => s.fulfillmentType === 'FBM').forEach(s => {
+              fbmCostMap[s.sku] = s.cost;
+            });
+            
+            product.fbm.productCosts = fbmTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.fulfillment === 'Seller' && fbmCostMap[t.sku]) {
+                return sum + (fbmCostMap[t.sku] * Math.abs(t.quantity || 1));
+              }
+              return sum;
+            }, 0);
+            
+            
+            // Profit & margin (will recalculate after ad spend is allocated)
+            product.fbm.profit = product.fbm.income - product.fbm.opex - product.fbm.productCosts - product.fbm.adSpend;
+            product.fbm.margin = product.fbm.income > 0 ? (product.fbm.profit / product.fbm.income) * 100 : 0;
+          }
+          
+          // Calculate FBA metrics
+          if (fbaSkus.length > 0) {
+            const fbaTransactions = transactions.filter(t => fbaSkus.includes(t.sku));
+            
+            // Income (using transaction columns like Overview does)
+            product.fba.income = fbaTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.fulfillment === 'Amazon') {
+                sum += t['product sales'] || 0;
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Amazon') {
+                sum += t['product sales'] || 0; // Refunds are negative
+                sum += t['shipping credits'] || 0;
+                sum += t['gift wrap credits'] || 0;
+                sum += t['promotional rebates'] || 0;
+              }
+              return sum;
+            }, 0);
+            
+            // OpEx (fees from transaction columns, excluding unallocable per requirements)
+            product.fba.opex = fbaTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.fulfillment === 'Amazon') {
+                sum += Math.abs(t['selling fees'] || 0);
+                sum += Math.abs(t['fba fees'] || 0);
+              }
+              if (t.type === 'Refund' && t.fulfillment === 'Amazon') {
+                sum += Math.abs(t['selling fees'] || 0);
+                sum += Math.abs(t['fba fees'] || 0);
+              }
+              return sum;
+            }, 0);
+            
+            // Product costs (COGS)
+            const fbaCostMap = {};
+            product.skus.filter(s => s.fulfillmentType === 'FBA').forEach(s => {
+              fbaCostMap[s.sku] = s.cost;
+            });
+            
+            product.fba.productCosts = fbaTransactions.reduce((sum, t) => {
+              if (t.type === 'Order' && t.fulfillment === 'Amazon' && fbaCostMap[t.sku]) {
+                return sum + (fbaCostMap[t.sku] * Math.abs(t.quantity || 1));
+              }
+              return sum;
+            }, 0);
+            
+            // Profit & margin (will recalculate after ad spend is allocated)
+            product.fba.profit = product.fba.income - product.fba.opex - product.fba.productCosts - product.fba.adSpend;
+            product.fba.margin = product.fba.income > 0 ? (product.fba.profit / product.fba.income) * 100 : 0;
+          }
+          
+          // Calculate product ad spend AFTER both FBM and FBA income are known
+          // This prevents double-counting when campaigns are mapped to both FBM and FBA SKUs
+          const productAdSpendByChannel = { fbm: 0, fba: 0 };
+          
+          productAds.forEach(ad => {
+            const mappedSkus = productCampaignToSkus[ad.campaign] || [];
+            const hasFbm = mappedSkus.some(sku => fbmSkus.includes(sku));
+            const hasFba = mappedSkus.some(sku => fbaSkus.includes(sku));
+            
+            if (hasFbm && hasFba) {
+              // Campaign mapped to both FBM and FBA SKUs - split proportionally by income
+              const fbmIncome = product.fbm.income || 0;
+              const fbaIncome = product.fba.income || 0;
+              const totalIncome = fbmIncome + fbaIncome;
+              
+              if (totalIncome > 0) {
+                productAdSpendByChannel.fbm += ad.spend * (fbmIncome / totalIncome);
+                productAdSpendByChannel.fba += ad.spend * (fbaIncome / totalIncome);
+              } else {
+                // No income - split 50/50
+                productAdSpendByChannel.fbm += ad.spend * 0.5;
+                productAdSpendByChannel.fba += ad.spend * 0.5;
+              }
+            } else if (hasFbm) {
+              // Only FBM
+              productAdSpendByChannel.fbm += ad.spend;
+            } else if (hasFba) {
+              // Only FBA
+              productAdSpendByChannel.fba += ad.spend;
+            }
+          });
+          
+          product.fbm.adSpend = productAdSpendByChannel.fbm;
+          product.fba.adSpend = productAdSpendByChannel.fba;
+          
+          // Recalculate profit and margin with correct ad spend
+          product.fbm.profit = product.fbm.income - product.fbm.opex - product.fbm.productCosts - product.fbm.adSpend;
+          product.fbm.margin = product.fbm.income > 0 ? (product.fbm.profit / product.fbm.income) * 100 : 0;
+          
+          product.fba.profit = product.fba.income - product.fba.opex - product.fba.productCosts - product.fba.adSpend;
+          product.fba.margin = product.fba.income > 0 ? (product.fba.profit / product.fba.income) * 100 : 0;
+          
+          // Calculate total metrics
+          product.total.income = product.fbm.income + product.fba.income;
+          product.total.opex = product.fbm.opex + product.fba.opex;
+          product.total.productCosts = product.fbm.productCosts + product.fba.productCosts;
+          product.total.adSpend = product.fbm.adSpend + product.fba.adSpend;
+          product.total.profit = product.total.income - product.total.opex - product.total.productCosts - product.total.adSpend;
+          product.total.margin = product.total.income > 0 ? (product.total.profit / product.total.income) * 100 : 0;
+          
+          // Aggregate to brand
+          brand.fbm.income += product.fbm.income;
+          brand.fbm.opex += product.fbm.opex;
+          brand.fbm.productCosts += product.fbm.productCosts;
+          brand.fbm.adSpend += product.fbm.adSpend;
+          
+          brand.fba.income += product.fba.income;
+          brand.fba.opex += product.fba.opex;
+          brand.fba.productCosts += product.fba.productCosts;
+          brand.fba.adSpend += product.fba.adSpend;
+          
+          brand.total.income += product.total.income;
+          brand.total.opex += product.total.opex;
+          brand.total.productCosts += product.total.productCosts;
+          brand.total.adSpend += product.total.adSpend;
+        });
+        
+        // Calculate brand profit and margins
+        brand.fbm.profit = brand.fbm.income - brand.fbm.opex - brand.fbm.productCosts - brand.fbm.adSpend;
+        brand.fbm.margin = brand.fbm.income > 0 ? (brand.fbm.profit / brand.fbm.income) * 100 : 0;
+        
+        brand.fba.profit = brand.fba.income - brand.fba.opex - brand.fba.productCosts - brand.fba.adSpend;
+        brand.fba.margin = brand.fba.income > 0 ? (brand.fba.profit / brand.fba.income) * 100 : 0;
+        
+        brand.total.profit = brand.total.income - brand.total.opex - brand.total.productCosts - brand.total.adSpend;
+        brand.total.margin = brand.total.income > 0 ? (brand.total.profit / brand.total.income) * 100 : 0;
+        
+        // Add brand ad spend (using brand campaign mapping)
+        const brandAdSpend = brandAds.reduce((sum, ad) => {
+          const mappedBrand = brandCampaignToBrand[ad.campaign];
+          if (mappedBrand === brand.brandName) {
+            return sum + ad.spend;
+          }
+          return sum;
+        }, 0);
+        
+        if (brandAdSpend > 0) {
+          // Allocate brand ad spend proportionally across FBM/FBA based on income
+          const totalIncome = brand.total.income;
+          if (totalIncome > 0) {
+            const fbmRatio = brand.fbm.income / totalIncome;
+            const fbaRatio = brand.fba.income / totalIncome;
+            
+            brand.fbm.adSpend += brandAdSpend * fbmRatio;
+            brand.fba.adSpend += brandAdSpend * fbaRatio;
+            brand.total.adSpend += brandAdSpend;
+            
+            // Recalculate profit and margin with brand ad spend
+            brand.fbm.profit = brand.fbm.income - brand.fbm.opex - brand.fbm.productCosts - brand.fbm.adSpend;
+            brand.fbm.margin = brand.fbm.income > 0 ? (brand.fbm.profit / brand.fbm.income) * 100 : 0;
+            
+            brand.fba.profit = brand.fba.income - brand.fba.opex - brand.fba.productCosts - brand.fba.adSpend;
+            brand.fba.margin = brand.fba.income > 0 ? (brand.fba.profit / brand.fba.income) * 100 : 0;
+            
+            brand.total.profit = brand.total.income - brand.total.opex - brand.total.productCosts - brand.total.adSpend;
+            brand.total.margin = brand.total.income > 0 ? (brand.total.profit / brand.total.income) * 100 : 0;
+          }
+        }
+      });
+      
+      return Object.values(brandData).sort((a, b) => a.brandName.localeCompare(b.brandName));
+    }
+    
+    // Render the brand/product table
+    function renderBrandProductTable(brandData, containerId) {
+      const container = document.getElementById(containerId);
+      
+      if (!brandData || brandData.length === 0) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">No data available for this period</div>';
+        return;
+      }
+      
+      let html = `
+        <div class="bp-table-wrapper">
+          <table class="bp-table">
+            <thead>
+              <tr>
+                <th rowspan="2">Brand / Product</th>
+                <th colspan="6" class="header-group fbm">FBM</th>
+                <th colspan="6" class="header-group fba">FBA</th>
+                <th colspan="6" class="header-group total">Total</th>
+              </tr>
+              <tr>
+                <th>Income</th>
+                <th>OpEx</th>
+                <th>Costs</th>
+                <th>Ads</th>
+                <th>Profit</th>
+                <th>Margin</th>
+                <th>Income</th>
+                <th>OpEx</th>
+                <th>Costs</th>
+                <th>Ads</th>
+                <th>Profit</th>
+                <th>Margin</th>
+                <th>Income</th>
+                <th>OpEx</th>
+                <th>Costs</th>
+                <th>Ads</th>
+                <th>Profit</th>
+                <th>Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      
+      brandData.forEach(brand => {
+        const brandId = brand.brandName.replace(/\s+/g, '-');
+        
+        // Brand row
+        html += `
+          <tr class="brand-row" onclick="toggleBrand('${brandId}')">
+            <td>
+              <div class="brand-name">
+                <span class="expand-icon">▶</span>
+                <strong>${brand.brandName}</strong>
+              </div>
+            </td>
+            ${renderMetricsCells(brand.fbm)}
+            ${renderMetricsCells(brand.fba)}
+            ${renderMetricsCells(brand.total)}
+          </tr>
+        `;
+        
+        // Product rows (initially hidden)
+        brand.products.forEach(product => {
+          html += `
+            <tr class="product-row" data-brand="${brandId}" style="display: none;">
+              <td>${product.productName}</td>
+              ${renderMetricsCells(product.fbm, product.skus.some(s => s.fulfillmentType === 'FBM'))}
+              ${renderMetricsCells(product.fba, product.skus.some(s => s.fulfillmentType === 'FBA'))}
+              ${renderMetricsCells(product.total)}
+            </tr>
+          `;
+        });
+      });
+      
+      html += `
+            </tbody>
+          </table>
+        </div>
+      `;
+      
+      container.innerHTML = html;
+    }
+    
+    // Helper to render metrics cells
+    function renderMetricsCells(metrics, hasData = true) {
+      if (!hasData) {
+        return '<td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td>';
+      }
+      
+      const formatMoney = (val) => {
+        if (val === 0) return '$0.00';
+        return val >= 0 ? `$${val.toFixed(2)}` : `-$${Math.abs(val).toFixed(2)}`;
+      };
+      
+      const profitClass = metrics.profit >= 0 ? 'positive' : 'negative';
+      const marginClass = metrics.margin >= 0 ? 'positive' : 'negative';
+      
+      return `
+        <td>${formatMoney(metrics.income)}</td>
+        <td>${formatMoney(metrics.opex)}</td>
+        <td>${formatMoney(metrics.productCosts)}</td>
+        <td>${formatMoney(metrics.adSpend)}</td>
+        <td class="${profitClass}">${formatMoney(metrics.profit)}</td>
+        <td class="${marginClass}">${metrics.margin.toFixed(1)}%</td>
+      `;
+    }
+    
+    // Toggle brand expansion
+    function toggleBrand(brandId) {
+      const brandRow = event.currentTarget;
+      const isExpanded = brandRow.classList.contains('expanded');
+      const productRows = document.querySelectorAll(`tr.product-row[data-brand="${brandId}"]`);
+      
+      if (isExpanded) {
+        brandRow.classList.remove('expanded');
+        productRows.forEach(row => row.style.display = 'none');
+      } else {
+        brandRow.classList.add('expanded');
+        productRows.forEach(row => row.style.display = 'table-row');
+      }
+    }
+    
+    
+    // Extract profitability metrics from a financial statement
+    function extractProfitabilityMetrics(statement) {
+      // Calculate FBM totals
+      const fbmIncome = (statement.income['FBM Sales']?.credit || 0) - (statement.income['FBM Sales']?.debit || 0) +
+                        (statement.income['FBM Returns']?.credit || 0) - (statement.income['FBM Returns']?.debit || 0) +
+                        (statement.income['FBM Other']?.credit || 0) - (statement.income['FBM Other']?.debit || 0);
+      
+      const fbmOpEx = (statement.expenses['FBM Shipping Costs']?.debit || 0) - (statement.expenses['FBM Shipping Costs']?.credit || 0) +
+                      (statement.expenses['FBM Transaction Fees']?.debit || 0) - (statement.expenses['FBM Transaction Fees']?.credit || 0);
+      
+      const fbmProductCosts = (statement.expenses['FBM Product Costs']?.debit || 0) - (statement.expenses['FBM Product Costs']?.credit || 0);
+      const fbmAdSpend = (statement.expenses['FBM Ad Spend']?.debit || 0) - (statement.expenses['FBM Ad Spend']?.credit || 0);
+      const fbmProfit = fbmIncome - fbmOpEx - fbmProductCosts - fbmAdSpend;
+      const fbmMargin = fbmIncome > 0 ? (fbmProfit / fbmIncome * 100) : 0;
+      
+      // Calculate FBA totals
+      const fbaIncome = (statement.income['FBA Sales']?.credit || 0) - (statement.income['FBA Sales']?.debit || 0) +
+                        (statement.income['FBA Returns']?.credit || 0) - (statement.income['FBA Returns']?.debit || 0) +
+                        (statement.income['FBA Other']?.credit || 0) - (statement.income['FBA Other']?.debit || 0);
+      
+      const fbaOpEx = (statement.expenses['FBA Fees']?.debit || 0) - (statement.expenses['FBA Fees']?.credit || 0);
+      
+      const fbaProductCosts = (statement.expenses['FBA Product Costs']?.debit || 0) - (statement.expenses['FBA Product Costs']?.credit || 0);
+      const fbaAdSpend = (statement.expenses['FBA Ad Spend']?.debit || 0) - (statement.expenses['FBA Ad Spend']?.credit || 0);
+      const fbaProfit = fbaIncome - fbaOpEx - fbaProductCosts - fbaAdSpend;
+      const fbaMargin = fbaIncome > 0 ? (fbaProfit / fbaIncome * 100) : 0;
+      
+      // Calculate Total
+      const totalIncome = fbmIncome + fbaIncome;
+      const totalOpEx = fbmOpEx + fbaOpEx;
+      const totalProductCosts = fbmProductCosts + fbaProductCosts;
+      const totalAdSpend = fbmAdSpend + fbaAdSpend;
+      const totalProfit = fbmProfit + fbaProfit;
+      const totalMargin = totalIncome > 0 ? (totalProfit / totalIncome * 100) : 0;
+      
+      return {
+        fbm: {
+          income: fbmIncome,
+          opex: fbmOpEx,
+          productCosts: fbmProductCosts,
+          adSpend: fbmAdSpend,
+          profit: fbmProfit,
+          margin: fbmMargin
+        },
+        fba: {
+          income: fbaIncome,
+          opex: fbaOpEx,
+          productCosts: fbaProductCosts,
+          adSpend: fbaAdSpend,
+          profit: fbaProfit,
+          margin: fbaMargin
+        },
+        total: {
+          income: totalIncome,
+          opex: totalOpEx,
+          productCosts: totalProductCosts,
+          adSpend: totalAdSpend,
+          profit: totalProfit,
+          margin: totalMargin
+        }
+      };
+    }
+    
+    function calculateFinancialStatement(transactions, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts) {
+      // Initialize statement structure based on mapping
+      const statement = {
+        income: {
+          'FBM Sales': { debit: 0, credit: 0 },
+          'FBM Returns': { debit: 0, credit: 0 },
+          'FBM Other': { debit: 0, credit: 0 },
+          'FBA Sales': { debit: 0, credit: 0 },
+          'FBA Returns': { debit: 0, credit: 0 },
+          'FBA Other': { debit: 0, credit: 0 }
+        },
+        expenses: {
+          'FBM Product Costs': { debit: 0, credit: 0 },
+          'FBM Transaction Fees': { debit: 0, credit: 0 },
+          'FBM Shipping Costs': { debit: 0, credit: 0 },
+          'FBM Ad Spend': { debit: 0, credit: 0 },
+          'FBA Product Costs': { debit: 0, credit: 0 },
+          'FBA Transaction Fees': { debit: 0, credit: 0 },
+          'FBA Fees': { debit: 0, credit: 0 },
+          'FBA Inbound Placement Fees': { debit: 0, credit: 0 },
+          'FBA Inbound Shipping Costs': { debit: 0, credit: 0 },
+          'FBA Inventory Storage Fees': { debit: 0, credit: 0 },
+          'FBA Inventory Reimbursement': { debit: 0, credit: 0 },
+          'FBA Ad Spend': { debit: 0, credit: 0 },
+          'Other Expenses': { debit: 0, credit: 0 },
+          'Unallocated Ad Spend': { debit: 0, credit: 0 }
+        }
+      };
+      
+      transactions.forEach(t => {
+        const type = (t.type || '').trim();
+        const fulfillment = (t.fulfillment || '').trim();
+        const description = (t.description || '').trim();
+        const sku = t.sku || '';
+        const quantity = parseInt(t.quantity || 0);
+        
+        // Get column values
+        const productSales = parseFloat(t['product sales'] || 0);
+        const shippingCredits = parseFloat(t['shipping credits'] || 0);
+        const giftWrapCredits = parseFloat(t['gift wrap credits'] || 0);
+        const promoRebates = parseFloat(t['promotional rebates'] || 0);
+        const sellingFees = parseFloat(t['selling fees'] || 0);
+        const fbaFees = parseFloat(t['fba fees'] || 0);
+        const other = parseFloat(t['other'] || 0);
+        
+        // Helper function to add to debit/credit
+        const addAmount = (category, section, amount) => {
+          if (amount > 0) {
+            statement[section][category].credit += amount;
+          } else if (amount < 0) {
+            statement[section][category].debit += Math.abs(amount);
+          }
+        };
+        
+        // INCOME CALCULATIONS
+        
+        // FBM Sales: type = Order and fulfillment = Seller, sum of product sales
+        if (type === 'Order' && fulfillment === 'Seller') {
+          addAmount('FBM Sales', 'income', productSales);
+        }
+        
+        // FBM Returns: type = Refund and fulfillment = Seller, sum of product sales
+        if (type === 'Refund' && fulfillment === 'Seller') {
+          addAmount('FBM Returns', 'income', productSales);
+        }
+        
+        // FBM Other: fulfillment = Seller and type = Order or Refund
+        // Sum of shipping credits, gift wrap credits, and promotional rebates
+        if (fulfillment === 'Seller' && (type === 'Order' || type === 'Refund')) {
+          addAmount('FBM Other', 'income', shippingCredits);
+          addAmount('FBM Other', 'income', giftWrapCredits);
+          addAmount('FBM Other', 'income', promoRebates);
+        }
+        
+        // FBA Sales: type = Order and fulfillment = Amazon, sum of product sales
+        if (type === 'Order' && fulfillment === 'Amazon') {
+          addAmount('FBA Sales', 'income', productSales);
+        }
+        
+        // FBA Returns: type = Refund and fulfillment = Amazon, sum of product sales
+        if (type === 'Refund' && fulfillment === 'Amazon') {
+          addAmount('FBA Returns', 'income', productSales);
+        }
+        
+        // FBA Other: fulfillment = Amazon and type = Order or Refund
+        // Sum of shipping credits, gift wrap credits, and promotional rebates
+        if (fulfillment === 'Amazon' && (type === 'Order' || type === 'Refund')) {
+          addAmount('FBA Other', 'income', shippingCredits);
+          addAmount('FBA Other', 'income', giftWrapCredits);
+          addAmount('FBA Other', 'income', promoRebates);
+        }
+        
+        // FBA Inventory Reimbursement: description starts with "FBA Inventory Reimbursement"
+        if (description.startsWith('FBA Inventory Reimbursement')) {
+          addAmount('FBA Inventory Reimbursement', 'expenses', other);
+        }
+        
+        // EXPENSE CALCULATIONS
+        
+        // Product Costs (quantity * cost from Products sheet)
+        if (sku && quantity && productCosts[sku]) {
+          const productCost = quantity * productCosts[sku];
+          
+          if (type === 'Order' && quantity > 0) {
+            if (fulfillment === 'Seller') {
+              statement.expenses['FBM Product Costs'].debit += productCost;
+            } else if (fulfillment === 'Amazon') {
+              statement.expenses['FBA Product Costs'].debit += productCost;
+            }
+          }
+          
+          // Handle refunds (credit back the cost)
+          if (type === 'Refund' && quantity < 0) {
+            if (fulfillment === 'Seller') {
+              statement.expenses['FBM Product Costs'].credit += Math.abs(productCost);
+            } else if (fulfillment === 'Amazon') {
+              statement.expenses['FBA Product Costs'].credit += Math.abs(productCost);
+            }
+          }
+        }
+        
+        // FBM Transaction Fees: type = Order and fulfillment = Seller, sum of selling fees
+        if (type === 'Order' && fulfillment === 'Seller') {
+          addAmount('FBM Transaction Fees', 'expenses', sellingFees);
+        }
+        
+        // FBA Transaction Fees: type = Order and fulfillment = Amazon, sum of selling fees
+        if (type === 'Order' && fulfillment === 'Amazon') {
+          addAmount('FBA Transaction Fees', 'expenses', sellingFees);
+        }
+        
+        // FBA Fees: type = Fee Adjustment and fba fees > 0 OR type = Order and fulfillment = Amazon
+        // Sum of fba fees
+        if ((type === 'Fee Adjustment' && fbaFees > 0) || (type === 'Order' && fulfillment === 'Amazon')) {
+          addAmount('FBA Fees', 'expenses', fbaFees);
+        }
+        
+        // FBA Inbound Placement Fees: description = FBA Inbound Placement Service Fee
+        if (description === 'FBA Inbound Placement Service Fee') {
+          addAmount('FBA Inbound Placement Fees', 'expenses', other);
+        }
+        
+        // FBA Inbound Shipping: type = FBA Inventory Fee and description = FBA Amazon-Partnered Carrier Shipment Fee
+        if (type === 'FBA Inventory Fee' && description === 'FBA Amazon-Partnered Carrier Shipment Fee') {
+          addAmount('FBA Inbound Shipping Costs', 'expenses', other);
+        }
+        
+        // FBA Inventory Storage Fees: type = FBA Inventory Fee and description =/= FBA Amazon-Partnered Carrier Shipment Fee
+        if (type === 'FBA Inventory Fee' && description !== 'FBA Amazon-Partnered Carrier Shipment Fee') {
+          addAmount('FBA Inventory Storage Fees', 'expenses', other);
+        }
+        
+        // Other Expenses: type = Chargeback Refund or Order_Retrocharge or description = Subscription
+        if (type === 'Chargeback Refund' || type === 'Order_Retrocharge' || description === 'Subscription') {
+          addAmount('Other Expenses', 'expenses', other);
+        }
+        
+        // Note: type = Transfer is ignored
+      });
+      
+      // Add shipping costs
+      if (totalShippingCosts > 0) {
+        statement.expenses['FBM Shipping Costs'].debit = totalShippingCosts;
+      }
+      
+      // Add ad spend by channel
+      if (fbmAdSpend > 0) {
+        statement.expenses['FBM Ad Spend'].debit = fbmAdSpend;
+      }
+      
+      if (fbaAdSpend > 0) {
+        statement.expenses['FBA Ad Spend'].debit = fbaAdSpend;
+      }
+      
+      if (unallocatedAdSpend > 0) {
+        statement.expenses['Unallocated Ad Spend'].debit = unallocatedAdSpend;
+      }
+      
+      return statement;
+    }
+    
+    
+    // Format comparison percentage with color indicator
+    function formatComparison(value, inverted = false) {
+      if (value === null || value === undefined) return 'N/A';
+      
+      const isPositive = value >= 0;
+      // For income/profit: green when up, red when down
+      // For expenses: red when up, green when down (inverted)
+      const isGood = inverted ? !isPositive : isPositive;
+      const color = isGood ? 'var(--success)' : 'var(--error)';
+      const arrow = isPositive ? '↑' : '↓';
+      
+      return `<span style="color: ${color};">${arrow} ${Math.abs(value).toFixed(1)}%</span>`;
+    }
+    
+    function renderFinancialStatement(statement, startDate, endDate, container, comparisons = null) {
+      
+      // Calculate FBM totals
+      const fbmIncome = (statement.income['FBM Sales']?.credit || 0) - (statement.income['FBM Sales']?.debit || 0) +
+                        (statement.income['FBM Returns']?.credit || 0) - (statement.income['FBM Returns']?.debit || 0) +
+                        (statement.income['FBM Other']?.credit || 0) - (statement.income['FBM Other']?.debit || 0);
+      
+      const fbmExpensesExcludingCostAndAd = 
+        (statement.expenses['FBM Shipping Costs']?.debit || 0) - (statement.expenses['FBM Shipping Costs']?.credit || 0) +
+        (statement.expenses['FBM Transaction Fees']?.debit || 0) - (statement.expenses['FBM Transaction Fees']?.credit || 0);
+      
+      const fbmProductCosts = (statement.expenses['FBM Product Costs']?.debit || 0) - (statement.expenses['FBM Product Costs']?.credit || 0);
+      const fbmAdSpend = statement.expenses['FBM Ad Spend']?.debit || 0;
+      const fbmProfit = fbmIncome - fbmExpensesExcludingCostAndAd - fbmProductCosts - fbmAdSpend;
+      const fbmMargin = fbmIncome > 0 ? (fbmProfit / fbmIncome * 100) : 0;
+      
+      // Calculate FBA totals
+      const fbaIncome = (statement.income['FBA Sales']?.credit || 0) - (statement.income['FBA Sales']?.debit || 0) +
+                        (statement.income['FBA Returns']?.credit || 0) - (statement.income['FBA Returns']?.debit || 0) +
+                        (statement.income['FBA Other']?.credit || 0) - (statement.income['FBA Other']?.debit || 0);
+      
+      const fbaExpensesExcludingCostAndAd = 
+        (statement.expenses['FBA Transaction Fees']?.debit || 0) - (statement.expenses['FBA Transaction Fees']?.credit || 0) +
+        (statement.expenses['FBA Fees']?.debit || 0) - (statement.expenses['FBA Fees']?.credit || 0) +
+        (statement.expenses['FBA Inbound Placement Fees']?.debit || 0) - (statement.expenses['FBA Inbound Placement Fees']?.credit || 0) +
+        (statement.expenses['FBA Inbound Shipping Costs']?.debit || 0) - (statement.expenses['FBA Inbound Shipping Costs']?.credit || 0) +
+        (statement.expenses['FBA Inventory Storage Fees']?.debit || 0) - (statement.expenses['FBA Inventory Storage Fees']?.credit || 0) +
+        (statement.expenses['FBA Inventory Reimbursement']?.debit || 0) - (statement.expenses['FBA Inventory Reimbursement']?.credit || 0);
+      
+      const fbaProductCosts = (statement.expenses['FBA Product Costs']?.debit || 0) - (statement.expenses['FBA Product Costs']?.credit || 0);
+      const fbaAdSpend = statement.expenses['FBA Ad Spend']?.debit || 0;
+      const fbaProfit = fbaIncome - fbaExpensesExcludingCostAndAd - fbaProductCosts - fbaAdSpend;
+      const fbaMargin = fbaIncome > 0 ? (fbaProfit / fbaIncome * 100) : 0;
+      
+      // Calculate combined totals
+      const otherExpenses = (statement.expenses['Other Expenses']?.debit || 0) - (statement.expenses['Other Expenses']?.credit || 0);
+      const unallocatedAdSpend = statement.expenses['Unallocated Ad Spend']?.debit || 0;
+      
+      const totalIncome = fbmIncome + fbaIncome;
+      const totalExpensesExcludingCostAndAd = fbmExpensesExcludingCostAndAd + fbaExpensesExcludingCostAndAd + otherExpenses;
+      const totalProductCosts = fbmProductCosts + fbaProductCosts;
+      const totalAdSpend = fbmAdSpend + fbaAdSpend + unallocatedAdSpend;
+      const totalProfit = totalIncome - totalExpensesExcludingCostAndAd - totalProductCosts - totalAdSpend;
+      const totalMargin = totalIncome > 0 ? (totalProfit / totalIncome * 100) : 0;
+      
+      // Calculate overall totals for traditional view
+      let incomeTotalDebit = 0, incomeTotalCredit = 0;
+      Object.values(statement.income).forEach(item => {
+        incomeTotalDebit += item.debit;
+        incomeTotalCredit += item.credit;
+      });
+      
+      let expenseTotalDebit = 0, expenseTotalCredit = 0;
+      Object.values(statement.expenses).forEach(item => {
+        expenseTotalDebit += item.debit;
+        expenseTotalCredit += item.credit;
+      });
+      
+      let html = `
+        <div style="margin-bottom: 2rem;">
+          <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+            Report Period: ${startDate} - ${endDate}
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+          <!-- LEFT SIDE: Traditional Statement -->
+          <div>
+            <!-- Income Section -->
+            <div style="margin-bottom: 2rem;">
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--success);">Income</h3>
+              <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Debit</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Credit</th>
+                  </tr>
+                </thead>
+                <tbody>
+      `;
+      
+      Object.entries(statement.income).forEach(([category, amounts]) => {
+        html += `
+          <tr>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
+              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '$0.00'}
+            </td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
+              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '$0.00'}
+            </td>
+          </tr>
+        `;
+      });
+      
+      html += `
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.75rem;">Totals</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(incomeTotalDebit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(incomeTotalCredit)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <!-- Expenses Section -->
+            <div>
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--error);">Expenses</h3>
+              <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Debit</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Credit</th>
+                  </tr>
+                </thead>
+                <tbody>
+      `;
+      
+      Object.entries(statement.expenses).forEach(([category, amounts]) => {
+        html += `
+          <tr>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
+              ${amounts.debit > 0 ? '$' + formatNumber(amounts.debit) : '$0.00'}
+            </td>
+            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">
+              ${amounts.credit > 0 ? '$' + formatNumber(amounts.credit) : '$0.00'}
+            </td>
+          </tr>
+        `;
+      });
+      
+      html += `
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.75rem;">Totals</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(expenseTotalDebit)}</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">$${formatNumber(expenseTotalCredit)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          <!-- RIGHT SIDE: Profitability Analysis -->
+          <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+            <!-- FBM Profitability -->
+            <div style="margin-bottom: 2rem;">
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">FBM Profitability</h3>
+              <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 27%;' : 'width: 35%;') : 'width: 50%;'} min-width: 140px;">Total</th>
+                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ' + (comparisons.fbm.income.mom !== undefined ? 'width: 13.5%;' : 'width: 15%;') + ' min-width: 80px;">YoY</th>' : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${fbmIncome >= 0 ? '$' + formatNumber(fbmIncome) : '-$' + formatNumber(Math.abs(fbmIncome))}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.income.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.income.mom, false)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbmExpensesExcludingCostAndAd)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.opex.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.opex.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbmProductCosts)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.productCosts.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbmAdSpend)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.adSpend.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.75rem;">Profit</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbmProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbmProfit))}</td>
+                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.profit.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.profit.mom, false)}</td>` : ''}
+                  </tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbmMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbmMargin.toFixed(1)}%</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.margin.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fbm.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fbm.margin.mom, false)}</td>` : ''}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <!-- FBA Profitability -->
+            <div style="margin-bottom: 2rem;">
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">FBA Profitability</h3>
+              <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 27%;' : 'width: 35%;') : 'width: 50%;'} min-width: 140px;">Total</th>
+                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ' + (comparisons.fbm.income.mom !== undefined ? 'width: 13.5%;' : 'width: 15%;') + ' min-width: 80px;">YoY</th>' : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${fbaIncome >= 0 ? '$' + formatNumber(fbaIncome) : '-$' + formatNumber(Math.abs(fbaIncome))}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.income.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.income.mom, false)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbaExpensesExcludingCostAndAd)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.opex.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.opex.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbaProductCosts)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.productCosts.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.productCosts.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(fbaAdSpend)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.adSpend.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.fba.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.adSpend.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.75rem;">Profit</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbaProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(fbaProfit))}</td>
+                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.profit.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.profit.mom, false)}</td>` : ''}
+                  </tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: ${fbaMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${fbaMargin.toFixed(1)}%</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.margin.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.fba.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.fba.margin.mom, false)}</td>` : ''}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <!-- Total Profitability -->
+            <div>
+              <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Total Profitability</h3>
+              <table style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
+                    <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 27%;' : 'width: 35%;') : 'width: 50%;'} min-width: 140px;">Total</th>
+                    ${comparisons ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); ' + (comparisons.fbm.income.mom !== undefined ? 'width: 13.5%;' : 'width: 15%;') + ' min-width: 80px;">YoY</th>' : ''}
+                    ${comparisons && comparisons.fbm.income.mom !== undefined ? '<th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 13.5%; min-width: 80px;">MoM</th>' : ''}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Income</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${totalIncome >= 0 ? '$' + formatNumber(totalIncome) : '-$' + formatNumber(Math.abs(totalIncome))}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.income.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.income.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.income.mom, false)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Operating Expenses</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(totalExpensesExcludingCostAndAd)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.opex.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.opex.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.opex.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Product Costs</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(totalProductCosts)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.productCosts.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.productCosts.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.productCosts.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Ad Spend</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">-$${formatNumber(totalAdSpend)}</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.adSpend.yoy, true)}</td>` : ''}
+                    ${comparisons && comparisons.total.adSpend.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.adSpend.mom, true)}</td>` : ''}
+                  </tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.75rem;">Profit</td>
+                    <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${totalProfit >= 0 ? 'var(--success)' : 'var(--error)'};">${totalProfit >= 0 ? '$' : '-$'}${formatNumber(Math.abs(totalProfit))}</td>
+                    ${comparisons ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.profit.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.profit.mom !== undefined ? `<td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.profit.mom, false)}</td>` : ''}
+                  </tr>
+                  <tr style="font-weight: 700; background: var(--bg-secondary);">
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">Margin</td>
+                    <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: ${totalMargin >= 0 ? 'var(--success)' : 'var(--error)'};">${totalMargin.toFixed(1)}%</td>
+                    ${comparisons ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.margin.yoy, false)}</td>` : ''}
+                    ${comparisons && comparisons.total.margin.mom !== undefined ? `<td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${formatComparison(comparisons.total.margin.mom, false)}</td>` : ''}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      container.innerHTML = html;
+    }
+    
+    // CHARTS PAGE
+    let chartsInstances = {}; // Store chart instances for cleanup
+    let cachedMonthlyData = []; // Store monthly data for brand filtering
+    
+    // Process cached data for a specific month (no API calls)
+    function processMonthData(startDate, endDate, transactions, products, productAds, brandAds, shippingCosts, productCampaignToSkus, brandCampaignToBrand) {
+      try {
+        // Filter by date
+        const filteredTransactions = transactions.filter(t => t.date >= startDate && t.date <= endDate);
+        const filteredProductAds = productAds.filter(a => a.date >= startDate && a.date <= endDate);
+        const filteredBrandAds = brandAds.filter(a => a.date >= startDate && a.date <= endDate);
+        const filteredShipping = shippingCosts.filter(s => s.date >= startDate && s.date <= endDate);
+        
+        // Calculate overall FBM/FBA metrics
+        let fbmIncome = 0, fbmOpEx = 0, fbmProductCosts = 0, fbmAdSpend = 0;
+        let fbaIncome = 0, fbaOpEx = 0, fbaProductCosts = 0, fbaAdSpend = 0;
+        
+        // Group by SKU for cost lookup
+        const productCostMap = {};
+        products.forEach(p => {
+          productCostMap[p.sku] = p.cost;
+        });
+        
+        // Process transactions
+        filteredTransactions.forEach(t => {
+          const isFBM = t.fulfillment === 'Seller';
+          const isFBA = t.fulfillment === 'Amazon';
+          
+          if (t.type === 'Order' || t.type === 'Refund') {
+            const income = (t['product sales'] || 0) + (t['shipping credits'] || 0) + (t['gift wrap credits'] || 0) + (t['promotional rebates'] || 0);
+            const fees = Math.abs(t['selling fees'] || 0) + Math.abs(t['fba fees'] || 0);
+            const cost = (productCostMap[t.sku] || 0) * Math.abs(t.quantity || 1);
+            
+            if (isFBM && t.type === 'Order') {
+              fbmIncome += income;
+              fbmOpEx += fees;
+              fbmProductCosts += cost;
+            } else if (isFBA && t.type === 'Order') {
+              fbaIncome += income;
+              fbaOpEx += fees;
+              fbaProductCosts += cost;
+            } else if (isFBM && t.type === 'Refund') {
+              fbmIncome += income; // Refunds are negative
+              fbmOpEx += fees;
+            } else if (isFBA && t.type === 'Refund') {
+              fbaIncome += income; // Refunds are negative
+              fbaOpEx += fees;
+            }
+          }
+        });
+        
+        // Add shipping costs to FBM OpEx
+        fbmOpEx += filteredShipping.reduce((sum, s) => sum + s.cost, 0);
+        
+        // Calculate ad spend (simplified - allocate product ads by SKU sales, brand ads proportionally)
+        const skuSales = {};
+        filteredTransactions.forEach(t => {
+          if (t.type === 'Order' && t.sku) {
+            if (!skuSales[t.sku]) skuSales[t.sku] = { fbm: 0, fba: 0 };
+            const sales = t['product sales'] || 0;
+            if (t.fulfillment === 'Seller') skuSales[t.sku].fbm += sales;
+            if (t.fulfillment === 'Amazon') skuSales[t.sku].fba += sales;
+          }
+        });
+        
+        // Allocate product ad spend
+        filteredProductAds.forEach(ad => {
+          const skus = productCampaignToSkus[ad.campaign] || [];
+          let totalFbm = 0, totalFba = 0;
+          skus.forEach(sku => {
+            if (skuSales[sku]) {
+              totalFbm += skuSales[sku].fbm;
+              totalFba += skuSales[sku].fba;
+            }
+          });
+          const total = totalFbm + totalFba;
+          if (total > 0) {
+            fbmAdSpend += ad.spend * (totalFbm / total);
+            fbaAdSpend += ad.spend * (totalFba / total);
+          }
+        });
+        
+        // Allocate brand ad spend proportionally
+        const totalIncome = fbmIncome + fbaIncome;
+        if (totalIncome > 0) {
+          const brandAdTotal = filteredBrandAds.reduce((sum, ad) => sum + ad.spend, 0);
+          fbmAdSpend += brandAdTotal * (fbmIncome / totalIncome);
+          fbaAdSpend += brandAdTotal * (fbaIncome / totalIncome);
+        }
+        
+        // Calculate profits
+        const fbmProfit = fbmIncome - fbmOpEx - fbmProductCosts - fbmAdSpend;
+        const fbaProfit = fbaIncome - fbaOpEx - fbaProductCosts - fbaAdSpend;
+        
+        console.log(`Chart data for ${startDate} to ${endDate}:`, {
+          fbm: { income: fbmIncome, profit: fbmProfit },
+          fba: { income: fbaIncome, profit: fbaProfit }
+        });
+        
+        console.log(`Chart data for ${startDate} to ${endDate}:`, {
+          fbm: { income: fbmIncome, profit: fbmProfit },
+          fba: { income: fbaIncome, profit: fbaProfit }
+        });
+        
+        // Calculate brand-level data
+        const brandData = {};
+        const targetBrands = ['BrightWay Educational', 'Hubbard Scientific', 'South of Kings', 'MapShop State Maps'];
+        
+        targetBrands.forEach(brandName => {
+          const brandProducts = products.filter(p => p.brand === brandName);
+          const brandSkus = brandProducts.map(p => p.sku);
+          
+          let income = 0, opex = 0, costs = 0, adSpend = 0;
+          
+          filteredTransactions.forEach(t => {
+            if (brandSkus.includes(t.sku) && (t.type === 'Order' || t.type === 'Refund')) {
+              income += (t['product sales'] || 0) + (t['shipping credits'] || 0) + (t['gift wrap credits'] || 0) + (t['promotional rebates'] || 0);
+              opex += Math.abs(t['selling fees'] || 0) + Math.abs(t['fba fees'] || 0);
+              costs += (productCostMap[t.sku] || 0) * Math.abs(t.quantity || 1);
+            }
+          });
+          
+          // Add brand's share of shipping
+          const brandFbmSkus = brandProducts.filter(p => p.fulfillmentType === 'FBM').map(p => p.sku);
+          opex += filteredShipping.filter(s => brandFbmSkus.includes(s.sku)).reduce((sum, s) => sum + s.cost, 0);
+          
+          // Allocate ad spend for this brand
+          filteredProductAds.forEach(ad => {
+            const skus = productCampaignToSkus[ad.campaign] || [];
+            const overlap = skus.filter(s => brandSkus.includes(s));
+            if (overlap.length > 0) {
+              adSpend += ad.spend * (overlap.length / skus.length); // Simple split
+            }
+          });
+          
+          filteredBrandAds.forEach(ad => {
+            if (brandCampaignToBrand[ad.campaign] === brandName) {
+              adSpend += ad.spend;
+            }
+          });
+          
+          brandData[brandName] = {
+            income,
+            profit: income - opex - costs - adSpend
+          };
+        });
+        
+        return {
+          data: {
+            fbm: { income: fbmIncome, profit: fbmProfit },
+            fba: { income: fbaIncome, profit: fbaProfit }
+          },
+          brands: targetBrands.map(name => ({
+            brandName: name,
+            total: brandData[name]
+          }))
+        };
+        
+      } catch (error) {
+        console.error('Error processing month data:', error);
+        return {
+          data: {
+            fbm: { income: 0, profit: 0 },
+            fba: { income: 0, profit: 0 }
+          },
+          brands: []
+        };
+      }
+    }
+    
+    async function loadChartsData() {
+      if (!accessToken) {
+        alert('Please sign in to view charts');
+        return;
+      }
+      
+      try {
+        // Calculate 12-month date range ending at last complete month
+        const today = new Date();
+        const lastCompleteMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1); // First day of last month
+        const startDate = new Date(lastCompleteMonth);
+        startDate.setMonth(startDate.getMonth() - 11); // Go back 11 more months (12 total)
+        
+        // Generate monthly data for the past 12 months
+        const months = [];
+        const currentDate = new Date(startDate);
+        
+        while (currentDate <= lastCompleteMonth) {
+          months.push({
+            label: currentDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+            year: currentDate.getFullYear(),
+            month: currentDate.getMonth()
+          });
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        }
+        
+        console.log('Loading charts for months:', months.map(m => m.label).join(', '));
+        
+        // CACHE: Fetch all sheets ONCE at the beginning
+        console.log('Fetching all sheet data (one-time load)...');
+        const headers = { 'Authorization': `Bearer ${accessToken}` };
+        
+        // Fetch transaction data from KV, config from Google Sheets
+        const [transactionsKV, shippingKV, productAdsKV, brandAdsKV, productsRes, productMappingRes, brandMappingRes] = await Promise.all([
+          fetchFromKV('transactions'),
+          fetchFromKV('shipping'),
+          fetchFromKV('productads'),
+          fetchFromKV('brandads'),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, { headers }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, { headers })
+        ]);
+        
+        // Convert KV format to Sheets format
+        const transactionsData = kvToSheetsFormat(transactionsKV);
+        const shippingData = kvToSheetsFormat(shippingKV);
+        const productAdsData = kvToSheetsFormat(productAdsKV);
+        const brandAdsData = kvToSheetsFormat(brandAdsKV);
+        
+        if (!productsRes.ok) throw new Error('Failed to load products');
+        
+        const [productsData, productMappingData, brandMappingData] = await Promise.all([
+          productsRes.json(),
+          productMappingRes.json(),
+          brandMappingRes.json()
+        ]);
+        
+        console.log('All sheets loaded, processing 12 months...');
+        
+        // Parse once
+        const allTransactions = parseTransactions(transactionsData);
+        const products = parseProducts(productsData);
+        const productAds = parseProductAds(productAdsData);
+        const brandAds = parseBrandAds(brandAdsData);
+        const shippingCosts = parseShippingCosts(shippingData);
+        
+        // Parse mappings once
+        const productCampaignToSkus = {};
+        if (productMappingData.values && productMappingData.values.length > 1) {
+          const headers = productMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const skuIdx = headers.indexOf('sku');
+          
+          for (let i = 1; i < productMappingData.values.length; i++) {
+            const row = productMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const sku = row[skuIdx];
+            if (campaign && sku) {
+              if (!productCampaignToSkus[campaign]) productCampaignToSkus[campaign] = [];
+              productCampaignToSkus[campaign].push(sku);
+            }
+          }
+        }
+        
+        const brandCampaignToBrand = {};
+        if (brandMappingData.values && brandMappingData.values.length > 1) {
+          const headers = brandMappingData.values[0].map(h => h.toLowerCase());
+          const campaignIdx = headers.indexOf('campaign name');
+          const brandIdx = headers.indexOf('brand');
+          
+          for (let i = 1; i < brandMappingData.values.length; i++) {
+            const row = brandMappingData.values[i];
+            const campaign = row[campaignIdx];
+            const brand = row[brandIdx];
+            if (campaign && brand) {
+              brandCampaignToBrand[campaign] = brand;
+            }
+          }
+        }
+        
+        // Process each month using the cached data
+        const monthlyData = [];
+        for (let i = 0; i < months.length; i++) {
+          const m = months[i];
+          const monthStart = `${m.year}-${String(m.month + 1).padStart(2, '0')}-01`;
+          const monthEnd = new Date(m.year, m.month + 1, 0);
+          const monthEndStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
+          
+          console.log(`Processing ${m.label} (${i + 1}/${months.length})...`);
+          
+          const result = processMonthData(
+            monthStart, 
+            monthEndStr, 
+            allTransactions, 
+            products, 
+            productAds, 
+            brandAds, 
+            shippingCosts,
+            productCampaignToSkus,
+            brandCampaignToBrand
+          );
+          
+          monthlyData.push({ ...m, ...result });
+        }
+        
+        // Cache monthly data for brand filtering
+        cachedMonthlyData = monthlyData;
+        
+        // Render all charts
+        renderCharts(monthlyData);
+        
+      } catch (error) {
+        console.error('Error loading charts data:', error);
+        alert('Error loading chart data. Please try again.');
+      }
+    }
+    
+    function renderCharts(monthlyData) {
+      const labels = monthlyData.map(m => m.label);
+      
+      // Destroy existing charts
+      Object.values(chartsInstances).forEach(chart => chart.destroy());
+      chartsInstances = {};
+      
+      // Overall Revenue Trend
+      const revenueData = monthlyData.map(m => m.data ? (m.data.fbm.income + m.data.fba.income) : 0);
+      chartsInstances.revenue = new Chart(document.getElementById('revenueChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Revenue',
+            data: revenueData,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Overall Profitability Trend
+      const profitData = monthlyData.map(m => m.data ? (m.data.fbm.profit + m.data.fba.profit) : 0);
+      chartsInstances.profit = new Chart(document.getElementById('profitChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Profit',
+            data: profitData,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Revenue by Channel
+      const fbmRevenueData = monthlyData.map(m => m.data ? m.data.fbm.income : 0);
+      const fbaRevenueData = monthlyData.map(m => m.data ? m.data.fba.income : 0);
+      chartsInstances.revenueChannel = new Chart(document.getElementById('revenueChannelChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'FBM',
+              data: fbmRevenueData,
+              borderColor: '#60a5fa',
+              backgroundColor: 'rgba(96, 165, 250, 0.1)',
+              tension: 0.4
+            },
+            {
+              label: 'FBA',
+              data: fbaRevenueData,
+              borderColor: '#f97316',
+              backgroundColor: 'rgba(249, 115, 22, 0.1)',
+              tension: 0.4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Profit by Channel
+      const fbmProfitData = monthlyData.map(m => m.data ? m.data.fbm.profit : 0);
+      const fbaProfitData = monthlyData.map(m => m.data ? m.data.fba.profit : 0);
+      chartsInstances.profitChannel = new Chart(document.getElementById('profitChannelChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'FBM',
+              data: fbmProfitData,
+              borderColor: '#60a5fa',
+              backgroundColor: 'rgba(96, 165, 250, 0.1)',
+              tension: 0.4
+            },
+            {
+              label: 'FBA',
+              data: fbaProfitData,
+              borderColor: '#f97316',
+              backgroundColor: 'rgba(249, 115, 22, 0.1)',
+              tension: 0.4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Revenue by Brand
+      const targetBrands = ['BrightWay Educational', 'Hubbard Scientific', 'South of Kings', 'MapShop State Maps'];
+      const brandColors = ['#10b981', '#3b82f6', '#f59e0b', '#ec4899'];
+      
+      const brandRevenueDatasets = targetBrands.map((brandName, idx) => ({
+        label: brandName,
+        data: monthlyData.map(m => {
+          const brand = m.brands?.find(b => b.brandName === brandName);
+          return brand ? brand.total.income : 0;
+        }),
+        borderColor: brandColors[idx],
+        tension: 0.4
+      }));
+      
+      chartsInstances.revenueBrand = new Chart(document.getElementById('revenueBrandChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: brandRevenueDatasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top',
+              labels: {
+                boxWidth: 12,
+                padding: 15,
+                font: {
+                  size: 11
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Profit by Brand
+      const brandProfitDatasets = targetBrands.map((brandName, idx) => ({
+        label: brandName,
+        data: monthlyData.map(m => {
+          const brand = m.brands?.find(b => b.brandName === brandName);
+          return brand ? brand.total.profit : 0;
+        }),
+        borderColor: brandColors[idx],
+        tension: 0.4
+      }));
+      
+      chartsInstances.profitBrand = new Chart(document.getElementById('profitBrandChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: brandProfitDatasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top',
+              labels: {
+                boxWidth: 12,
+                padding: 15,
+                font: {
+                  size: 11
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      console.log('Charts rendered successfully');
+    }
+    
+    // Update brand charts based on filter selection
+    function updateBrandCharts() {
+      const filter = document.getElementById('brand-chart-filter').value;
+      
+      if (!cachedMonthlyData || cachedMonthlyData.length === 0) {
+        console.warn('No cached data available');
+        return;
+      }
+      
+      const labels = cachedMonthlyData.map(m => m.label);
+      const targetBrands = filter === 'all' 
+        ? ['BrightWay Educational', 'Hubbard Scientific', 'South of Kings', 'MapShop State Maps']
+        : [filter];
+      const brandColors = ['#10b981', '#3b82f6', '#f59e0b', '#ec4899'];
+      
+      // Destroy existing brand charts
+      if (chartsInstances.revenueBrand) chartsInstances.revenueBrand.destroy();
+      if (chartsInstances.profitBrand) chartsInstances.profitBrand.destroy();
+      
+      // Revenue by Brand
+      const brandRevenueDatasets = targetBrands.map((brandName, idx) => ({
+        label: brandName,
+        data: cachedMonthlyData.map(m => {
+          const brand = m.brands?.find(b => b.brandName === brandName);
+          return brand ? brand.total.income : 0;
+        }),
+        borderColor: brandColors[idx],
+        tension: 0.4
+      }));
+      
+      chartsInstances.revenueBrand = new Chart(document.getElementById('revenueBrandChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: brandRevenueDatasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: targetBrands.length > 1, // Only show legend if multiple brands
+              position: 'top',
+              labels: {
+                boxWidth: 12,
+                padding: 15,
+                font: {
+                  size: 11
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Profit by Brand
+      const brandProfitDatasets = targetBrands.map((brandName, idx) => ({
+        label: brandName,
+        data: cachedMonthlyData.map(m => {
+          const brand = m.brands?.find(b => b.brandName === brandName);
+          return brand ? brand.total.profit : 0;
+        }),
+        borderColor: brandColors[idx],
+        tension: 0.4
+      }));
+      
+      chartsInstances.profitBrand = new Chart(document.getElementById('profitBrandChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: brandProfitDatasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: targetBrands.length > 1, // Only show legend if multiple brands
+              position: 'top',
+              labels: {
+                boxWidth: 12,
+                padding: 15,
+                font: {
+                  size: 11
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      console.log('Brand charts updated for filter:', filter);
+    }
+    
+    
+    // ==================== INTEGRATIONS PAGE ====================
+    
+    // Store original values for cancel functionality
+    const originalValues = {};
+    
+    // Encryption utilities using Web Crypto API
+    async function deriveKey(token) {
+      // Derive encryption key from Google access token
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(token),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
+      );
+      
+      return crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt: encoder.encode('credential-encryption-salt'), // Static salt - okay since token is secret
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    }
+    
+    async function encryptValue(value, token) {
+      const encoder = new TextEncoder();
+      const key = await deriveKey(token);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      
+      const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        encoder.encode(value)
+      );
+      
+      // Combine IV and encrypted data
+      const combined = new Uint8Array(iv.length + encrypted.byteLength);
+      combined.set(iv, 0);
+      combined.set(new Uint8Array(encrypted), iv.length);
+      
+      // Return as base64
+      return btoa(String.fromCharCode(...combined));
+    }
+    
+    async function decryptValue(encryptedBase64, token) {
+      const decoder = new TextDecoder();
+      const key = await deriveKey(token);
+      
+      // Decode from base64
+      const combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+      
+      // Extract IV and encrypted data
+      const iv = combined.slice(0, 12);
+      const encrypted = combined.slice(12);
+      
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        encrypted
+      );
+      
+      return decoder.decode(decrypted);
+    }
+    
+    // Load credential values from Upstash (encrypted)
+    async function loadCredentialStatus() {
+      if (!accessToken) return;
+      
+      try {
+        // Fetch encrypted credentials from Upstash (database)
+        const dbResponse = await fetch('/api/credentials?action=get', {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        
+        // Fetch Vercel env var status (read-only check)
+        const vercelResponse = await fetch('/api/credentials?action=vercel-status', {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        
+        let dbCredentials = {};
+        let vercelCredentials = {};
+        
+        if (dbResponse.ok) {
+          const data = await dbResponse.json();
+          dbCredentials = data.credentials || {};
+        }
+        
+        if (vercelResponse.ok) {
+          const data = await vercelResponse.json();
+          vercelCredentials = data.status || {};
+        }
+        
+        // Decrypt and populate each credential from database
+        const allKeys = [
+          'AMAZON_LWA_CLIENT_ID', 'AMAZON_LWA_CLIENT_SECRET', 'AMAZON_REFRESH_TOKEN',
+          'AMAZON_SELLER_ID', 'AMAZON_MARKETPLACE_ID',
+          'ADV_CLIENT_ID', 'ADV_CLIENT_SECRET', 'ADV_REFRESH_TOKEN', 'ADV_PROFILE_ID',
+          'SHIPSTATION_API_KEY', 'SHIPSTATION_API_SECRET',
+          'ANTHROPIC_API_KEY', 'GOOGLE_CLIENT_ID'
+        ];
+        
+        for (const key of allKeys) {
+          const input = document.getElementById(key);
+          const vercelIndicator = document.getElementById(`${key}-vercel`);
+          
+          // Load plaintext value from database (server decrypts)
+          if (dbCredentials[key]) {
+            if (input) {
+              input.value = dbCredentials[key];
+            }
+          }
+          
+          // Update Vercel indicator
+          if (vercelIndicator) {
+            if (vercelCredentials[key]) {
+              vercelIndicator.textContent = '●';
+              vercelIndicator.style.color = 'var(--success)';
+              vercelIndicator.title = 'Configured in Vercel';
+            } else {
+              vercelIndicator.textContent = '○';
+              vercelIndicator.style.color = 'var(--text-secondary)';
+              vercelIndicator.title = 'Not in Vercel';
+            }
+          }
+        }
+        
+        // Update card-level status indicators
+        updateIntegrationStatus('amazon', [
+          dbCredentials.AMAZON_LWA_CLIENT_ID,
+          dbCredentials.AMAZON_LWA_CLIENT_SECRET,
+          dbCredentials.AMAZON_REFRESH_TOKEN,
+          dbCredentials.AMAZON_SELLER_ID,
+          dbCredentials.AMAZON_MARKETPLACE_ID
+        ]);
+        
+        updateIntegrationStatus('adv', [
+          dbCredentials.ADV_CLIENT_ID,
+          dbCredentials.ADV_CLIENT_SECRET,
+          dbCredentials.ADV_REFRESH_TOKEN,
+          dbCredentials.ADV_PROFILE_ID
+        ]);
+        
+        updateIntegrationStatus('shipstation', [
+          dbCredentials.SHIPSTATION_API_KEY,
+          dbCredentials.SHIPSTATION_API_SECRET
+        ]);
+        
+        updateIntegrationStatus('anthropic', [
+          dbCredentials.ANTHROPIC_API_KEY
+        ]);
+        
+        updateIntegrationStatus('google', [
+          dbCredentials.GOOGLE_CLIENT_ID
+        ]);
+      } catch (error) {
+        console.error('Error loading credentials:', error);
+      }
+    }
+    
+    function updateIntegrationStatus(prefix, statuses) {
+      const allConfigured = statuses.every(s => s);
+      const someConfigured = statuses.some(s => s);
+      
+      const dot = document.getElementById(`${prefix}-status-dot`);
+      const text = document.getElementById(`${prefix}-status-text`);
+      
+      if (dot && text) {
+        if (allConfigured) {
+          dot.style.background = 'var(--success)';
+          text.style.color = 'var(--success)';
+          text.textContent = 'Connected';
+        } else if (someConfigured) {
+          dot.style.background = 'var(--warning)';
+          text.style.color = 'var(--warning)';
+          text.textContent = 'Partially configured';
+        } else {
+          dot.style.background = 'var(--text-secondary)';
+          text.style.color = 'var(--text-secondary)';
+          text.textContent = 'Not configured';
+        }
+      }
+    }
+    
+    function toggleReveal(key) {
+      const input = document.getElementById(key);
+      if (input.type === 'password') {
+        input.type = 'text';
+      } else {
+        input.type = 'password';
+      }
+    }
+    
+    function copyToClipboard(key) {
+      const input = document.getElementById(key);
+      const value = input.value;
+      
+      if (!value || value.trim() === '') {
+        alert('Nothing to copy');
+        return;
+      }
+      
+      navigator.clipboard.writeText(value).then(() => {
+        // Visual feedback
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = '✓';
+        btn.style.background = 'var(--success)';
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.style.background = '';
+        }, 1500);
+      }).catch(err => {
+        alert('Failed to copy to clipboard');
+      });
+    }
+    
+    function enableEdit(key) {
+      const input = document.getElementById(key);
+      
+      // Store original value if not already stored
+      if (!originalValues[key]) {
+        originalValues[key] = input.value;
+      }
+      
+      input.readOnly = false;
+      input.focus();
+      input.select();
+      
+      // Replace edit button with save/cancel buttons
+      const group = input.parentElement;
+      const editBtn = group.querySelector('button[onclick*="enableEdit"]');
+      
+      if (editBtn) {
+        // Determine if this field has a reveal button (password fields)
+        const hasReveal = input.type === 'password' || input.type === 'text';
+        const revealBtn = hasReveal ? `<button class="btn-icon" onclick="toggleReveal('${key}')" title="Reveal">🔍</button>` : '';
+        
+        editBtn.outerHTML = `
+          <button class="btn-icon" onclick="saveCredential('${key}')" title="Save" style="background: var(--success);">💾</button>
+          <button class="btn-icon" onclick="cancelEdit('${key}')" title="Cancel">❌</button>
+        `;
+      }
+    }
+    
+    function cancelEdit(key) {
+      const input = document.getElementById(key);
+      
+      // Restore original value
+      if (originalValues[key]) {
+        input.value = originalValues[key];
+        delete originalValues[key];
+      }
+      
+      input.readOnly = true;
+      if (input.type === 'text' && key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID') {
+        input.type = 'password';
+      }
+      
+      // Restore buttons - find the input group and remove ALL buttons
+      const group = input.parentElement;
+      const allButtons = group.querySelectorAll('button');
+      allButtons.forEach(btn => btn.remove());
+      
+      // Re-add vercel indicator if missing
+      const vercelIndicator = document.getElementById(`${key}-vercel`);
+      if (!vercelIndicator) {
+        const newIndicator = document.createElement('span');
+        newIndicator.id = `${key}-vercel`;
+        newIndicator.className = 'vercel-indicator';
+        newIndicator.title = 'Vercel';
+        newIndicator.textContent = '○';
+        group.appendChild(newIndicator);
+      }
+      
+      // Add back the original buttons
+      const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
+      
+      if (hasReveal) {
+        const revealBtn = document.createElement('button');
+        revealBtn.className = 'btn-icon';
+        revealBtn.title = 'Reveal';
+        revealBtn.textContent = "🔍";
+        revealBtn.onclick = () => toggleReveal(key);
+        group.appendChild(revealBtn);
+      }
+      
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn-icon';
+      copyBtn.title = 'Copy';
+      copyBtn.textContent = '📋';
+      copyBtn.onclick = () => copyToClipboard(key);
+      group.appendChild(copyBtn);
+      
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn-icon';
+      editBtn.title = 'Edit';
+      editBtn.textContent = '✏️';
+      editBtn.onclick = () => enableEdit(key);
+      group.appendChild(editBtn);
+    }
+    
+    async function saveCredential(key) {
+      const input = document.getElementById(key);
+      const value = input.value.trim();
+      
+      if (!value) {
+        showCredentialFeedback(key, 'Value cannot be empty', 'error');
+        return;
+      }
+      
+      if (!accessToken) {
+        showCredentialFeedback(key, 'Please sign in to save credentials', 'error');
+        return;
+      }
+      
+      try {
+        // Save plaintext value to server (server handles encryption)
+        const response = await fetch('/api/credentials?action=save', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ key, value })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+          // Keep the value in the input but make it readonly
+          input.readOnly = true;
+          if (key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID') {
+            input.type = 'password';
+          }
+          
+          // Restore buttons - remove ALL buttons and vercel indicator first
+          const group = input.parentElement;
+          const allButtons = group.querySelectorAll('button');
+          allButtons.forEach(btn => btn.remove());
+          
+          // Re-add vercel indicator
+          const vercelIndicator = document.getElementById(`${key}-vercel`);
+          if (!vercelIndicator) {
+            const newIndicator = document.createElement('span');
+            newIndicator.id = `${key}-vercel`;
+            newIndicator.className = 'vercel-indicator';
+            newIndicator.title = 'Vercel';
+            newIndicator.textContent = '○';
+            group.appendChild(newIndicator);
+          }
+          
+          // Add back the original buttons
+          const hasReveal = key !== 'GOOGLE_CLIENT_ID' && key !== 'AMAZON_MARKETPLACE_ID';
+          
+          if (hasReveal) {
+            const revealBtn = document.createElement('button');
+            revealBtn.className = 'btn-icon';
+            revealBtn.title = 'Reveal';
+            revealBtn.textContent = "🔍";
+            revealBtn.onclick = () => toggleReveal(key);
+            group.appendChild(revealBtn);
+          }
+          
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'btn-icon';
+          copyBtn.title = 'Copy';
+          copyBtn.textContent = '📋';
+          copyBtn.onclick = () => copyToClipboard(key);
+          group.appendChild(copyBtn);
+          
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn-icon';
+          editBtn.title = 'Edit';
+          editBtn.textContent = '✏️';
+          editBtn.onclick = () => enableEdit(key);
+          group.appendChild(editBtn);
+          
+          delete originalValues[key];
+          
+          // Show success feedback
+          showCredentialFeedback(key, 'Saved to database!', 'success');
+          
+          // Refresh overall integration status
+          setTimeout(() => loadCredentialStatus(), 500);
+        } else {
+          showCredentialFeedback(key, data.error || 'Failed to save', 'error');
+        }
+      } catch (error) {
+        console.error('Error saving credential:', error);
+        showCredentialFeedback(key, 'Error: ' + error.message, 'error');
+      }
+    }
+    
+    function showCredentialFeedback(key, message, type) {
+      const row = document.getElementById(key).closest('.credential-row');
+      
+      // Remove any existing feedback
+      const existingFeedback = row.querySelector('.credential-feedback');
+      if (existingFeedback) existingFeedback.remove();
+      
+      // Create feedback element
+      const feedback = document.createElement('div');
+      feedback.className = 'credential-feedback';
+      feedback.textContent = message;
+      feedback.style.cssText = `
+        margin-top: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        ${type === 'success' 
+          ? 'background: rgba(6, 214, 160, 0.1); color: var(--success); border: 1px solid var(--success);' 
+          : 'background: rgba(239, 71, 111, 0.1); color: var(--error); border: 1px solid var(--error);'}
+      `;
+      
+      row.appendChild(feedback);
+      
+      // Auto-remove after 5 seconds
+      setTimeout(() => {
+        if (feedback.parentElement) {
+          feedback.remove();
+        }
+      }, 5000);
+    }
+    
+    
+    // ==================== LISTING OPTIMIZATION PAGE ====================
+    
+    let allProducts = []; // Store all products for filtering
+    
+    function showListingTab(tabName) {
+      // Hide all tabs
+      document.querySelectorAll('.listing-tab').forEach(tab => {
+        tab.classList.remove('active');
+        tab.style.display = 'none';
+      });
+      
+      // Remove active from all tab buttons
+      document.querySelectorAll('#listing-page .tab').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      
+      // Show selected tab
+      document.getElementById(`${tabName}-tab`).classList.add('active');
+      document.getElementById(`${tabName}-tab`).style.display = 'block';
+      
+      // Set active tab button
+      event.target.classList.add('active');
+      
+      // Save current listing sub-tab to localStorage
+      localStorage.setItem('currentListingTab', tabName);
+      
+      // Load data for specific tabs
+      if (tabName === 'changelog' && accessToken) {
+        loadChangeLog();
+      } else if (tabName === 'sessions' && accessToken) {
+        // Set default date to 2 days ago (48-hour delay)
+        const twoDaysAgo = new Date();
+        twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+        document.getElementById('session-fetch-date').valueAsDate = twoDaysAgo;
+        
+        // Load existing data if available
+        loadSessionData();
+      }
+    }
+    
+    // Load brands and products from Products sheet
+    async function loadChangeLogASINs() {
+      if (!accessToken) return;
+      
+      try {
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const data = await response.json();
+        
+        if (data.values && data.values.length > 0) {
+          // Store products - A=sku, B=name, C=brand, F=asin, G=productType
+          // For Listing Optimization: only show Parent and Non-Variable products
+          allProducts = data.values
+            .filter(row => {
+              const asin = row[5];
+              const productType = row[6] || '';
+              return asin && 
+                     asin.toUpperCase() !== 'N/A' && 
+                     (productType === 'Parent' || productType === 'Non-Variable');
+            })
+            .map(row => ({
+              sku: row[0],
+              name: row[1] || row[0],
+              brand: row[2] || 'Unknown',
+              asin: row[5],
+              productType: row[6] || ''
+            }));
+          
+          // Get unique brands
+          const brands = [...new Set(allProducts.map(p => p.brand))].sort();
+          
+          // Populate brand dropdown
+          const brandSelect = document.getElementById('changelog-brand');
+          brandSelect.innerHTML = '<option value="">All Brands</option>';
+          brands.forEach(brand => {
+            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
+          });
+          
+          // Populate products (all initially)
+          filterChangeLogProducts();
+        }
+      } catch (error) {
+        console.error('Error loading products:', error);
+      }
+    }
+    
+    // Filter products based on selected brand
+    function filterChangeLogProducts() {
+      const selectedBrand = document.getElementById('changelog-brand').value;
+      const productSelect = document.getElementById('changelog-product');
+      
+      // Filter products by brand
+      let filteredProducts = selectedBrand 
+        ? allProducts.filter(p => p.brand === selectedBrand)
+        : allProducts;
+      
+      // Deduplicate by ASIN (keep first occurrence)
+      const seenAsins = new Set();
+      filteredProducts = filteredProducts.filter(product => {
+        if (seenAsins.has(product.asin)) {
+          return false;
+        }
+        seenAsins.add(product.asin);
+        return true;
+      });
+      
+      // Sort alphabetically by name
+      filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
+      
+      // Populate product dropdown
+      productSelect.innerHTML = '<option value="">Select Product...</option>';
+      filteredProducts.forEach(product => {
+        productSelect.innerHTML += `<option value="${product.asin}" data-name="${product.name}">${product.name} (${product.asin})</option>`;
+      });
+    }
+    
+    // Character counter for notes
+    document.addEventListener('DOMContentLoaded', () => {
+      const notesField = document.getElementById('changelog-notes');
+      const counter = document.getElementById('changelog-notes-count');
+      
+      if (notesField && counter) {
+        notesField.addEventListener('input', () => {
+          counter.textContent = notesField.value.length;
+        });
+      }
+      
+      // Set default date to today
+      const dateField = document.getElementById('changelog-date');
+      if (dateField) {
+        dateField.valueAsDate = new Date();
+      }
+    });
+    
+    async function saveChangeLog() {
+      if (!accessToken) {
+        alert('Please sign in to save changes');
+        return;
+      }
+      
+      const productSelect = document.getElementById('changelog-product');
+      const asin = productSelect.value;
+      const date = document.getElementById('changelog-date').value;
+      const notes = document.getElementById('changelog-notes').value.trim();
+      
+      if (!asin) {
+        alert('Please select a product');
+        return;
+      }
+      
+      if (!date) {
+        alert('Please select a date');
+        return;
+      }
+      
+      // Get checked changes
+      const checkboxes = document.querySelectorAll('#changelog-tab input[type="checkbox"]:checked');
+      const changes = Array.from(checkboxes).map(cb => cb.value);
+      
+      if (changes.length === 0) {
+        alert('Please select at least one change type');
+        return;
+      }
+      
+      try {
+        // Get product name from selected option
+        const productName = productSelect.options[productSelect.selectedIndex].getAttribute('data-name');
+        
+        // Append to ListingChangeLog sheet
+        const response = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A:E:append?valueInputOption=USER_ENTERED`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              values: [[
+                date,
+                productName,
+                asin,
+                changes.join(', '),
+                notes
+              ]]
+            })
+          }
+        );
+        
+        if (response.ok) {
+          // Show success message
+          const feedback = document.getElementById('changelog-save-feedback');
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(6, 214, 160, 0.1)';
+          feedback.style.border = '1px solid var(--success)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--success)';
+          feedback.textContent = '✓ Change log entry saved successfully!';
+          
+          setTimeout(() => {
+            feedback.style.display = 'none';
+          }, 5000);
+          
+          // Clear form
+          document.getElementById('changelog-brand').value = '';
+          document.getElementById('changelog-product').value = '';
+          filterChangeLogProducts(); // Reset product list
+          document.getElementById('changelog-date').valueAsDate = new Date();
+          document.getElementById('changelog-notes').value = '';
+          document.querySelectorAll('#changelog-tab input[type="checkbox"]').forEach(cb => cb.checked = false);
+          document.getElementById('changelog-notes-count').textContent = '0';
+          
+          // Reload table
+          loadChangeLog();
+        } else {
+          alert('Failed to save change log entry');
+        }
+      } catch (error) {
+        console.error('Error saving change log:', error);
+        alert('Error saving change log: ' + error.message);
+      }
+    }
+    
+    async function loadChangeLog() {
+      if (!accessToken) return;
+      
+      try {
+        const response = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`,
+          {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }
+        );
+        
+        const data = await response.json();
+        const tableDiv = document.getElementById('changelog-table');
+        
+        if (!data.values || data.values.length === 0) {
+          tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No changes logged yet. Add your first entry above.</div>';
+          return;
+        }
+        
+        // Sort by date descending
+        const rows = data.values.sort((a, b) => new Date(b[0]) - new Date(a[0]));
+        
+        let html = '<table style="width: 100%; border-collapse: collapse;">';
+        html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Date</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">ASIN</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
+        html += '</tr></thead><tbody>';
+        
+        rows.forEach(row => {
+          html += '<tr style="border-bottom: 1px solid var(--border);">';
+          html += `<td style="padding: 0.75rem;">${row[0] || ''}</td>`;
+          html += `<td style="padding: 0.75rem;">${row[1] || ''}</td>`;
+          html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${row[2] || ''}</td>`;
+          html += `<td style="padding: 0.75rem;">${row[3] || ''}</td>`;
+          html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${row[4] || ''}</td>`;
+          html += '</tr>';
+        });
+        
+        html += '</tbody></table>';
+        tableDiv.innerHTML = html;
+        
+        // Setup search functionality
+        setupChangeLogSearch(rows);
+      } catch (error) {
+        console.error('Error loading change log:', error);
+        document.getElementById('changelog-table').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--error);">Error loading change log</div>';
+      }
+    }
+    
+    // Search functionality for change log
+    let changeLogData = [];
+    
+    function setupChangeLogSearch(rows) {
+      changeLogData = rows;
+      
+      const searchInput = document.getElementById('changelog-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', filterChangeLog);
+      }
+    }
+    
+    function filterChangeLog() {
+      const searchTerm = document.getElementById('changelog-search').value.toLowerCase();
+      const tableDiv = document.getElementById('changelog-table');
+      
+      if (!searchTerm) {
+        // Show all if search is empty
+        renderChangeLogTable(changeLogData);
+        return;
+      }
+      
+      // Filter rows
+      const filtered = changeLogData.filter(row => {
+        return row.some(cell => 
+          cell && cell.toString().toLowerCase().includes(searchTerm)
+        );
+      });
+      
+      renderChangeLogTable(filtered);
+    }
+    
+    function renderChangeLogTable(rows) {
+      const tableDiv = document.getElementById('changelog-table');
+      
+      if (rows.length === 0) {
+        tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No matching changes found.</div>';
+        return;
+      }
+      
+      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Date</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">ASIN</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
+      html += '</tr></thead><tbody>';
+      
+      rows.forEach(row => {
+        html += '<tr style="border-bottom: 1px solid var(--border);">';
+        html += `<td style="padding: 0.75rem;">${row[0] || ''}</td>`;
+        html += `<td style="padding: 0.75rem;">${row[1] || ''}</td>`;
+        html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${row[2] || ''}</td>`;
+        html += `<td style="padding: 0.75rem;">${row[3] || ''}</td>`;
+        html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${row[4] || ''}</td>`;
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      tableDiv.innerHTML = html;
+    }
+    
+    // Bulk upload functions
+    function openBulkUpload() {
+      document.getElementById('bulk-upload-modal').style.display = 'flex';
+      document.getElementById('bulk-upload-file').value = '';
+      document.getElementById('bulk-upload-preview').innerHTML = '';
+      document.getElementById('bulk-upload-feedback').style.display = 'none';
+    }
+    
+    function closeBulkUpload() {
+      document.getElementById('bulk-upload-modal').style.display = 'none';
+    }
+    
+    async function processBulkUpload() {
+      const fileInput = document.getElementById('bulk-upload-file');
+      const feedback = document.getElementById('bulk-upload-feedback');
+      
+      if (!fileInput.files || fileInput.files.length === 0) {
+        feedback.style.display = 'block';
+        feedback.style.padding = '1rem';
+        feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+        feedback.style.border = '1px solid var(--error)';
+        feedback.style.borderRadius = '6px';
+        feedback.style.color = 'var(--error)';
+        feedback.textContent = '⚠ Please select a CSV file';
+        return;
+      }
+      
+      const file = fileInput.files[0];
+      
+      if (!file.name.endsWith('.csv')) {
+        feedback.style.display = 'block';
+        feedback.style.padding = '1rem';
+        feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+        feedback.style.border = '1px solid var(--error)';
+        feedback.style.borderRadius = '6px';
+        feedback.style.color = 'var(--error)';
+        feedback.textContent = '⚠ File must be a CSV';
+        return;
+      }
+      
+      try {
+        const text = await file.text();
+        const lines = text.split('\n').filter(line => line.trim());
+        
+        if (lines.length < 2) {
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+          feedback.style.border = '1px solid var(--error)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--error)';
+          feedback.textContent = '⚠ CSV must have at least a header row and one data row';
+          return;
+        }
+        
+        // Parse CSV (skip header)
+        const rows = lines.slice(1).map(line => {
+          // Simple CSV parser (handles commas in quotes)
+          const cols = [];
+          let current = '';
+          let inQuotes = false;
+          
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            
+            if (char === '"') {
+              inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+              cols.push(current.trim());
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          cols.push(current.trim());
+          
+          return cols;
+        });
+        
+        // Validate structure
+        const invalidRows = rows.filter(row => row.length < 3);
+        if (invalidRows.length > 0) {
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+          feedback.style.border = '1px solid var(--error)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--error)';
+          feedback.textContent = `⚠ Invalid format: All rows must have at least 3 columns (Date, ASIN, Changes). Found ${invalidRows.length} invalid row(s).`;
+          return;
+        }
+        
+        // Create ASIN to product name lookup
+        const asinToName = {};
+        allProducts.forEach(p => {
+          if (!asinToName[p.asin]) {
+            asinToName[p.asin] = p.name;
+          }
+        });
+        
+        // Prepare rows for upload
+        const uploadRows = [];
+        const notFoundAsins = [];
+        
+        rows.forEach((row, idx) => {
+          const date = row[0];
+          const asin = row[1];
+          const changes = row[2];
+          const notes = row[3] || '';
+          
+          // Validate date format
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            feedback.style.display = 'block';
+            feedback.style.padding = '1rem';
+            feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+            feedback.style.border = '1px solid var(--error)';
+            feedback.style.borderRadius = '6px';
+            feedback.style.color = 'var(--error)';
+            feedback.textContent = `⚠ Row ${idx + 2}: Date must be in YYYY-MM-DD format (found: ${date})`;
+            throw new Error('Invalid date format');
+          }
+          
+          // Look up product name
+          const productName = asinToName[asin];
+          
+          if (!productName) {
+            notFoundAsins.push(asin);
+            return;
+          }
+          
+          uploadRows.push([date, productName, asin, changes, notes]);
+        });
+        
+        if (notFoundAsins.length > 0) {
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+          feedback.style.border = '1px solid var(--error)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--error)';
+          feedback.textContent = `⚠ ASINs not found in Products sheet: ${notFoundAsins.join(', ')}`;
+          return;
+        }
+        
+        // Upload to Google Sheets
+        const response = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A:E:append?valueInputOption=USER_ENTERED`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              values: uploadRows
+            })
+          }
+        );
+        
+        if (response.ok) {
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(6, 214, 160, 0.1)';
+          feedback.style.border = '1px solid var(--success)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--success)';
+          feedback.textContent = `✓ Successfully uploaded ${uploadRows.length} change(s)!`;
+          
+          // Reload table
+          setTimeout(() => {
+            loadChangeLog();
+            closeBulkUpload();
+          }, 2000);
+        } else {
+          throw new Error('Upload failed');
+        }
+        
+      } catch (error) {
+        console.error('Bulk upload error:', error);
+        if (error.message !== 'Invalid date format') {
+          feedback.style.display = 'block';
+          feedback.style.padding = '1rem';
+          feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+          feedback.style.border = '1px solid var(--error)';
+          feedback.style.borderRadius = '6px';
+          feedback.style.color = 'var(--error)';
+          feedback.textContent = '⚠ Error processing file: ' + error.message;
+        }
+      }
+    }
+    
+    // ==================== KEYWORD TRACKER ====================
+    
+    let keywordData = {}; // Store loaded keyword data by quarter
+    let currentKeywordQuarter = null;
+    
+    function showKeywordView(viewName) {
+      // Hide all views
+      document.querySelectorAll('.keyword-view').forEach(view => {
+        view.classList.remove('active');
+        view.style.display = 'none';
+      });
+      
+      // Remove active from all tab buttons
+      document.querySelectorAll('#keywords-tab .tabs .tab').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      
+      // Show selected view
+      const viewMap = {
+        'top': 'keyword-top-view',
+        'by-asin': 'keyword-by-asin-view',
+        'opportunity': 'keyword-opportunity-view'
+      };
+      
+      const viewId = viewMap[viewName];
+      document.getElementById(viewId).classList.add('active');
+      document.getElementById(viewId).style.display = 'block';
+      
+      // Set active tab button
+      event.target.classList.add('active');
+    }
+    
+    async function uploadKeywordData() {
+      const fileInput = document.getElementById('keyword-file');
+      const quarter = document.getElementById('keyword-quarter').value;
+      const feedback = document.getElementById('keyword-upload-feedback');
+      
+      if (!fileInput.files || fileInput.files.length === 0) {
+        showFeedback(feedback, 'error', '⚠ Please select a CSV file');
+        return;
+      }
+      
+      if (!quarter) {
+        showFeedback(feedback, 'error', '⚠ Please select a quarter');
+        return;
+      }
+      
+      const file = fileInput.files[0];
+      
+      if (!file.name.endsWith('.csv')) {
+        showFeedback(feedback, 'error', '⚠ File must be a CSV');
+        return;
+      }
+      
+      try {
+        showFeedback(feedback, 'info', 'Processing CSV...');
+        
+        const text = await file.text();
+        const lines = text.split('\n').filter(line => line.trim());
+        
+        if (lines.length < 2) {
+          showFeedback(feedback, 'error', '⚠ CSV must have at least a header row and one data row');
+          return;
+        }
+        
+        // Parse header to find column indices
+        const header = parseCSVLine(lines[0]);
+        const columnIndices = findKeywordColumns(header);
+        
+        if (!columnIndices) {
+          showFeedback(feedback, 'error', '⚠ Could not find required columns. Make sure your CSV includes: Search Query, Click Share, Conversion Share, and ASIN columns');
+          return;
+        }
+        
+        // Parse data rows
+        const keywords = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols = parseCSVLine(lines[i]);
+          
+          if (cols.length < 3) continue; // Skip invalid rows
+          
+          const keyword = {
+            query: cols[columnIndices.query] || '',
+            rank: parseInt(cols[columnIndices.rank]) || 0,
+            clickShare: parseFloat(cols[columnIndices.clickShare]) || 0,
+            conversionShare: parseFloat(cols[columnIndices.conversionShare]) || 0,
+            asins: {}
+          };
+          
+          // Parse ASIN-specific data
+          columnIndices.asinCols.forEach(asinCol => {
+            const asin = asinCol.asin;
+            keyword.asins[asin] = {
+              clicks: parseInt(cols[asinCol.clicksIdx]) || 0,
+              conversions: parseInt(cols[asinCol.conversionsIdx]) || 0
+            };
+          });
+          
+          keywords.push(keyword);
+        }
+        
+        // Save to Upstash
+        showFeedback(feedback, 'info', `Uploading ${keywords.length} keywords...`);
+        
+        const response = await fetch('/api/keywords?action=save', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            quarter,
+            keywords
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          showFeedback(feedback, 'success', `✓ Successfully uploaded ${result.keywordCount} keywords for ${quarter}!`);
+          
+          // Load and display data
+          currentKeywordQuarter = quarter;
+          keywordData[quarter] = keywords;
+          
+          document.getElementById('keyword-views').style.display = 'block';
+          renderTopKeywords();
+          populateASINFilter();
+          renderOpportunityGap();
+          
+        } else {
+          const error = await response.json();
+          showFeedback(feedback, 'error', '⚠ Upload failed: ' + error.error);
+        }
+        
+      } catch (error) {
+        console.error('Error uploading keyword data:', error);
+        showFeedback(feedback, 'error', '⚠ Error processing file: ' + error.message);
+      }
+    }
+    
+    function parseCSVLine(line) {
+      const cols = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          cols.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      cols.push(current.trim());
+      
+      return cols;
+    }
+    
+    function findKeywordColumns(header) {
+      const indices = {
+        query: -1,
+        rank: -1,
+        clickShare: -1,
+        conversionShare: -1,
+        asinCols: []
+      };
+      
+      // Find standard columns
+      header.forEach((col, idx) => {
+        const lower = col.toLowerCase();
+        if (lower.includes('search query') || lower.includes('query')) {
+          indices.query = idx;
+        } else if (lower.includes('rank') || lower.includes('frequency')) {
+          indices.rank = idx;
+        } else if (lower.includes('click share')) {
+          indices.clickShare = idx;
+        } else if (lower.includes('conversion share') || lower.includes('purchase share')) {
+          indices.conversionShare = idx;
+        }
+      });
+      
+      // Find ASIN columns (format: "#{ASIN} - Clicked ASIN", "#{ASIN} - Conversions")
+      const asinMap = {};
+      header.forEach((col, idx) => {
+        const match = col.match(/#(\d+)\s*-\s*(.+)/);
+        if (match) {
+          const asin = match[1];
+          const type = match[2].toLowerCase();
+          
+          if (!asinMap[asin]) {
+            asinMap[asin] = { asin };
+          }
+          
+          if (type.includes('click')) {
+            asinMap[asin].clicksIdx = idx;
+          } else if (type.includes('conver') || type.includes('purchase')) {
+            asinMap[asin].conversionsIdx = idx;
+          }
+        }
+      });
+      
+      indices.asinCols = Object.values(asinMap);
+      
+      // Validate required columns
+      if (indices.query === -1 || indices.asinCols.length === 0) {
+        return null;
+      }
+      
+      return indices;
+    }
+    
+    function renderTopKeywords() {
+      const keywords = keywordData[currentKeywordQuarter] || [];
+      
+      // Filter to keywords where our ASINs have clicks
+      const filtered = keywords.filter(kw => {
+        return Object.values(kw.asins).some(asinData => asinData.clicks > 0);
+      });
+      
+      // Sort by rank (lower is better)
+      filtered.sort((a, b) => a.rank - b.rank);
+      
+      const tableDiv = document.getElementById('keyword-top-table');
+      
+      if (filtered.length === 0) {
+        tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No keywords found with clicks.</div>';
+        return;
+      }
+      
+      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Rank</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Search Query</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Click Share</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Conversion Share</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Our Clicks</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Our Conversions</th>';
+      html += '</tr></thead><tbody>';
+      
+      filtered.slice(0, 100).forEach(kw => {
+        const totalClicks = Object.values(kw.asins).reduce((sum, asin) => sum + asin.clicks, 0);
+        const totalConversions = Object.values(kw.asins).reduce((sum, asin) => sum + asin.conversions, 0);
+        
+        html += '<tr style="border-bottom: 1px solid var(--border);">';
+        html += `<td style="padding: 0.75rem;">${kw.rank}</td>`;
+        html += `<td style="padding: 0.75rem;">${kw.query}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${kw.clickShare.toFixed(2)}%</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${kw.conversionShare.toFixed(2)}%</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${totalClicks}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${totalConversions}</td>`;
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      tableDiv.innerHTML = html;
+    }
+    
+    function populateASINFilter() {
+      const keywords = keywordData[currentKeywordQuarter] || [];
+      const asins = new Set();
+      
+      keywords.forEach(kw => {
+        Object.keys(kw.asins).forEach(asin => asins.add(asin));
+      });
+      
+      const select = document.getElementById('keyword-asin-filter');
+      select.innerHTML = '<option value="">Select ASIN...</option>';
+      
+      Array.from(asins).sort().forEach(asin => {
+        select.innerHTML += `<option value="${asin}">${asin}</option>`;
+      });
+    }
+    
+    function filterKeywordsByASIN() {
+      const selectedASIN = document.getElementById('keyword-asin-filter').value;
+      const keywords = keywordData[currentKeywordQuarter] || [];
+      
+      if (!selectedASIN) {
+        document.getElementById('keyword-by-asin-table').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">Select an ASIN to view keywords.</div>';
+        return;
+      }
+      
+      // Filter keywords where this ASIN has activity
+      const filtered = keywords.filter(kw => {
+        const asinData = kw.asins[selectedASIN];
+        return asinData && (asinData.clicks > 0 || asinData.conversions > 0);
+      });
+      
+      // Sort by ASIN clicks descending
+      filtered.sort((a, b) => b.asins[selectedASIN].clicks - a.asins[selectedASIN].clicks);
+      
+      const tableDiv = document.getElementById('keyword-by-asin-table');
+      
+      if (filtered.length === 0) {
+        tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No keywords found for this ASIN.</div>';
+        return;
+      }
+      
+      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Rank</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Search Query</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Clicks</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Conversions</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">CVR</th>';
+      html += '</tr></thead><tbody>';
+      
+      filtered.forEach(kw => {
+        const asinData = kw.asins[selectedASIN];
+        const cvr = asinData.clicks > 0 ? (asinData.conversions / asinData.clicks * 100) : 0;
+        
+        html += '<tr style="border-bottom: 1px solid var(--border);">';
+        html += `<td style="padding: 0.75rem;">${kw.rank}</td>`;
+        html += `<td style="padding: 0.75rem;">${kw.query}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${asinData.clicks}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${asinData.conversions}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${cvr.toFixed(1)}%</td>`;
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      tableDiv.innerHTML = html;
+    }
+    
+    function renderOpportunityGap() {
+      const keywords = keywordData[currentKeywordQuarter] || [];
+      
+      // Filter: rank < 100,000 (volume >100) and 0 conversions from our ASINs
+      const filtered = keywords.filter(kw => {
+        const totalConversions = Object.values(kw.asins).reduce((sum, asin) => sum + asin.conversions, 0);
+        return kw.rank < 100000 && totalConversions === 0;
+      });
+      
+      // Sort by rank (lower rank = higher volume)
+      filtered.sort((a, b) => a.rank - b.rank);
+      
+      const tableDiv = document.getElementById('keyword-opportunity-table');
+      
+      if (filtered.length === 0) {
+        tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No opportunity gaps found.</div>';
+        return;
+      }
+      
+      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Rank</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Search Query</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Click Share</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Conversion Share</th>';
+      html += '<th style="text-align: right; padding: 0.75rem; font-weight: 600;">Our Clicks</th>';
+      html += '</tr></thead><tbody>';
+      
+      filtered.slice(0, 100).forEach(kw => {
+        const totalClicks = Object.values(kw.asins).reduce((sum, asin) => sum + asin.clicks, 0);
+        
+        html += '<tr style="border-bottom: 1px solid var(--border);">';
+        html += `<td style="padding: 0.75rem;">${kw.rank}</td>`;
+        html += `<td style="padding: 0.75rem;">${kw.query}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${kw.clickShare.toFixed(2)}%</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${kw.conversionShare.toFixed(2)}%</td>`;
+        html += `<td style="padding: 0.75rem; text-align: right;">${totalClicks}</td>`;
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table>';
+      tableDiv.innerHTML = html;
+    }
+    
+    function showFeedback(element, type, message) {
+      element.style.display = 'block';
+      element.style.padding = '1rem';
+      element.style.borderRadius = '6px';
+      element.textContent = message;
+      
+      if (type === 'success') {
+        element.style.background = 'rgba(6, 214, 160, 0.1)';
+        element.style.border = '1px solid var(--success)';
+        element.style.color = 'var(--success)';
+      } else if (type === 'error') {
+        element.style.background = 'rgba(239, 68, 68, 0.1)';
+        element.style.border = '1px solid var(--error)';
+        element.style.color = 'var(--error)';
+      } else {
+        element.style.background = 'rgba(59, 130, 246, 0.1)';
+        element.style.border = '1px solid var(--accent-blue)';
+        element.style.color = 'var(--accent-blue)';
+      }
+    }
+    
+    // ==================== SESSION & CVR ====================
+    
+    let sessionData = [];
+    let sessionReportId = null;
+    let sessionPollingInterval = null;
+    let sessionsChart = null;
+    let cvrChart = null;
+    let pageviewsChart = null;
+    
+    async function fetchSessionData() {
+      const fetchDate = document.getElementById('session-fetch-date').value;
+      const feedback = document.getElementById('session-fetch-feedback');
+      
+      if (!fetchDate) {
+        showFeedback(feedback, 'error', '⚠ Please select a date to fetch');
+        return;
+      }
+      
+      try {
+        showFeedback(feedback, 'info', 'Requesting report from Amazon...');
+        
+        const response = await fetch('/api/sessions?action=request', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            startDate: fetchDate,
+            endDate: fetchDate
+          })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error);
+        }
+        
+        const result = await response.json();
+        sessionReportId = result.reportId;
+        
+        showFeedback(feedback, 'info', `Report requested (ID: ${sessionReportId}). Checking status...`);
+        
+        // Start polling for report completion
+        sessionPollingInterval = setInterval(() => pollSessionReport(feedback), 10000); // Check every 10 seconds
+        
+      } catch (error) {
+        console.error('Error fetching session data:', error);
+        showFeedback(feedback, 'error', '⚠ Error: ' + error.message);
+      }
+    }
+    
+    async function pollSessionReport(feedback) {
+      try {
+        const response = await fetch('/api/sessions?action=download', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            reportId: sessionReportId
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to check report status');
+        }
+        
+        const result = await response.json();
+        
+        if (result.status === 'DONE') {
+          clearInterval(sessionPollingInterval);
+          showFeedback(feedback, 'success', `✓ Successfully fetched ${result.recordCount} records!`);
+          
+          // Load data and show charts
+          await loadSessionData();
+          
+        } else {
+          showFeedback(feedback, 'info', `Report status: ${result.status}. Still processing...`);
+        }
+        
+      } catch (error) {
+        clearInterval(sessionPollingInterval);
+        console.error('Error polling report:', error);
+        showFeedback(feedback, 'error', '⚠ Error checking report: ' + error.message);
+      }
+    }
+    
+    async function loadSessionData() {
+      try {
+        const response = await fetch('/api/sessions?action=get', {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to load session data');
+        }
+        
+        const result = await response.json();
+        sessionData = result.data;
+        
+        // Display latest date in database
+        if (sessionData.length > 0) {
+          const dates = sessionData.map(d => d.date).filter(Boolean);
+          const latestDate = dates.sort().reverse()[0];
+          document.getElementById('latest-session-date').textContent = latestDate || 'No data';
+        } else {
+          document.getElementById('latest-session-date').textContent = 'No data';
+        }
+        
+        // Load products from Google Sheets to populate dropdowns
+        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const productsData = await productsResponse.json();
+        
+        if (productsData.values && productsData.values.length > 0) {
+          // Store products - A=sku, B=name, C=brand, F=asin, G=productType
+          // For Listing Optimization: only show Parent and Non-Variable products
+          // Filter out discontinued products (ASIN = N/A) and Child products
+          allProducts = productsData.values
+            .filter(row => {
+              const asin = row[5];
+              const productType = row[6] || '';
+              return asin && 
+                     asin.toUpperCase() !== 'N/A' && 
+                     (productType === 'Parent' || productType === 'Non-Variable');
+            })
+            .map(row => ({
+              sku: row[0],
+              name: row[1] || row[0],
+              brand: row[2] || 'Unknown',
+              asin: row[5],
+              productType: row[6] || ''
+            }));
+          
+          // Get unique brands
+          const brands = [...new Set(allProducts.map(p => p.brand))].sort();
+          
+          // Populate brand dropdown
+          const brandSelect = document.getElementById('session-brand-filter');
+          brandSelect.innerHTML = '<option value="">All Brands</option>';
+          brands.forEach(brand => {
+            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
+          });
+          
+          // Populate export brand checkboxes
+          const exportBrandCheckboxes = document.getElementById('export-brand-checkboxes');
+          exportBrandCheckboxes.innerHTML = '';
+          brands.forEach(brand => {
+            exportBrandCheckboxes.innerHTML += `
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" class="export-brand-checkbox" value="${brand}" checked onchange="updateBrandDropdownLabel()" style="cursor: pointer;">
+                <span style="font-size: 0.875rem;">${brand}</span>
+              </label>
+            `;
+          });
+          
+          // Populate products (all initially)
+          filterSessionProducts();
+        }
+        
+        // Show charts section
+        document.getElementById('session-charts').style.display = 'block';
+        
+      } catch (error) {
+        console.error('Error loading session data:', error);
+      }
+    }
+    
+    function filterSessionProducts() {
+      const selectedBrand = document.getElementById('session-brand-filter').value;
+      const productSelect = document.getElementById('session-product-filter');
+      
+      // Filter products by brand
+      let filteredProducts = selectedBrand 
+        ? allProducts.filter(p => p.brand === selectedBrand)
+        : allProducts;
+      
+      // Deduplicate by ASIN (keep first occurrence)
+      const seenAsins = new Set();
+      filteredProducts = filteredProducts.filter(product => {
+        if (seenAsins.has(product.asin)) {
+          return false;
+        }
+        seenAsins.add(product.asin);
+        return true;
+      });
+      
+      // Sort alphabetically by name
+      filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
+      
+      // Populate product dropdown
+      productSelect.innerHTML = '<option value="">Select Product...</option>';
+      filteredProducts.forEach(product => {
+        productSelect.innerHTML += `<option value="${product.asin}" data-name="${product.name}">${product.name} (${product.asin})</option>`;
+      });
+    }
+    
+    async function filterSessionChanges() {
+      const selectedASIN = document.getElementById('session-product-filter').value;
+      const changeSelect = document.getElementById('session-change-filter');
+      
+      if (!selectedASIN) {
+        changeSelect.innerHTML = '<option value="">Select Change...</option>';
+        return;
+      }
+      
+      try {
+        // Fetch Change Log from Google Sheets
+        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const data = await response.json();
+        
+        if (data.values && data.values.length > 0) {
+          // Filter changes for this ASIN
+          // Column structure: Date | Product | ASIN | Changes | Notes
+          const changes = data.values
+            .filter(row => row[2] === selectedASIN) // Match ASIN
+            .map(row => ({
+              date: row[0],
+              product: row[1],
+              asin: row[2],
+              changes: row[3],
+              notes: row[4]
+            }))
+            .sort((a, b) => b.date.localeCompare(a.date)); // Most recent first
+          
+          // Populate change dropdown
+          changeSelect.innerHTML = '<option value="">Select Change...</option>';
+          changes.forEach((change, index) => {
+            changeSelect.innerHTML += `<option value="${index}" data-date="${change.date}">${change.date} - ${change.changes}</option>`;
+          });
+          
+          // Store changes for later use
+          window.sessionChanges = changes;
+        }
+        
+      } catch (error) {
+        console.error('Error loading changes:', error);
+      }
+    }
+    
+    async function renderSessionCharts() {
+      const selectedASIN = document.getElementById('session-product-filter').value;
+      const changeIndex = document.getElementById('session-change-filter').value;
+      
+      if (!selectedASIN || changeIndex === '') {
+        return;
+      }
+      
+      // Get selected change
+      const change = window.sessionChanges[changeIndex];
+      const changeDate = new Date(change.date);
+      
+      // Filter data for selected ASIN
+      const asinData = sessionData.filter(d => d.asin === selectedASIN);
+      
+      // Sort by date
+      asinData.sort((a, b) => new Date(a.date) - new Date(b.date));
+      
+      // Calculate 30 days before change
+      const thirtyDaysBefore = new Date(changeDate);
+      thirtyDaysBefore.setDate(thirtyDaysBefore.getDate() - 30);
+      
+      // Split data into before and after
+      const beforeData = asinData.filter(d => {
+        const date = new Date(d.date);
+        return date >= thirtyDaysBefore && date < changeDate;
+      });
+      
+      const afterData = asinData.filter(d => {
+        const date = new Date(d.date);
+        return date >= changeDate;
+      });
+      
+      // Calculate metrics
+      const avgSessionsBefore = beforeData.length > 0 
+        ? beforeData.reduce((sum, d) => sum + d.sessions, 0) / beforeData.length 
+        : 0;
+      const avgSessionsAfter = afterData.length > 0 
+        ? afterData.reduce((sum, d) => sum + d.sessions, 0) / afterData.length 
+        : 0;
+      const sessionsChange = avgSessionsBefore > 0 
+        ? ((avgSessionsAfter - avgSessionsBefore) / avgSessionsBefore) * 100 
+        : 0;
+      
+      const avgCVRBefore = beforeData.length > 0 
+        ? beforeData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / beforeData.length 
+        : 0;
+      const avgCVRAfter = afterData.length > 0 
+        ? afterData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / afterData.length 
+        : 0;
+      const cvrChange = avgCVRBefore > 0 
+        ? ((avgCVRAfter - avgCVRBefore) / avgCVRBefore) * 100 
+        : 0;
+      
+      const avgPageViewsBefore = beforeData.length > 0 
+        ? beforeData.reduce((sum, d) => sum + d.pageViews, 0) / beforeData.length 
+        : 0;
+      const avgPageViewsAfter = afterData.length > 0 
+        ? afterData.reduce((sum, d) => sum + d.pageViews, 0) / afterData.length 
+        : 0;
+      const pageViewsChange = avgPageViewsBefore > 0 
+        ? ((avgPageViewsAfter - avgPageViewsBefore) / avgPageViewsBefore) * 100 
+        : 0;
+      
+      // Calculate days since change
+      const today = new Date();
+      const daysSince = Math.floor((today - changeDate) / (1000 * 60 * 60 * 24));
+      
+      // Update summary cards
+      document.getElementById('summary-sessions-before').textContent = avgSessionsBefore.toFixed(1);
+      document.getElementById('summary-sessions-after').textContent = avgSessionsAfter.toFixed(1);
+      document.getElementById('summary-sessions-change').textContent = (sessionsChange >= 0 ? '+' : '') + sessionsChange.toFixed(1) + '%';
+      document.getElementById('summary-sessions-change').style.color = sessionsChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('summary-cvr-before').textContent = avgCVRBefore.toFixed(2) + '%';
+      document.getElementById('summary-cvr-after').textContent = avgCVRAfter.toFixed(2) + '%';
+      document.getElementById('summary-cvr-change').textContent = (cvrChange >= 0 ? '+' : '') + cvrChange.toFixed(1) + '%';
+      document.getElementById('summary-cvr-change').style.color = cvrChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('summary-pageviews-before').textContent = avgPageViewsBefore.toFixed(1);
+      document.getElementById('summary-pageviews-after').textContent = avgPageViewsAfter.toFixed(1);
+      document.getElementById('summary-pageviews-change').textContent = (pageViewsChange >= 0 ? '+' : '') + pageViewsChange.toFixed(1) + '%';
+      document.getElementById('summary-pageviews-change').style.color = pageViewsChange >= 0 ? 'var(--success)' : 'var(--error)';
+      
+      document.getElementById('summary-days-since').textContent = daysSince;
+      document.getElementById('summary-change-date').textContent = `Change: ${change.date} - ${change.changes}`;
+      
+      // Prepare chart data (show 30 days before change and all data after)
+      const chartData = asinData.filter(d => {
+        const date = new Date(d.date);
+        return date >= thirtyDaysBefore; // Only show from 30 days before change onwards
+      });
+      
+      const dates = chartData.map(d => d.date);
+      const sessions = chartData.map(d => d.sessions);
+      const cvr = chartData.map(d => d.unitSessionPercentage);
+      const pageViews = chartData.map(d => d.pageViews);
+      
+      // Create annotation for change date
+      const annotations = {
+        changeLine: {
+          type: 'line',
+          xMin: change.date,
+          xMax: change.date,
+          borderColor: 'rgba(255, 99, 132, 0.8)',
+          borderWidth: 2,
+          borderDash: [5, 5]
+        }
+      };
+      
+      // Destroy existing charts
+      if (sessionsChart) sessionsChart.destroy();
+      if (cvrChart) cvrChart.destroy();
+      if (pageviewsChart) pageviewsChart.destroy();
+      
+      // Create Sessions chart
+      const sessionsCtx = document.getElementById('sessions-chart').getContext('2d');
+      sessionsChart = new Chart(sessionsCtx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Sessions',
+            data: sessions,
+            borderColor: 'rgb(255, 159, 64)',
+            backgroundColor: 'rgba(255, 159, 64, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false
+            },
+            annotation: {
+              annotations
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true
+            }
+          }
+        }
+      });
+      
+      // Create CVR chart
+      const cvrCtx = document.getElementById('cvr-chart').getContext('2d');
+      cvrChart = new Chart(cvrCtx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'CVR (%)',
+            data: cvr,
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false
+            },
+            annotation: {
+              annotations
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return value + '%';
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Create Page Views chart
+      const pageviewsCtx = document.getElementById('pageviews-chart').getContext('2d');
+      pageviewsChart = new Chart(pageviewsCtx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Page Views',
+            data: pageViews,
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: false
+            },
+            annotation: {
+              annotations
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true
+            }
+          }
+        }
+      });
+    }
+    
+    async function getChangeLogDates(asin) {
+      try {
+        const response = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:C`,
+          {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }
+        );
+        
+        const data = await response.json();
+        
+        if (!data.values) {
+          return [];
+        }
+        
+        // Filter for this ASIN and extract dates
+        const dates = data.values
+          .filter(row => row[2] === asin) // Column C is ASIN
+          .map(row => row[0]); // Column A is date
+        
+        return dates;
+        
+      } catch (error) {
+        console.error('Error loading change log dates:', error);
+        return [];
+      }
+    }
+    
+    async function backfillSessions() {
+      const startDate = document.getElementById('backfill-start-date').value;
+      const endDate = document.getElementById('backfill-end-date').value;
+      const progressDiv = document.getElementById('backfill-progress');
+      const feedback = document.getElementById('session-fetch-feedback');
+      
+      if (!startDate || !endDate) {
+        showFeedback(feedback, 'error', '⚠ Please select both start and end dates for backfill');
+        return;
+      }
+      
+      progressDiv.style.display = 'block';
+      progressDiv.innerHTML = `Starting backfill from ${startDate} to ${endDate}...\n`;
+      feedback.style.display = 'none';
+      
+      try {
+        const response = await fetch('/api/sessions?action=backfill', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ startDate, endDate })
+        });
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+          
+          lines.forEach(line => {
+            if (line.startsWith('data: ')) {
+              const message = line.substring(6);
+              progressDiv.innerHTML += message + '\n';
+              progressDiv.scrollTop = progressDiv.scrollHeight;
+            }
+          });
+        }
+        
+        // Reload data
+        await loadSessionData();
+        
+        showFeedback(feedback, 'success', '✓ Backfill complete! Data loaded.');
+        
+      } catch (error) {
+        console.error('Backfill error:', error);
+        showFeedback(feedback, 'error', '⚠ Backfill failed: ' + error.message);
+      }
+    }
+    
+    
+    function selectAllBrands() {
+      document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = true);
+      updateBrandDropdownLabel();
+    }
+    
+    function selectNoBrands() {
+      document.querySelectorAll('.export-brand-checkbox').forEach(cb => cb.checked = false);
+      updateBrandDropdownLabel();
+    }
+    
+    function toggleBrandDropdown(event) {
+      event.stopPropagation();
+      const menu = document.getElementById('brand-dropdown-menu');
+      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    }
+    
+    function updateBrandDropdownLabel() {
+      const checkboxes = document.querySelectorAll('.export-brand-checkbox');
+      const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+      const totalCount = checkboxes.length;
+      const label = document.getElementById('brand-dropdown-label');
+      
+      if (checkedCount === 0) {
+        label.textContent = 'No brands selected';
+      } else if (checkedCount === totalCount) {
+        label.textContent = 'All brands selected';
+      } else {
+        label.textContent = `${checkedCount} brand${checkedCount > 1 ? 's' : ''} selected`;
+      }
+    }
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(event) {
+      const menu = document.getElementById('brand-dropdown-menu');
+      const btn = document.getElementById('brand-dropdown-btn');
+      if (menu && btn && !menu.contains(event.target) && !btn.contains(event.target)) {
+        menu.style.display = 'none';
+      }
+    });
+    
+    async function exportChangeAnalysis() {
+      const feedback = document.getElementById('export-feedback');
+      const startDate = document.getElementById('export-start-date').value;
+      const endDate = document.getElementById('export-end-date').value;
+      
+      if (!startDate || !endDate) {
+        showFeedback(feedback, 'error', '⚠ Please select both start and end dates');
+        return;
+      }
+      
+      // Get selected brands
+      const selectedBrands = Array.from(document.querySelectorAll('.export-brand-checkbox:checked'))
+        .map(cb => cb.value);
+      
+      if (selectedBrands.length === 0) {
+        showFeedback(feedback, 'error', '⚠ Please select at least one brand');
+        return;
+      }
+      
+      showFeedback(feedback, 'info', 'Generating export...');
+      
+      try {
+        // Fetch change log data
+        const changeLogResponse = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`,
+          { headers: { 'Authorization': `Bearer ${accessToken}` } }
+        );
+        const changeLogData = await changeLogResponse.json();
+        
+        if (!changeLogData.values) {
+          throw new Error('No change log data found');
+        }
+        
+        // Filter changes by date range and brand
+        const changes = changeLogData.values
+          .map(row => ({
+            date: row[0],
+            product: row[1],
+            asin: row[2],
+            changes: row[3],
+            notes: row[4]
+          }))
+          .filter(change => {
+            if (change.date < startDate || change.date > endDate) return false;
+            
+            // Find product brand
+            const product = allProducts.find(p => p.asin === change.asin);
+            return product && selectedBrands.includes(product.brand);
+          });
+        
+        if (changes.length === 0) {
+          showFeedback(feedback, 'error', '⚠ No changes found for selected criteria');
+          return;
+        }
+        
+        // Calculate metrics for each change
+        const exportData = [];
+        
+        for (const change of changes) {
+          const product = allProducts.find(p => p.asin === change.asin);
+          if (!product) continue;
+          
+          const changeDate = new Date(change.date);
+          const thirtyDaysBefore = new Date(changeDate);
+          thirtyDaysBefore.setDate(thirtyDaysBefore.getDate() - 30);
+          
+          // Get ASIN data
+          const asinData = sessionData.filter(d => d.asin === change.asin);
+          
+          const beforeData = asinData.filter(d => {
+            const date = new Date(d.date);
+            return date >= thirtyDaysBefore && date < changeDate;
+          });
+          
+          const afterData = asinData.filter(d => {
+            const date = new Date(d.date);
+            return date >= changeDate;
+          });
+          
+          // Calculate metrics
+          const avgSessionsBefore = beforeData.length > 0 
+            ? beforeData.reduce((sum, d) => sum + d.sessions, 0) / beforeData.length 
+            : 0;
+          const avgSessionsAfter = afterData.length > 0 
+            ? afterData.reduce((sum, d) => sum + d.sessions, 0) / afterData.length 
+            : 0;
+          const sessionsChange = avgSessionsBefore > 0 
+            ? ((avgSessionsAfter - avgSessionsBefore) / avgSessionsBefore) * 100 
+            : 0;
+          
+          const avgCVRBefore = beforeData.length > 0 
+            ? beforeData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / beforeData.length 
+            : 0;
+          const avgCVRAfter = afterData.length > 0 
+            ? afterData.reduce((sum, d) => sum + d.unitSessionPercentage, 0) / afterData.length 
+            : 0;
+          const cvrChange = avgCVRBefore > 0 
+            ? ((avgCVRAfter - avgCVRBefore) / avgCVRBefore) * 100 
+            : 0;
+          
+          const avgPageViewsBefore = beforeData.length > 0 
+            ? beforeData.reduce((sum, d) => sum + d.pageViews, 0) / beforeData.length 
+            : 0;
+          const avgPageViewsAfter = afterData.length > 0 
+            ? afterData.reduce((sum, d) => sum + d.pageViews, 0) / afterData.length 
+            : 0;
+          const pageViewsChange = avgPageViewsBefore > 0 
+            ? ((avgPageViewsAfter - avgPageViewsBefore) / avgPageViewsBefore) * 100 
+            : 0;
+          
+          exportData.push({
+            Date: change.date,
+            Brand: product.brand,
+            Product: change.product,
+            ASIN: change.asin,
+            Changes: change.changes,
+            'Sessions per day Before (30d)': avgSessionsBefore.toFixed(2),
+            'Sessions per day After': avgSessionsAfter.toFixed(2),
+            'Sessions per day Change (%)': sessionsChange.toFixed(2),
+            'CVR Before (30d) (%)': avgCVRBefore.toFixed(2),
+            'CVR After (%)': avgCVRAfter.toFixed(2),
+            'CVR Change (%)': cvrChange.toFixed(2),
+            'Page Views per day Before (30d)': avgPageViewsBefore.toFixed(2),
+            'Page Views per day After': avgPageViewsAfter.toFixed(2),
+            'Page Views per day Change (%)': pageViewsChange.toFixed(2)
+          });
+        }
+        
+        // Convert to CSV
+        const headers = Object.keys(exportData[0]);
+        const csvRows = [headers.join(',')];
+        
+        exportData.forEach(row => {
+          const values = headers.map(header => {
+            const value = row[header];
+            // Escape values with commas
+            return typeof value === 'string' && value.includes(',') 
+              ? `"${value}"` 
+              : value;
+          });
+          csvRows.push(values.join(','));
+        });
+        
+        const csv = csvRows.join('\n');
+        
+        // Download CSV
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `change-analysis-${startDate}-to-${endDate}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        
+        showFeedback(feedback, 'success', `✓ Exported ${exportData.length} changes to CSV`);
+        
+      } catch (error) {
+        console.error('Export error:', error);
+        showFeedback(feedback, 'error', '⚠ Export failed: ' + error.message);
+      }
+    }
+    
+    // SALES & VOLUME PAGE
+    let svAllProducts = [];
+    let svOrdersData = [];
+    let svSalesChart = null;
+    let svVolumeChart = null;
+    
+    async function loadSalesVolumeData() {
+      if (!accessToken) return;
+      
+      try {
+        // Try summary cache first (fast single KV read for Monthly Overview)
+        // Always load full orders too so PCI tab has individual records
+        const [summaryRes, ordersRes] = await Promise.all([
+          fetch('/api/orders?action=get-summary', { headers: { 'Authorization': `Bearer ${accessToken}` } }),
+          fetch('/api/orders?action=get',         { headers: { 'Authorization': `Bearer ${accessToken}` } })
+        ]);
+
+        if (ordersRes.ok) {
+          const data = await ordersRes.json();
+          svOrdersData = data.orders || [];
+          updateSVDataBlurb(svOrdersData);
+        }
+
+        // Store summary separately for Monthly Overview rendering
+        if (summaryRes.ok) {
+          const summaryData = await summaryRes.json();
+          window._svMonthlySummary = summaryData.summary || null;
+        }
+        
+        // Load products (Child + Non-Variable only)
+        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const productsData = await productsResponse.json();
+        
+        if (productsData.values && productsData.values.length > 0) {
+          svAllProducts = productsData.values
+            .filter(row => {
+              const asin = row[5];
+              const productType = row[6] || '';
+              return asin && 
+                     asin.toUpperCase() !== 'N/A' && 
+                     (productType === 'Child' || productType === 'Non-Variable');
+            })
+            .map(row => ({
+              sku: row[0],
+              name: row[1] || row[0],
+              brand: row[2] || 'Unknown',
+              asin: row[5],
+              productType: row[6] || ''
+            }));
+          
+          // Populate brand dropdown
+          const brands = [...new Set(svAllProducts.map(p => p.brand))].sort();
+          const brandSelect = document.getElementById('sv-brand-filter');
+          brandSelect.innerHTML = '<option value="">All Brands</option>';
+          brands.forEach(brand => {
+            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
+          });
+          
+          // Populate products
+          filterSVProducts();
+        }
+        
+        // Render data
+        renderSalesVolumeData();
+
+        // Populate export brand list now that svAllProducts is loaded
+        populatePCIExportBrands();
+
+        // Pre-load PCI data in background so it's ready when tab is clicked
+        initPCI();
+        
+      } catch (error) {
+        console.error('Error loading sales & volume data:', error);
+      }
+    }
+    
+    function filterSVProducts() {
+      const selectedBrand = document.getElementById('sv-brand-filter').value;
+      const productSelect = document.getElementById('sv-product-filter');
+      
+      let filteredProducts = selectedBrand 
+        ? svAllProducts.filter(p => p.brand === selectedBrand)
+        : svAllProducts;
+      
+      filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
+      
+      productSelect.innerHTML = '<option value="">All Products</option>';
+      filteredProducts.forEach(product => {
+        productSelect.innerHTML += `<option value="${product.sku}">${product.name}</option>`;
+      });
+      
+      renderSalesVolumeData();
+    }
+    
+    function renderSalesVolumeData() {
+      const selectedSKU         = document.getElementById('sv-product-filter').value;
+      const selectedBrand       = document.getElementById('sv-brand-filter').value;
+      const selectedYear        = document.getElementById('sv-year-filter').value;
+      const selectedMonth       = document.getElementById('sv-month-filter').value; // 'YYYY-MM' or ''
+      const selectedFulfillment = document.getElementById('sv-fulfillment-filter').value; // 'AFN','MFN', or ''
+
+      // Build SKU set for brand filtering (when brand selected but no specific product)
+      const brandSKUs = selectedBrand && !selectedSKU
+        ? new Set(svAllProducts.filter(p => p.brand === selectedBrand).map(p => p.sku))
+        : null;
+
+      // For YTD/MTD cards we need individual order records (date-level filtering)
+      let orders = svOrdersData;
+      if (selectedSKU)         orders = orders.filter(o => o.sku === selectedSKU);
+      else if (brandSKUs)      orders = orders.filter(o => brandSKUs.has(o.sku));
+      if (selectedFulfillment) orders = orders.filter(o => o.fulfillmentChannel === selectedFulfillment);
+
+      // For monthly chart/list, use the pre-aggregated summary cache if available
+      // (much faster — one KV read vs scanning thousands of records per month)
+      // Summary records: { yearMonth, sku, revenue, units }
+      // We normalize them to look like order records for the monthly aggregation below
+      const summaryCache = window._svMonthlySummary;
+      let monthlySource; // what we use for the rolling 13-month chart/list
+      // Summary cache doesn't store fulfillmentChannel, so bypass it when that filter is active
+      if (summaryCache && summaryCache.length > 0 && !selectedFulfillment) {
+        // Filter summary by SKU or brand
+        let filtered = summaryCache;
+        if (selectedSKU) {
+          filtered = filtered.filter(s => s.sku === selectedSKU);
+        } else if (brandSKUs) {
+          filtered = filtered.filter(s => brandSKUs.has(s.sku));
+        }
+        // Convert to a shape the monthly aggregation can use
+        monthlySource = filtered.map(s => ({
+          orderDate: s.yearMonth + '-01', // approximate — only month matters
+          _yearMonth: s.yearMonth,
+          sku: s.sku,
+          itemTotal: s.revenue,
+          quantity: s.units,
+          _fromSummary: true
+        }));
+      } else {
+        // Use the already-filtered orders array (includes fulfillment filter if set)
+        monthlySource = orders;
+      }
+
+      // Determine the anchor: the last day of the selected month, or yesterday
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      let anchor; // always 1st of the "current" month for the rolling window
+      let anchorLastDay; // last day of that month (for YTD/MTD end dates)
+
+      if (selectedMonth) {
+        // e.g. '2026-01' => anchor = Jan 1 2026, anchorLastDay = Jan 31 2026
+        const [y, m] = selectedMonth.split('-').map(Number);
+        anchor = new Date(y, m - 1, 1);
+        anchorLastDay = new Date(y, m, 0); // day 0 of next month = last day of this month
+      } else if (selectedYear) {
+        // Year selected: use Dec 31 of that year (or yesterday if current year)
+        const y = parseInt(selectedYear);
+        const today = new Date();
+        if (y === today.getFullYear()) {
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
+          anchorLastDay = yesterday;
+        } else {
+          anchor = new Date(y, 11, 1); // Dec
+          anchorLastDay = new Date(y, 11, 31);
+        }
+      } else {
+        // Default: yesterday
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
+        anchorLastDay = yesterday;
+      }
+
+      const anchorYear = anchor.getFullYear();
+      const anchorMonth = anchor.getMonth(); // 0-indexed
+      const previousYear = anchorYear - 1;
+
+      // Format a date as YYYY-MM-DD
+      const fmt = d => d.toISOString().split('T')[0];
+
+      // YTD: Jan 1 → anchorLastDay, both years
+      const ytdPrevStart = `${previousYear}-01-01`;
+      const ytdPrevEnd = `${previousYear}-${String(anchorLastDay.getMonth() + 1).padStart(2, '0')}-${String(anchorLastDay.getDate()).padStart(2, '0')}`;
+      const ytdCurrStart = `${anchorYear}-01-01`;
+      const ytdCurrEnd = fmt(anchorLastDay);
+
+      // MTD: 1st of anchor month → anchorLastDay, both years
+      const mtdMonthStr = String(anchorMonth + 1).padStart(2, '0');
+      const mtdPrevStart = `${previousYear}-${mtdMonthStr}-01`;
+      const mtdPrevEnd = ytdPrevEnd;
+      const mtdCurrStart = `${anchorYear}-${mtdMonthStr}-01`;
+      const mtdCurrEnd = ytdCurrEnd;
+
+      // Calculate YTD
+      const ytdPrevOrders = orders.filter(o => o.orderDate >= ytdPrevStart && o.orderDate <= ytdPrevEnd);
+      const ytdCurrOrders = orders.filter(o => o.orderDate >= ytdCurrStart && o.orderDate <= ytdCurrEnd);
+
+      const ytdPrevSales = ytdPrevOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const ytdCurrSales = ytdCurrOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const ytdPrevVolume = ytdPrevOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+      const ytdCurrVolume = ytdCurrOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+
+      const ytdSalesChange = ytdPrevSales > 0 ? ((ytdCurrSales - ytdPrevSales) / ytdPrevSales) * 100 : 0;
+      const ytdVolumeChange = ytdPrevVolume > 0 ? ((ytdCurrVolume - ytdPrevVolume) / ytdPrevVolume) * 100 : 0;
+
+      // Calculate MTD
+      const mtdPrevOrders = orders.filter(o => o.orderDate >= mtdPrevStart && o.orderDate <= mtdPrevEnd);
+      const mtdCurrOrders = orders.filter(o => o.orderDate >= mtdCurrStart && o.orderDate <= mtdCurrEnd);
+
+      const mtdPrevSales = mtdPrevOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const mtdCurrSales = mtdCurrOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+      const mtdPrevVolume = mtdPrevOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+      const mtdCurrVolume = mtdCurrOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
+
+      const mtdSalesChange = mtdPrevSales > 0 ? ((mtdCurrSales - mtdPrevSales) / mtdPrevSales) * 100 : 0;
+      const mtdVolumeChange = mtdPrevVolume > 0 ? ((mtdCurrVolume - mtdPrevVolume) / mtdPrevVolume) * 100 : 0;
+
+      // Update YTD cards
+      document.getElementById('ytd-sales-prev-label').textContent = `${previousYear}:`;
+      document.getElementById('ytd-sales-curr-label').textContent = `${anchorYear}:`;
+      document.getElementById('ytd-sales-prev').textContent = '$' + ytdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('ytd-sales-curr').textContent = '$' + ytdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('ytd-sales-change').textContent = (ytdSalesChange >= 0 ? '+' : '') + ytdSalesChange.toFixed(1) + '%';
+      document.getElementById('ytd-sales-change').style.color = ytdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('ytd-volume-prev').textContent = ytdPrevVolume.toLocaleString();
+      document.getElementById('ytd-volume-curr').textContent = ytdCurrVolume.toLocaleString();
+      document.getElementById('ytd-volume-change').textContent = (ytdVolumeChange >= 0 ? '+' : '') + ytdVolumeChange.toFixed(1) + '%';
+      document.getElementById('ytd-volume-change').style.color = ytdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
+
+      // Update MTD cards
+      const anchorMonthName = monthNames[anchorMonth];
+      document.getElementById('mtd-sales-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}:`;
+      document.getElementById('mtd-sales-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}:`;
+      document.getElementById('mtd-sales-prev').textContent = '$' + mtdPrevSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('mtd-sales-curr').textContent = '$' + mtdCurrSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      document.getElementById('mtd-sales-change').textContent = (mtdSalesChange >= 0 ? '+' : '') + mtdSalesChange.toFixed(1) + '%';
+      document.getElementById('mtd-sales-change').style.color = mtdSalesChange >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('mtd-volume-prev-label').textContent = `${anchorMonthName} ${previousYear.toString().slice(2)}:`;
+      document.getElementById('mtd-volume-curr-label').textContent = `${anchorMonthName} ${anchorYear.toString().slice(2)}:`;
+      document.getElementById('mtd-volume-prev').textContent = mtdPrevVolume.toLocaleString();
+      document.getElementById('mtd-volume-curr').textContent = mtdCurrVolume.toLocaleString();
+      document.getElementById('mtd-volume-change').textContent = (mtdVolumeChange >= 0 ? '+' : '') + mtdVolumeChange.toFixed(1) + '%';
+      document.getElementById('mtd-volume-change').style.color = mtdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
+
+      // Generate rolling 13 months ending at anchor month
+      const months = [];
+      for (let i = 12; i >= 0; i--) {
+        const d = new Date(anchorYear, anchorMonth - i, 1);
+        months.push({
+          year: d.getFullYear(),
+          month: d.getMonth() + 1,
+          label: `${monthNames[d.getMonth()]} ${d.getFullYear().toString().slice(2)}`
+        });
+      }
+
+      // Calculate monthly data — use summary cache if available, else full orders
+      const monthlyData = months.map(m => {
+        const ym = `${m.year}-${String(m.month).padStart(2, '0')}`;
+        let sales, volume;
+        if (monthlySource[0]?._fromSummary) {
+          // Summary records already aggregated per SKU-month — just sum them
+          const recs = monthlySource.filter(s => s._yearMonth === ym);
+          sales  = recs.reduce((sum, s) => sum + s.itemTotal, 0);
+          volume = recs.reduce((sum, s) => sum + s.quantity,  0);
+        } else {
+          const monthOrders = monthlySource.filter(o => {
+            const orderMonth = parseInt(o.orderDate.split('-')[1]);
+            const orderYear  = parseInt(o.orderDate.split('-')[0]);
+            return orderYear === m.year && orderMonth === m.month;
+          });
+          sales  = monthOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
+          volume = monthOrders.reduce((sum, o) => sum + (o.quantity  || 0), 0);
+        }
+        return { ...m, sales, volume };
+      });
+
+      // Render monthly list
+      const monthlyList = document.getElementById('monthly-list');
+      monthlyList.innerHTML = monthlyData.map(m => `
+        <div style="display: flex; justify-content: space-between; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">
+          <span style="font-weight: 500;">${m.label}</span>
+          <div style="display: flex; gap: 1rem;">
+            <span>$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</span>
+            <span style="color: var(--text-secondary);">${m.volume} units</span>
+          </div>
+        </div>
+      `).join('');
+
+      // Render charts
+      if (svSalesChart) svSalesChart.destroy();
+      if (svVolumeChart) svVolumeChart.destroy();
+
+      const salesCtx = document.getElementById('sales-chart-sv').getContext('2d');
+      svSalesChart = new Chart(salesCtx, {
+        type: 'line',
+        data: {
+          labels: monthlyData.map(m => m.label),
+          datasets: [{
+            label: 'Sales ($)',
+            data: monthlyData.map(m => m.sales),
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { callback: value => '$' + value.toLocaleString() }
+            }
+          }
+        }
+      });
+
+      const volumeCtx = document.getElementById('volume-chart-sv').getContext('2d');
+      svVolumeChart = new Chart(volumeCtx, {
+        type: 'line',
+        data: {
+          labels: monthlyData.map(m => m.label),
+          datasets: [{
+            label: 'Volume (Units)',
+            data: monthlyData.map(m => m.volume),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { callback: value => value.toLocaleString() }
+            }
+          }
+        }
+      });
+    }
+
+
+    function shortenBrandName(brandName) {
+      const brandMap = {
+        'South of Kings': 'SOK',
+        'BrightWay Educational': 'BrightWay',
+        'Hubbard Scientific': 'Hubbard',
+        'MapShop State Maps': 'State Maps',
+        'Kappa': 'Kappa',
+        'Other': 'Other'
+      };
+      return brandMap[brandName] || brandName;
+    }
+
+    function parsePriceChanges(data) {
+      if (!data.values || data.values.length < 2) return [];
+      const headers = data.values[0].map(h => h.toLowerCase());
+      const dateIdx     = headers.indexOf('date');
+      const skuIdx      = headers.indexOf('sku');
+      const oldPriceIdx = headers.indexOf('old price');
+      const newPriceIdx = headers.indexOf('new price');
+      const changes = [];
+      for (let i = 1; i < data.values.length; i++) {
+        const row = data.values[i];
+        changes.push({
+          date:     row[dateIdx],
+          sku:      row[skuIdx],
+          oldPrice: parseFloat(row[oldPriceIdx]) || 0,
+          newPrice: parseFloat(row[newPriceIdx]) || 0
+        });
+      }
+      return changes.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
+    // ── SALES & VOLUME SUBTABS ────────────────────────────────────────────────
+
+    function showSVTab(tab) {
+      document.querySelectorAll('.sv-subtab').forEach(el => el.style.display = 'none');
+      document.querySelectorAll('#salesvolume-page .tab').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('sv-' + tab).style.display = 'block';
+      document.getElementById('sv-tab-' + tab).classList.add('active');
+
+      if (tab === 'priceimpact' && svAllProducts.length > 0) {
+        initPCI();
+      }
+    }
+
+    // ── PRICE CHANGE IMPACTS ──────────────────────────────────────────────────
+
+    // PCI charts stored on window (pciRollingRevChart, pciRollingUnitsChart, pciCumRevChart, pciCumUnitsChart)
+    let pciPriceChanges = []; // parsed from Sheets
+    let pciSkuMap = {};       // sku -> { brand, productName }
+
+    async function initPCI() {
+      if (!accessToken) return;
+      if (pciPriceChanges.length > 0) {
+        // Already loaded — just re-render table
+        renderPCIFilters();
+        loadPCITable();
+        return;
+      }
+
+      try {
+        const [priceChangesRes, productsRes] = await Promise.all([
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/PriceChanges`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          }),
+          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          })
+        ]);
+
+        if (!priceChangesRes.ok) {
+          document.getElementById('pci-table-content').innerHTML =
+            '<div style="padding:4rem;text-align:center;color:var(--error);">PriceChanges sheet not found.</div>';
+          return;
+        }
+
+        const [pcData, prodData] = await Promise.all([priceChangesRes.json(), productsRes.json()]);
+        pciPriceChanges = parsePriceChanges(pcData); // reuse existing parser
+
+        // Build sku map from products sheet
+        const products = parseProducts(prodData);
+        pciSkuMap = {};
+        products.forEach(p => { pciSkuMap[p.sku] = { brand: p.brand, productName: p.name }; });
+
+        renderPCIFilters();
+        loadPCITable();
+
+      } catch (err) {
+        console.error('PCI init error:', err);
+        document.getElementById('pci-table-content').innerHTML =
+          `<div style="padding:4rem;text-align:center;color:var(--error);">Error: ${err.message}</div>`;
+      }
+    }
+
+    function renderPCIFilters() {
+      const brands = [...new Set(
+        pciPriceChanges.map(pc => pciSkuMap[pc.sku]?.brand).filter(Boolean)
+      )].sort();
+
+      const brandSelect = document.getElementById('pci-brand-filter');
+      brandSelect.innerHTML = '<option value="all">All Brands</option>';
+      brands.forEach(b => brandSelect.innerHTML += `<option value="${b}">${b}</option>`);
+
+      filterPCIProducts();
+    }
+
+    function filterPCIProducts() {
+      const selectedBrand = document.getElementById('pci-brand-filter').value;
+      const productSelect = document.getElementById('pci-product-filter');
+
+      const productNames = [...new Set(
+        pciPriceChanges
+          .filter(pc => selectedBrand === 'all' || pciSkuMap[pc.sku]?.brand === selectedBrand)
+          .map(pc => pciSkuMap[pc.sku]?.productName)
+          .filter(Boolean)
+      )].sort();
+
+      productSelect.innerHTML = '<option value="all">All Products</option>';
+      productNames.forEach(n => productSelect.innerHTML += `<option value="${n}">${n}</option>`);
+
+      filterPCIChanges();
+    }
+
+    // Populates the "Change to Analyze" dropdown filtered by current product selection
+    function filterPCIChanges() {
+      const productFilter = document.getElementById('pci-product-filter').value;
+      const changeSelect = document.getElementById('pci-change-select');
+      const windowDays = parseInt(document.getElementById('pci-window').value);
+
+      const filtered = pciPriceChanges.filter(pc => {
+        const info = pciSkuMap[pc.sku];
+        if (!info) return false;
+        if (productFilter !== 'all' && info.productName !== productFilter) return false;
+        return true;
+      });
+
+      changeSelect.innerHTML = '<option value="">Select a price change...</option>';
+      // Store filtered results on window so loadPCITable can use same set
+      window._pciFilteredForSelect = filtered;
+      filtered.forEach((pc, i) => {
+        const name = pciSkuMap[pc.sku]?.productName || pc.sku;
+        changeSelect.innerHTML += `<option value="${i}">${pc.date} — ${name} ($${pc.oldPrice.toFixed(2)} → $${pc.newPrice.toFixed(2)})</option>`;
+      });
+
+      // Default to the most recent change (index 0 — list is sorted newest first)
+      if (filtered.length > 0) changeSelect.value = '0';
+
+      loadPCITable();
+    }
+
+    function loadPCITable() {
+      const windowDays = parseInt(document.getElementById('pci-window').value);
+      const container = document.getElementById('pci-table-content');
+
+      if (!svOrdersData.length) {
+        container.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--text-secondary);">No orders data loaded yet. Run a backfill first.</div>';
+        return;
+      }
+
+      // Use the same filtered+ordered list that the dropdown was built from
+      // so that dropdown index i always matches _pciResults[i]
+      const changes = window._pciFilteredForSelect || [];
+
+      // Calculate before/after metrics from orders data
+      const yesterday = offsetDate(new Date().toISOString().split('T')[0], -1);
+
+      // Build a per-SKU list of all change dates (sorted ascending) for next-change lookup
+      const skuChangeDates = {};
+      pciPriceChanges.forEach(pc => {
+        if (!skuChangeDates[pc.sku]) skuChangeDates[pc.sku] = [];
+        skuChangeDates[pc.sku].push(pc.date);
+      });
+      Object.values(skuChangeDates).forEach(dates => dates.sort());
+
+      const results = changes.map(pc => {
+        const changeDate = pc.date;
+
+        // Find the next change for this SKU after this change date
+        const nextChange = (skuChangeDates[pc.sku] || []).find(d => d > changeDate) || null;
+        // afterEnd = day before next change, or yesterday — whichever is earlier
+        const afterEnd = nextChange
+          ? (offsetDate(nextChange, -1) < yesterday ? offsetDate(nextChange, -1) : yesterday)
+          : yesterday;
+
+        const beforeStart = offsetDate(changeDate, -windowDays);
+        const beforeEnd   = offsetDate(changeDate, -1);
+        const afterStart  = changeDate;
+
+        const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
+        const after  = calcOrderMetrics(svOrdersData, pc.sku, afterStart, afterEnd, windowDays);
+        const daysAfter = daysBetween(changeDate, offsetDate(afterEnd, 1)); // exclusive end
+
+        return {
+          date: pc.date,
+          sku: pc.sku,
+          brand: pciSkuMap[pc.sku]?.brand || 'Unknown',
+          productName: pciSkuMap[pc.sku]?.productName || pc.sku,
+          oldPrice: pc.oldPrice,
+          newPrice: pc.newPrice,
+          changePercent: pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0,
+          nextChange,
+          afterEnd,
+          daysAfter,
+          before,
+          after
+        };
+      });
+
+      // Do NOT sort — order must stay identical to _pciFilteredForSelect so dropdown indices match
+      window._pciResults = results;
+
+      if (results.length === 0) {
+        container.innerHTML = '<div style="padding:4rem;text-align:center;color:var(--text-secondary);">No price changes found for selected filters.</div>';
+        return;
+      }
+
+      // Render table (Revenue + Units only, no Margin/Profit)
+      let html = `
+        <div style="overflow-x: auto;">
+          <table class="data-table" style="width:100%; font-family:'Roboto Mono',monospace; font-size:0.85rem;">
+            <thead>
+              <tr>
+                <th colspan="6" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Price Change</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Before (${windowDays}d)</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">After (since change)</th>
+                <th colspan="2" style="text-align:center;padding:0.75rem;">Impact</th>
+              </tr>
+              <tr style="background:var(--bg-secondary);">
+                <th style="text-align:left;padding:0.5rem;">Date</th>
+                <th style="text-align:left;padding:0.5rem;">Brand</th>
+                <th style="text-align:left;padding:0.5rem;">Product</th>
+                <th style="text-align:center;padding:0.5rem;">Old $</th>
+                <th style="text-align:center;padding:0.5rem;">New $</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Δ%</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue Δ</th>
+                <th style="text-align:center;padding:0.5rem;">Units Δ</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+      results.forEach((r, i) => {
+        const revChange = r.before.revenue > 0 ? ((r.after.revenue - r.before.revenue) / r.before.revenue * 100) : 0;
+        const unitsChange = r.before.units > 0 ? ((r.after.units - r.before.units) / r.before.units * 100) : 0;
+        const revColor = revChange > 0 ? 'var(--success)' : revChange < 0 ? 'var(--error)' : 'inherit';
+        const unitsColor = unitsChange > 0 ? 'var(--success)' : unitsChange < 0 ? 'var(--error)' : 'inherit';
+        const rowStyle = `cursor:pointer; transition: background 0.15s;`;
+
+        html += `
+          <tr style="${rowStyle}" onclick="selectPCIChange(${i})" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
+            <td style="padding:0.75rem;white-space:nowrap;">${r.date}</td>
+            <td style="padding:0.75rem;">${shortenBrandName(r.brand)}</td>
+            <td style="padding:0.75rem;">${r.productName}</td>
+            <td style="text-align:center;padding:0.75rem;">$${r.oldPrice.toFixed(2)}</td>
+            <td style="text-align:center;padding:0.75rem;">$${r.newPrice.toFixed(2)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
+            <td style="text-align:center;padding:0.75rem;">$${formatNumber(r.before.revenue)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.before.units}</td>
+            <td style="text-align:center;padding:0.75rem;">$${formatNumber(r.after.revenue)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.after.units}</td>
+            <td style="text-align:center;padding:0.75rem;color:${revColor};font-weight:500;">${revChange > 0 ? '+' : ''}${revChange.toFixed(1)}%</td>
+            <td style="text-align:center;padding:0.75rem;color:${unitsColor};font-weight:500;">${unitsChange > 0 ? '+' : ''}${unitsChange.toFixed(1)}%</td>
+          </tr>`;
+      });
+
+      html += `</tbody></table></div>`;
+      container.innerHTML = html;
+
+      // If a change was already selected, re-render its charts with the new window
+      const currentIdx = document.getElementById('pci-change-select').value;
+      if (currentIdx !== '') renderPCICharts();
+    }
+
+    function selectPCIChange(index) {
+      const changeSelect = document.getElementById('pci-change-select');
+      changeSelect.value = index;
+      renderPCICharts();
+    }
+
+    function renderPCICharts() {
+      const index = parseInt(document.getElementById('pci-change-select').value);
+      if (isNaN(index) || index === '') return;
+
+      const r = window._pciResults[index];
+      const windowDays = parseInt(document.getElementById('pci-window').value);
+      if (!r) return;
+
+      // Recalculate metrics fresh using current windowDays
+      // "before" = windowDays back; "after" = change date → min(yesterday, day before next change)
+      const todayStr = new Date().toISOString().split('T')[0];
+      const yesterdayStr = offsetDate(todayStr, -1);
+      const beforeStart = offsetDate(r.date, -windowDays);
+      const beforeEnd   = offsetDate(r.date, -1);
+      const afterStart  = r.date;
+      // Re-derive afterEnd using the cached nextChange (window has no effect on after)
+      const afterEnd = r.nextChange
+        ? (offsetDate(r.nextChange, -1) < yesterdayStr ? offsetDate(r.nextChange, -1) : yesterdayStr)
+        : yesterdayStr;
+
+      const freshBefore = calcOrderMetrics(svOrdersData, r.sku, beforeStart, beforeEnd, windowDays);
+      const freshAfter  = calcOrderMetrics(svOrdersData, r.sku, afterStart, afterEnd, windowDays);
+
+      // Update summary cards
+      const daysBefore = windowDays;
+      const daysAfter = r.daysAfter;
+
+      const revBefore   = daysBefore > 0 ? freshBefore.revenue / daysBefore : 0;
+      const revAfter    = daysAfter  > 0 ? freshAfter.revenue  / daysAfter  : 0;
+      const unitsBefore = daysBefore > 0 ? freshBefore.units   / daysBefore : 0;
+      const unitsAfter  = daysAfter  > 0 ? freshAfter.units    / daysAfter  : 0;
+
+      const revChangePct   = revBefore   > 0 ? ((revAfter   - revBefore)   / revBefore   * 100) : 0;
+      const unitsChangePct = unitsBefore > 0 ? ((unitsAfter - unitsBefore) / unitsBefore * 100) : 0;
+
+      document.getElementById('pci-summary-rev-before').textContent = '$' + revBefore.toFixed(2);
+      document.getElementById('pci-summary-rev-after').textContent = '$' + revAfter.toFixed(2);
+      document.getElementById('pci-summary-rev-change').textContent = (revChangePct >= 0 ? '+' : '') + revChangePct.toFixed(1) + '%';
+      document.getElementById('pci-summary-rev-change').style.color = revChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pci-summary-units-before').textContent = unitsBefore.toFixed(1);
+      document.getElementById('pci-summary-units-after').textContent = unitsAfter.toFixed(1);
+      document.getElementById('pci-summary-units-change').textContent = (unitsChangePct >= 0 ? '+' : '') + unitsChangePct.toFixed(1) + '%';
+      document.getElementById('pci-summary-units-change').style.color = unitsChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pci-summary-price').textContent = `$${r.oldPrice.toFixed(2)} → $${r.newPrice.toFixed(2)}`;
+      document.getElementById('pci-summary-price-pct').textContent = (r.changePercent >= 0 ? '+' : '') + r.changePercent.toFixed(1) + '%';
+
+      document.getElementById('pci-summary-days').textContent = r.daysAfter;
+      if (r.nextChange) {
+        document.getElementById('pci-summary-days').closest('.card').querySelector('div:first-child').textContent = 'Days to Next Change';
+        document.getElementById('pci-summary-change-date').textContent = `${r.date} → ${r.nextChange}`;
+      } else {
+        document.getElementById('pci-summary-days').closest('.card').querySelector('div:first-child').textContent = 'Days Since Change';
+        document.getElementById('pci-summary-change-date').textContent = `Changed ${r.date}`;
+      }
+
+      // Build daily data series: windowDays before + days until afterEnd
+      const startDate = offsetDate(r.date, -windowDays);
+      const endDate = afterEnd;
+      const dailyLabels = [];
+      const dailyRevenue = [];
+      const dailyUnits = [];
+
+      let cursor = startDate;
+      while (cursor <= endDate) {
+        const dayOrders = svOrdersData.filter(o => o.sku === r.sku && o.orderDate === cursor);
+        dailyLabels.push(cursor.slice(5)); // MM-DD
+        dailyRevenue.push(dayOrders.reduce((s, o) => s + (o.itemTotal || 0), 0));
+        dailyUnits.push(dayOrders.reduce((s, o) => s + (o.quantity || 0), 0));
+        cursor = offsetDate(cursor, 1);
+      }
+
+      const changeIdx = windowDays; // index of change date in the series
+
+      // 7-day centred rolling average
+      const rolling = (arr, w) => arr.map((_, i) => {
+        const slice = arr.slice(Math.max(0, i - Math.floor(w / 2)), Math.min(arr.length, i + Math.floor(w / 2) + 1));
+        return slice.reduce((a, b) => a + b, 0) / slice.length;
+      });
+      const rollingRev   = rolling(dailyRevenue, 7);
+      const rollingUnits = rolling(dailyUnits, 7);
+
+
+      // Annotation: subtle white dashed vertical line at change date
+      const annotationLine = {
+        type: 'line',
+        xMin: changeIdx - 0.5,
+        xMax: changeIdx - 0.5,
+        borderColor: 'rgba(255, 255, 255, 0.35)',
+        borderWidth: 1.5,
+        borderDash: [4, 4]
+      };
+
+      const mkOpts = (isCurrency) => ({
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          annotation: { annotations: { changeDay: annotationLine } }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { callback: v => isCurrency ? '$' + v.toLocaleString() : v.toLocaleString() }
+          }
+        }
+      });
+
+      const mkDatasets = (rolling, color) => ([
+        { data: rolling, borderColor: color, backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'), tension: 0.4, pointRadius: 0, borderWidth: 2 }
+      ]);
+
+      // Destroy old charts
+      ['pciRollingRevChart','pciRollingUnitsChart'].forEach(k => {
+        if (window[k]) { window[k].destroy(); window[k] = null; }
+      });
+
+      window.pciRollingRevChart = new Chart(document.getElementById('pci-rolling-rev-chart').getContext('2d'), {
+        type: 'line',
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingRev, 'rgb(34, 197, 94)') },
+        options: mkOpts(true)
+      });
+
+      window.pciRollingUnitsChart = new Chart(document.getElementById('pci-rolling-units-chart').getContext('2d'), {
+        type: 'line',
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingUnits, 'rgb(59, 130, 246)') },
+        options: mkOpts(false)
+      });
+    }
+
+    // Returns { revenue, units } for a SKU within a date range from orders data
+    function calcOrderMetrics(orders, sku, startDate, endDate, windowDays) {
+      const filtered = orders.filter(o => o.sku === sku && o.orderDate >= startDate && o.orderDate <= endDate);
+      return {
+        revenue: filtered.reduce((s, o) => s + (o.itemTotal || 0), 0),
+        units: filtered.reduce((s, o) => s + (o.quantity || 0), 0)
+      };
+    }
+
+    // Returns a YYYY-MM-DD string offset by N days from a YYYY-MM-DD string
+    function offsetDate(dateStr, days) {
+      const d = new Date(dateStr + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().split('T')[0];
+    }
+
+    function daysBetween(dateStrA, dateStrB) {
+      const a = new Date(dateStrA + 'T12:00:00Z');
+      const b = new Date(dateStrB + 'T12:00:00Z');
+      return Math.max(0, Math.round((b - a) / (1000 * 60 * 60 * 24)));
+    }
+
+
+    // ── PCI EXPORT ────────────────────────────────────────────────────────────
+
+    function togglePCIBrandDropdown(e) {
+      e.stopPropagation();
+      const menu = document.getElementById('pci-export-brand-menu');
+      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    }
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', () => {
+      const menu = document.getElementById('pci-export-brand-menu');
+      if (menu) menu.style.display = 'none';
+    });
+
+    function populatePCIExportBrands() {
+      const container = document.getElementById('pci-export-brand-checkboxes');
+      if (!container) return;
+      // Use svAllProducts (loaded on page open) so brands are available immediately
+      const brands = [...new Set(svAllProducts.map(p => p.brand).filter(Boolean))].sort();
+      container.innerHTML = brands.map(b => `
+        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem;">
+          <input type="checkbox" class="pci-export-brand-cb" value="${b}" checked onchange="updatePCIBrandLabel()">
+          ${b}
+        </label>`).join('');
+      updatePCIBrandLabel();
+    }
+
+    function updatePCIBrandLabel() {
+      const total = document.querySelectorAll('.pci-export-brand-cb').length;
+      const checked = document.querySelectorAll('.pci-export-brand-cb:checked').length;
+      document.getElementById('pci-export-brand-label').textContent =
+        checked === total ? 'All brands' : checked === 0 ? 'No brands' : `${checked} brand${checked > 1 ? 's' : ''}`;
+    }
+
+    function pciSelectAllBrands() {
+      document.querySelectorAll('.pci-export-brand-cb').forEach(cb => cb.checked = true);
+      updatePCIBrandLabel();
+    }
+
+    function pciSelectNoBrands() {
+      document.querySelectorAll('.pci-export-brand-cb').forEach(cb => cb.checked = false);
+      updatePCIBrandLabel();
+    }
+
+    function exportPCIAnalysis() {
+      const feedback = document.getElementById('pci-export-feedback');
+      feedback.style.display = 'none';
+
+      const startDate = document.getElementById('pci-export-start').value;
+      const endDate   = document.getElementById('pci-export-end').value;
+      const windowDays = parseInt(document.getElementById('pci-export-window').value);
+
+      if (!startDate || !endDate) {
+        showFeedback(feedback, 'error', '⚠ Please select both a start and end date');
+        return;
+      }
+
+      const selectedBrands = new Set(
+        Array.from(document.querySelectorAll('.pci-export-brand-cb:checked')).map(cb => cb.value)
+      );
+      if (selectedBrands.size === 0) {
+        showFeedback(feedback, 'error', '⚠ Please select at least one brand');
+        return;
+      }
+
+      if (!pciPriceChanges.length) {
+        showFeedback(feedback, 'error', '⚠ Price change data not loaded yet — open the Price Change Impacts tab first');
+        return;
+      }
+
+      // Build per-SKU sorted change dates for next-change lookup
+      const skuChangeDates = {};
+      pciPriceChanges.forEach(pc => {
+        if (!skuChangeDates[pc.sku]) skuChangeDates[pc.sku] = [];
+        skuChangeDates[pc.sku].push(pc.date);
+      });
+      Object.values(skuChangeDates).forEach(dates => dates.sort());
+
+      const yesterday = offsetDate(new Date().toISOString().split('T')[0], -1);
+
+      // Filter price changes to the requested date range + brands
+      const rows = pciPriceChanges
+        .filter(pc => {
+          const info = pciSkuMap[pc.sku];
+          if (!info) return false;
+          if (!selectedBrands.has(info.brand)) return false;
+          if (pc.date < startDate || pc.date > endDate) return false;
+          return true;
+        })
+        .map(pc => {
+          const info = pciSkuMap[pc.sku] || {};
+          const nextChange = (skuChangeDates[pc.sku] || []).find(d => d > pc.date) || null;
+          const afterEnd = nextChange
+            ? (offsetDate(nextChange, -1) < yesterday ? offsetDate(nextChange, -1) : yesterday)
+            : yesterday;
+
+          const beforeStart = offsetDate(pc.date, -windowDays);
+          const beforeEnd   = offsetDate(pc.date, -1);
+
+          const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
+          const after  = calcOrderMetrics(svOrdersData, pc.sku, pc.date, afterEnd, windowDays);
+          const daysAfter = daysBetween(pc.date, offsetDate(afterEnd, 1));
+
+          const revChange   = before.revenue > 0 ? ((after.revenue   - before.revenue)   / before.revenue   * 100) : 0;
+          const unitsChange = before.units   > 0 ? ((after.units     - before.units)     / before.units     * 100) : 0;
+          const changePercent = pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0;
+
+          return [
+            pc.date,
+            info.brand || '',
+            info.productName || pc.sku,
+            pc.sku,
+            pc.oldPrice.toFixed(2),
+            pc.newPrice.toFixed(2),
+            changePercent.toFixed(1) + '%',
+            windowDays,
+            daysAfter,
+            before.revenue.toFixed(2),
+            before.units,
+            after.revenue.toFixed(2),
+            after.units,
+            revChange.toFixed(1) + '%',
+            unitsChange.toFixed(1) + '%',
+            nextChange || ''
+          ];
+        });
+
+      if (rows.length === 0) {
+        showFeedback(feedback, 'error', '⚠ No price changes found for the selected criteria');
+        return;
+      }
+
+      const headers = [
+        'Change Date', 'Brand', 'Product', 'SKU',
+        'Old Price', 'New Price', 'Price Change %',
+        'Before Window (days)', 'After Window (days)',
+        'Before Revenue', 'Before Units',
+        'After Revenue', 'After Units',
+        'Revenue Change %', 'Units Change %',
+        'Next Change Date'
+      ];
+
+      const csv = [headers, ...rows]
+        .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `price-change-analysis-${startDate}-to-${endDate}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showFeedback(feedback, 'success', `✓ Exported ${rows.length} price change${rows.length !== 1 ? 's' : ''}`);
+    }
+
+
+    // ── ORDERS BACKFILL + SYNC ────────────────────────────────────────────────
+
+    // Runs day-by-day from the browser to avoid Vercel's 60s function timeout.
+    async function runOrdersBackfill() {
+      if (!accessToken) { alert('Please sign in first.'); return; }
+
+      const startDate = document.getElementById('backfill-start').value;
+      const endDate   = document.getElementById('backfill-end').value;
+
+      if (!startDate || !endDate) { alert('Please select a start and end date.'); return; }
+      if (startDate > endDate)    { alert('Start date must be before end date.'); return; }
+
+      const btn = document.getElementById('backfill-btn');
+      const log = document.getElementById('backfill-log');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      log.style.display = 'block';
+      log.innerHTML = '';
+
+      const addLine = (msg, color) => {
+        const el = document.createElement('div');
+        el.style.color = color || 'var(--text-primary)';
+        el.textContent = msg;
+        log.appendChild(el);
+        log.scrollTop = log.scrollHeight;
+      };
+
+      // Build list of all dates in range
+      const dates = [];
+      const cursor = new Date(startDate + 'T12:00:00Z');
+      const stop   = new Date(endDate   + 'T12:00:00Z');
+      while (cursor <= stop) {
+        dates.push(cursor.toISOString().split('T')[0]);
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+
+      addLine(`Fetching ${dates.length} day(s): ${startDate} → ${endDate}`, 'var(--text-secondary)');
+
+      let totalRecords = 0;
+      let errors = 0;
+
+      for (let i = 0; i < dates.length; i++) {
+        const date = dates[i];
+        try {
+          const res  = await fetch(`/api/orders?action=sync&date=${date}`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          const data = await res.json();
+
+          if (data.success) {
+            totalRecords += data.newRecords;
+            addLine(`✓ ${date} — ${data.newRecords} line items (${totalRecords} total, ${i + 1}/${dates.length})`, 'var(--success)');
+          } else {
+            errors++;
+            addLine(`⚠ ${date} — ${data.error}`, 'var(--error)');
+          }
+        } catch (err) {
+          errors++;
+          addLine(`⚠ ${date} — ${err.message}`, 'var(--error)');
+        }
+      }
+
+      if (errors === 0) {
+        addLine(`COMPLETE — ${totalRecords} order line items stored across ${dates.length} days`, 'var(--success)');
+      } else {
+        addLine(`DONE with ${errors} error(s) — ${totalRecords} line items stored`, 'var(--warning)');
+      }
+
+      btn.disabled   = false;
+      btn.textContent = 'Fetch Orders';
+
+      // Rebuild cache then reload the page data
+      await rebuildMonthlySummaryCache();
+      await loadSalesVolumeData();
+    }
+
+    async function testOrdersSync() {
+      if (!accessToken) { alert('Please sign in first.'); return; }
+
+      const log = document.getElementById('backfill-log');
+      log.style.display = 'block';
+      log.innerHTML = '<div style="color:var(--text-secondary);">Syncing yesterday…</div>';
+
+      try {
+        const res  = await fetch('/api/orders?action=sync', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          log.innerHTML = `<div style="color:var(--success);">✓ Sync complete — ${data.newRecords} order line items stored for ${data.date}</div>`;
+          await rebuildMonthlySummaryCache();
+          await loadSalesVolumeData();
+        } else {
+          log.innerHTML = `<div style="color:var(--error);">✗ Sync failed: ${data.error}</div>`;
+        }
+      } catch (err) {
+        log.innerHTML = `<div style="color:var(--error);">✗ Error: ${err.message}</div>`;
+      }
+    }
+
+    // ── MONTHLY SUMMARY CACHE ─────────────────────────────────────────────────
+    // Stores pre-aggregated { yearMonth, sku, brand, revenue, units } in Upstash
+    // so Monthly Overview loads in one KV read instead of 12+.
+
+    async function loadMonthlySummaryCache() {
+      try {
+        const res = await fetch('/api/orders?action=get-summary', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.summary || null;
+      } catch { return null; }
+    }
+
+    async function rebuildMonthlySummaryCache() {
+      try {
+        await fetch('/api/orders?action=rebuild-summary', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+      } catch (err) {
+        console.warn('Could not rebuild summary cache:', err.message);
+      }
+    }
+
+    // Update the persistent info blurb with the most recent order date
+    function updateSVDataBlurb(orders) {
+      const el = document.getElementById('sv-latest-date');
+      if (!el) return;
+      if (!orders || orders.length === 0) { el.textContent = 'No data loaded'; return; }
+      const latest = orders.reduce((max, o) => o.orderDate > max ? o.orderDate : max, '');
+      el.textContent = latest || '—';
+    }
