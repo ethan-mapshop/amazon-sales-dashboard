@@ -6,6 +6,47 @@
       total: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 }
     });
 
+    // Normalize the various date formats that appear in the sheets
+    // (ISO string, "Dec 1, 2025 12:07 AM PST" text, Excel serial number)
+    // down to a YYYY-MM-DD string so they can be max-compared lexically.
+    function toIsoDate(raw) {
+      if (raw == null || raw === '') return null;
+      if (typeof raw === 'number') {
+        const adjustedDays = Math.floor(raw) > 59 ? Math.floor(raw) - 1 : Math.floor(raw);
+        const d = new Date(Date.UTC(1899, 11, 30) + adjustedDays * 86400000);
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      }
+      const s = String(raw);
+      if (s.match(/^\d{4}-\d{2}-\d{2}/)) return s.substring(0, 10);
+      const textMatch = s.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+      if (textMatch) {
+        const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06', jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+        const m = months[textMatch[1].toLowerCase().substring(0, 3)];
+        if (m) return `${textMatch[3]}-${m}-${textMatch[2].padStart(2, '0')}`;
+      }
+      return null;
+    }
+
+    function findLatestSheetDate(values, dateHeaderName) {
+      if (!values || values.length < 2) return null;
+      const headers = values[0].map(h => String(h).toLowerCase());
+      const idx = headers.indexOf(dateHeaderName.toLowerCase());
+      if (idx === -1) return null;
+      let max = '';
+      for (let i = 1; i < values.length; i++) {
+        const iso = toIsoDate(values[i][idx]);
+        if (iso && iso > max) max = iso;
+      }
+      return max || null;
+    }
+
+    function updateOverviewDataBlurb(transactionsData, productAdsData) {
+      const txEl = document.getElementById('overview-latest-transaction');
+      const adEl = document.getElementById('overview-latest-adspend');
+      if (txEl) txEl.textContent = findLatestSheetDate(transactionsData?.values, 'date/time') || '—';
+      if (adEl) adEl.textContent = findLatestSheetDate(productAdsData?.values, 'date') || '—';
+    }
+
     async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null) {
       if (!accessToken) {
         alert('Please sign in first');
@@ -48,6 +89,8 @@
         const productsData = await productsRes.json();
         const productAdsData = productAdsRes.ok ? await productAdsRes.json() : { values: [] };
         const brandAdsData   = brandAdsRes.ok   ? await brandAdsRes.json()   : { values: [] };
+
+        updateOverviewDataBlurb(transactionsData, productAdsData);
         const shippingData   = shippingRes.ok   ? await shippingRes.json()   : { values: [] };
         
         const transactionsRows = transactionsData.values || [];
