@@ -192,33 +192,31 @@
       alert('Reset to default Client ID! Please sign in again.');
     }
     
-    updateAuthUI();
-    
-    // Tab switching (upload tabs + mapping tabs). Scope the sibling lookup to
-    // the nearest .page ancestor so the handler keeps working regardless of
-    // whether the tab row is wrapped in a .card (Upload) or sits directly
-    // inside a .page-header (Mapping, after the flat-page restyle).
-    document.querySelectorAll('.tab[data-tab]').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const scope = tab.closest('.page');
+    // Tab switching (Upload "data-tab" + Campaign Mapping "data-mapping-tab")
+    // via event delegation on document, so it doesn't matter what order the
+    // JS files load or how the DOM is structured. Each handler scopes its
+    // sibling-tab lookup to the nearest .page ancestor — that's the common
+    // container whether or not the tab row is wrapped in a .card.
+    document.addEventListener('click', (e) => {
+      const dataTab = e.target.closest('.tab[data-tab]');
+      if (dataTab) {
+        const scope = dataTab.closest('.page');
         if (!scope) return;
         scope.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.remove('active'));
         scope.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        const tabName = tab.dataset.tab;
-        scope.querySelector(`#${tabName}-content`)?.classList.add('active');
-      });
-    });
+        dataTab.classList.add('active');
+        scope.querySelector(`#${dataTab.dataset.tab}-content`)?.classList.add('active');
+        return;
+      }
 
-    document.querySelectorAll('.tab[data-mapping-tab]').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const scope = tab.closest('.page');
+      const mappingTab = e.target.closest('.tab[data-mapping-tab]');
+      if (mappingTab) {
+        const scope = mappingTab.closest('.page');
         if (!scope) return;
         scope.querySelectorAll('.tab[data-mapping-tab]').forEach(t => t.classList.remove('active'));
         scope.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        const tabName = tab.dataset.mappingTab;
-        scope.querySelector(`#${tabName}-mapping`)?.classList.add('active');
-      });
+        mappingTab.classList.add('active');
+        scope.querySelector(`#${mappingTab.dataset.mappingTab}-mapping`)?.classList.add('active');
+      }
     });
     
