@@ -30,9 +30,20 @@
     //   Refund quantity is negated so negative qty = unit returning.
     //   Fulfillment (Amazon/Seller) comes from the Products catalog lookup.
     //
+    //   ServiceFeeEventList — one derived row per FeeList entry with
+    //   type='ServiceFee' and {feeType, feeAmount}. FeeType routes via
+    //   SERVICE_FEE_LINE_MAP:
+    //     FBADisposalFee, CustomerReturnHRRUnitFee     → FBA Returns Fees
+    //     FBAInboundConvenienceFee                     → FBA Inbound Placement Fees
+    //     FBAInboundTransportationFee                  → FBA Inbound Shipping Costs
+    //     FBAStorageFee, FBALongTermStorageFee         → FBA Inventory Storage Fees
+    //     Subscription                                 → Other Expenses
+    //   Unknown FeeTypes fall back to Other Expenses and get listed in a
+    //   yellow warning block above the report for the user to triage.
+    //
     // Not wired yet (waiting on user schema):
-    //   ServiceFeeEventList, AdjustmentEventList, ChargebackEventList,
-    //   GuaranteeClaimEventList, RetrochargeEventList.
+    //   AdjustmentEventList, ChargebackEventList, GuaranteeClaimEventList,
+    //   RetrochargeEventList.
     //   Ad spend + shipping still read from the Sheets tabs until those
     //   migrations ship.
 
@@ -162,8 +173,8 @@
       try {
         const { pages, products, lastSynced } = await _fetchUpstashInputs(startDate, endDate);
         const rows = _deriveTransactionRows(pages, startDate, endDate);
-        const { statement, missingSkus } = _buildStatement(rows, products);
-        _renderUpstashStatement(container, { statement, missingSkus, rows, lastSynced, startDate, endDate });
+        const { statement, missingSkus, unmappedFees } = _buildStatement(rows, products);
+        _renderUpstashStatement(container, { statement, missingSkus, unmappedFees, rows, lastSynced, startDate, endDate });
       } catch (err) {
         console.error('Upstash overview failed:', err);
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
@@ -225,8 +236,42 @@
         for (const ev of (page.RefundEventList || [])) {
           _pushEventItemRows(rows, ev, 'Refund', ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
         }
+        for (const ev of (page.ServiceFeeEventList || [])) {
+          _pushServiceFeeRows(rows, ev, startDate, endDate);
+        }
       }
       return rows;
+    }
+
+    // ServiceFeeEvent has no items — just a FeeList at the event level.
+    // Emit one row per FeeList entry, carrying FeeType and FeeAmount
+    // through verbatim. Routing to the Expense line happens in
+    // _buildStatement using the SERVICE_FEE_LINE_MAP.
+    function _pushServiceFeeRows(rows, ev, startDate, endDate) {
+      const date = (ev.PostedDate || '').substring(0, 10);
+      if (!date || date < startDate || date > endDate) return;
+      const base = {
+        type: 'ServiceFee',
+        orderId: ev.AmazonOrderId || '',
+        date,
+        sku: _normalizeSku(ev.SellerSKU),
+        qty: 0,
+        sale: 0, otherCharges: 0, fbaFees: 0, transactionFees: 0, promotions: 0
+      };
+      const feeList = ev.FeeList || [];
+      if (feeList.length === 0) {
+        // Still emit a placeholder row so the derived CSV reflects every
+        // event — otherwise empty-FeeList events vanish from the audit view.
+        rows.push({ ...base, feeType: ev.FeeReason || '', feeAmount: 0 });
+        return;
+      }
+      for (const f of feeList) {
+        rows.push({
+          ...base,
+          feeType: f.FeeType || '',
+          feeAmount: _amount(f.FeeAmount)
+        });
+      }
     }
 
     function _pushEventItemRows(rows, ev, type, items, qtySign, startDate, endDate) {
@@ -347,10 +392,25 @@
     const STATEMENT_EXPENSE_LINES = [
       'FBM Product Costs', 'FBM Transaction Fees', 'FBM Shipping Costs', 'FBM Ad Spend',
       'FBA Product Costs', 'FBA Transaction Fees', 'FBA Fees',
+      'FBA Returns Fees',
       'FBA Inbound Placement Fees', 'FBA Inbound Shipping Costs',
       'FBA Inventory Storage Fees', 'FBA Inventory Reimbursement', 'FBA Ad Spend',
       'Other Expenses', 'Unallocated Ad Spend'
     ];
+
+    // ServiceFeeEvent FeeType → Expense line item. See the user-supplied
+    // mapping for ShipmentEvent / RefundEvent — same format extended.
+    // Anything not in this map falls into "Other Expenses" so nothing is
+    // silently lost; unmapped types are logged to the console for review.
+    const SERVICE_FEE_LINE_MAP = {
+      FBADisposalFee:               'FBA Returns Fees',
+      CustomerReturnHRRUnitFee:     'FBA Returns Fees',
+      FBAInboundConvenienceFee:     'FBA Inbound Placement Fees',
+      FBAInboundTransportationFee:  'FBA Inbound Shipping Costs',
+      FBAStorageFee:                'FBA Inventory Storage Fees',
+      FBALongTermStorageFee:        'FBA Inventory Storage Fees',
+      Subscription:                 'Other Expenses'
+    };
 
     // Decode HTML-entity-encoded ampersands that SP-API sometimes returns
     // in SellerSKU strings ("&amp;" → "&"). The Products catalog stores
@@ -372,7 +432,27 @@
         else if (amount < 0) statement[section][line].debit += Math.abs(amount);
       };
 
+      const unmappedServiceFeeTypes = new Map(); // feeType → running total
+
       for (const r of rows) {
+        // ServiceFee rows route by FeeType → Expense line. They don't
+        // depend on fulfillment or the Products catalog.
+        if (r.type === 'ServiceFee') {
+          const line = SERVICE_FEE_LINE_MAP[r.feeType];
+          if (!line) {
+            // Unknown FeeType: bucket into Other Expenses so the money
+            // isn't lost, but keep a running tally for a warning block.
+            add('Other Expenses', 'expenses', r.feeAmount);
+            unmappedServiceFeeTypes.set(
+              r.feeType || '(empty)',
+              (unmappedServiceFeeTypes.get(r.feeType || '(empty)') || 0) + r.feeAmount
+            );
+          } else {
+            add(line, 'expenses', r.feeAmount);
+          }
+          continue;
+        }
+
         const prod = products[r.sku];
         if (!prod) {
           if (!missing.has(r.sku)) missing.set(r.sku, new Set());
@@ -411,31 +491,68 @@
         orderCount: orders.size,
         sampleOrderIds: [...orders].slice(0, 3)
       }));
-      return { statement, missingSkus };
+      const unmappedFees = [...unmappedServiceFeeTypes.entries()]
+        .map(([feeType, total]) => ({ feeType, total }))
+        .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+      return { statement, missingSkus, unmappedFees };
     }
 
     // ─── RENDER ─────────────────────────────────────────────────────────
 
-    function _renderUpstashStatement(container, { statement, missingSkus, rows, lastSynced, startDate, endDate }) {
+    function _renderUpstashStatement(container, { statement, missingSkus, unmappedFees, rows, lastSynced, startDate, endDate }) {
       // Delegate to the existing full renderer — it draws both the
       // traditional Income/Expenses tables AND the FBM/FBA/Total
       // Profitability Breakdown panels on the right. Keeping that behavior
       // intact is the whole point of the drop-in replacement.
       renderFinancialStatement(statement, startDate, endDate, container, null);
 
-      // Prepend the Upstash-specific context (row count, last-synced, and
-      // the missing-SKU warning) so the user can see at a glance how many
-      // rows were derived and whether any were skipped.
+      // Prepend Upstash-specific context: row count, last-synced, and any
+      // warnings (missing SKUs, unmapped ServiceFee FeeTypes) above the
+      // standard Income / Expenses / Breakdown tables.
       const syncLine = lastSynced
         ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Last synced: ${_formatSyncTime(lastSynced)}</div>`
         : '';
       const countLine = `
         <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds)
+          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds + Service Fees)
         </div>
       `;
-      const warning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
-      container.innerHTML = syncLine + countLine + warning + container.innerHTML;
+      const missingWarning  = missingSkus.length  > 0 ? _renderMissingSkuWarning(missingSkus)   : '';
+      const feeWarning      = unmappedFees && unmappedFees.length > 0 ? _renderUnmappedFeeWarning(unmappedFees) : '';
+      container.innerHTML = syncLine + countLine + missingWarning + feeWarning + container.innerHTML;
+    }
+
+    // ServiceFee FeeTypes we don't have a rule for get bucketed into
+    // "Other Expenses" and listed here so the user can decide where they
+    // should go and extend SERVICE_FEE_LINE_MAP. Sorted by absolute value
+    // descending so the financially-loudest ones surface first.
+    function _renderUnmappedFeeWarning(unmapped) {
+      const fmt = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const rows = unmapped.map(u => `
+        <tr>
+          <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(u.feeType)}</td>
+          <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(u.total)}</td>
+        </tr>
+      `).join('');
+      return `
+        <div style="background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem;">
+          <div style="font-weight: 600; color: var(--warning); margin-bottom: 0.5rem;">
+            ⚠ ${unmapped.length} unmapped ServiceFee FeeType${unmapped.length === 1 ? '' : 's'} — routed to Other Expenses
+          </div>
+          <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+            These FeeTypes aren't in the SERVICE_FEE_LINE_MAP yet. Their amounts are summed into the Other Expenses line so nothing's lost; tell me where each one should route and I'll update the map.
+          </div>
+          <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr>
+                <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">FeeType</th>
+                <th style="text-align: right; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
     }
 
     function _renderMissingSkuWarning(missing) {
@@ -497,13 +614,15 @@
           alert('No transaction rows in range — has this period been synced?');
           return;
         }
-        const headers = ['type', 'order id', 'date', 'sku', 'qty', 'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions'];
+        const headers = ['type', 'order id', 'date', 'sku', 'qty', 'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions', 'fee type', 'fee amount'];
         const lines = [headers.map(_csvCell).join(',')];
         for (const r of rows) {
           lines.push([
             r.type, r.orderId, r.date, r.sku, r.qty,
             _round2(r.sale), _round2(r.otherCharges),
-            _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions)
+            _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions),
+            r.feeType || '',
+            r.feeAmount != null ? _round2(r.feeAmount) : ''
           ].map(_csvCell).join(','));
         }
         _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), filename);

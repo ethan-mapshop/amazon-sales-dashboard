@@ -1525,6 +1525,7 @@
           'FBA Product Costs': { debit: 0, credit: 0 },
           'FBA Transaction Fees': { debit: 0, credit: 0 },
           'FBA Fees': { debit: 0, credit: 0 },
+          'FBA Returns Fees': { debit: 0, credit: 0 },
           'FBA Inbound Placement Fees': { debit: 0, credit: 0 },
           'FBA Inbound Shipping Costs': { debit: 0, credit: 0 },
           'FBA Inventory Storage Fees': { debit: 0, credit: 0 },
