@@ -305,3 +305,56 @@
       const rows = Object.entries(mappings).map(([campaign, brand]) => [campaign, brand]);
       return { values: [headers, ...rows] };
     }
+
+    // ─── CSV EXPORT ──────────────────────────────────────────────────────
+    // Dumps whatever the /api/transactions endpoint returns for the
+    // currently-selected period as a CSV file — same columns as the
+    // Sheets Transactions tab. Lets you eyeball what SP-API produced and
+    // diff against the Sheets version to guide mapping corrections.
+
+    async function exportMonthlyUpstashCSV() {
+      const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
+      const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
+      if (isNaN(month) || isNaN(year)) return;
+      const yyyyMM = `${year}-${String(month + 1).padStart(2, '0')}`;
+      await _downloadTransactionsCSV(`/api/transactions?action=get&month=${yyyyMM}`, `transactions-${yyyyMM}.csv`);
+    }
+
+    async function exportYTDUpstashCSV() {
+      const year = document.getElementById('ytd-upstash-year-select').value;
+      if (!year) return;
+      const url = `/api/transactions?action=get-range&startMonth=${year}-01&endMonth=${year}-12`;
+      await _downloadTransactionsCSV(url, `transactions-${year}-YTD.csv`);
+    }
+
+    async function _downloadTransactionsCSV(url, filename) {
+      if (!accessToken) { alert('Please sign in first'); return; }
+      try {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+        const data = await res.json();
+        const values = data.values || [];
+        if (values.length <= 1) {
+          alert('No transactions to export — has this period been synced?');
+          return;
+        }
+        const csv = values.map(row => row.map(_csvCell).join(',')).join('\r\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(href);
+      } catch (err) {
+        console.error('CSV export failed:', err);
+        alert(`Export failed: ${err.message}`);
+      }
+    }
+
+    function _csvCell(v) {
+      const s = v == null ? '' : String(v);
+      return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+    }

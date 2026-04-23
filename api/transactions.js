@@ -299,7 +299,10 @@ function inferFulfillmentLabel(item) {
 // per line item, collapsing the item's ItemChargeList + ItemFeeList into
 // the Amazon report's 7 money columns.
 function pushItemRows(rows, event, type, quantitySign, itemList, hint) {
-  const date = event.PostedDate || '';
+  // Emit YYYY-MM-DD only — loadOverviewData's date filter does
+  // `new Date(transDate + 'T00:00:00')`, which breaks on a full ISO
+  // timestamp. The Sheets Transactions tab stores just the date.
+  const date = (event.PostedDate || '').substring(0, 10);
   const orderId = event.AmazonOrderId || '';
 
   for (const item of (itemList || [])) {
@@ -330,7 +333,10 @@ function pushItemRows(rows, event, type, quantitySign, itemList, hint) {
 // categorizer routes them by description / type string. The type string is
 // chosen to match how Amazon's Transaction report labels these.
 function pushServiceFeeRow(rows, event) {
-  const date = event.PostedDate || '';
+  // Emit YYYY-MM-DD only — loadOverviewData's date filter does
+  // `new Date(transDate + 'T00:00:00')`, which breaks on a full ISO
+  // timestamp. The Sheets Transactions tab stores just the date.
+  const date = (event.PostedDate || '').substring(0, 10);
   const orderId = event.AmazonOrderId || '';
   const sku = event.SellerSKU || '';
   const description = event.FeeDescription || event.FeeReason || '';
@@ -364,7 +370,10 @@ function looksLikeFBAInventoryFee(desc) {
 // AdjustmentEvent covers inventory reimbursements and misc corrections.
 // Emit one row per adjustment item so per-SKU amounts don't get lost.
 function pushAdjustmentRows(rows, event) {
-  const date = event.PostedDate || '';
+  // Emit YYYY-MM-DD only — loadOverviewData's date filter does
+  // `new Date(transDate + 'T00:00:00')`, which breaks on a full ISO
+  // timestamp. The Sheets Transactions tab stores just the date.
+  const date = (event.PostedDate || '').substring(0, 10);
   const adjustmentType = event.AdjustmentType || '';
   const items = event.AdjustmentItemList || [];
   const isReimbursement = /reimburs/i.test(adjustmentType);
