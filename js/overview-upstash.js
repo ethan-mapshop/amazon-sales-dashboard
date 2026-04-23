@@ -5,27 +5,36 @@
     // iterating on the schema requires no re-sync — just a reload.
     //
     // Scope of what's wired right now:
-    //   ShipmentEventList — mapped per the ShipmentEvent mapping schema:
+    //   ShipmentEventList (type='Order') and RefundEventList (type='Refund')
+    //   — both mapped per the same schema:
     //     sale             ← ChargeType: Principal
+    //                          Orders  → FBM/FBA Sales
+    //                          Refunds → FBM/FBA Returns
     //     other charges    ← ChargeType: GiftWrap, Shipping, ShippingCharge,
-    //                                    + any non-tax ChargeType as fallback
+    //                                    ReturnShipping (Refunds), and any
+    //                                    non-tax ChargeType as fallback
     //     fba fees         ← FeeType: FBAPerOrderFulfillmentFee,
     //                                 FBAPerUnitFulfillmentFee,
-    //                                 FBAWeightBasedFee, or anything that
-    //                                 starts with "FBA"
+    //                                 FBAWeightBasedFee, or anything
+    //                                 starting with "FBA"
     //     transaction fees ← FeeType: Commission, FixedClosingFee,
     //                                 VariableClosingFee, GiftwrapChargeback,
     //                                 ShippingChargeback, DigitalServicesFee,
-    //                                 plus any unknown non-FBA FeeType
-    //     promotions       ← PromotionList[].PromotionAmount
-    //   Fulfillment (Amazon/Seller) comes from the Products catalog
-    //   lookup, NOT from fee heuristics.
+    //                                 RefundCommission, and any unknown
+    //                                 non-FBA FeeType
+    //     promotions       ← PromotionList / PromotionAdjustmentList
+    //                        PromotionAmount entries
+    //   Refund items live under ShipmentItemAdjustmentList with
+    //   ItemChargeAdjustmentList / ItemFeeAdjustmentList /
+    //   PromotionAdjustmentList — same shapes as their Order equivalents.
+    //   Refund quantity is negated so negative qty = unit returning.
+    //   Fulfillment (Amazon/Seller) comes from the Products catalog lookup.
     //
-    // Not wired yet (waiting on user schema): RefundEventList,
-    // ServiceFeeEventList, AdjustmentEventList, ChargebackEventList,
-    // GuaranteeClaimEventList, RetrochargeEventList.
-    // Ad spend + shipping still read from the Sheets tabs until those
-    // migrations ship.
+    // Not wired yet (waiting on user schema):
+    //   ServiceFeeEventList, AdjustmentEventList, ChargebackEventList,
+    //   GuaranteeClaimEventList, RetrochargeEventList.
+    //   Ad spend + shipping still read from the Sheets tabs until those
+    //   migrations ship.
 
     // ─── VIEW SWITCHING ─────────────────────────────────────────────────
 
@@ -152,7 +161,7 @@
 
       try {
         const { pages, products, lastSynced } = await _fetchUpstashInputs(startDate, endDate);
-        const rows = _deriveShipmentRows(pages, startDate, endDate);
+        const rows = _deriveTransactionRows(pages, startDate, endDate);
         const { statement, missingSkus } = _buildStatement(rows, products);
         _renderUpstashStatement(container, { statement, missingSkus, rows, lastSynced, startDate, endDate });
       } catch (err) {
@@ -199,54 +208,77 @@
       return { pages: tx.pages || [], products, lastSynced };
     }
 
-    // ─── SHIPMENTEVENT DERIVE ───────────────────────────────────────────
-    // Walk every ShipmentEvent page; emit one row per ShipmentItem per the
-    // schema documented at the top of this file. Filter by date so a
-    // YTD-range fetch only counts items posted within the window.
+    // ─── TRANSACTION DERIVE ─────────────────────────────────────────────
+    // Walk both ShipmentEventList (type='Order') and RefundEventList
+    // (type='Refund') and emit one row per item per the schema. Refund
+    // items live in ShipmentItemAdjustmentList with charge/fee/promotion
+    // lists named *AdjustmentList* — the sum helpers accept either form.
+    // Refund quantity is negated so it reads like the Amazon Transaction
+    // report convention (negative qty = unit coming back in).
 
-    function _deriveShipmentRows(pages, startDate, endDate) {
+    function _deriveTransactionRows(pages, startDate, endDate) {
       const rows = [];
       for (const page of pages) {
         for (const ev of (page.ShipmentEventList || [])) {
-          const date = (ev.PostedDate || '').substring(0, 10);
-          if (!date || date < startDate || date > endDate) continue;
-          const orderId = ev.AmazonOrderId || '';
-
-          for (const item of (ev.ShipmentItemList || [])) {
-            rows.push({
-              orderId,
-              date,
-              // SP-API sometimes returns SellerSKU with HTML-entity-encoded
-              // ampersands ("&amp;") where the real SKU has a literal "&".
-              // Decode at the edge so every downstream consumer (lookup,
-              // missing-SKU warning, CSV export) sees the real SKU string.
-              sku: _normalizeSku(item.SellerSKU),
-              qty: parseInt(item.QuantityShipped, 10) || 0,
-              sale:            _sumCharges(item, ['Principal']),
-              otherCharges:    _sumOtherCharges(item),
-              fbaFees:         _sumFees(item, _isFbaFee),
-              transactionFees: _sumFees(item, _isTransactionFee),
-              promotions:      _sumPromotions(item)
-            });
-          }
+          _pushEventItemRows(rows, ev, 'Order', ev.ShipmentItemList, +1, startDate, endDate);
+        }
+        for (const ev of (page.RefundEventList || [])) {
+          _pushEventItemRows(rows, ev, 'Refund', ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
         }
       }
       return rows;
     }
 
+    function _pushEventItemRows(rows, ev, type, items, qtySign, startDate, endDate) {
+      const date = (ev.PostedDate || '').substring(0, 10);
+      if (!date || date < startDate || date > endDate) return;
+      const orderId = ev.AmazonOrderId || '';
+
+      for (const item of (items || [])) {
+        rows.push({
+          type,
+          orderId,
+          date,
+          // SP-API sometimes returns SellerSKU with HTML-entity-encoded
+          // ampersands ("&amp;") where the real SKU has a literal "&".
+          // Decode at the edge so every downstream consumer (lookup,
+          // missing-SKU warning, CSV export) sees the real SKU string.
+          sku: _normalizeSku(item.SellerSKU),
+          qty: (parseInt(item.QuantityShipped, 10) || 0) * qtySign,
+          sale:            _sumCharges(item, ['Principal']),
+          otherCharges:    _sumOtherCharges(item),
+          fbaFees:         _sumFees(item, _isFbaFee),
+          transactionFees: _sumFees(item, _isTransactionFee),
+          promotions:      _sumPromotions(item)
+        });
+      }
+    }
+
+    // Charge lists live under `ItemChargeList` on Orders and
+    // `ItemChargeAdjustmentList` on Refunds. Same shape, different name.
+    function _chargeList(item) {
+      return item.ItemChargeList || item.ItemChargeAdjustmentList || [];
+    }
+
+    // Fee lists live under `ItemFeeList` on Orders and
+    // `ItemFeeAdjustmentList` on Refunds. Same shape, different name.
+    function _feeList(item) {
+      return item.ItemFeeList || item.ItemFeeAdjustmentList || [];
+    }
+
     function _sumCharges(item, types) {
       let total = 0;
-      for (const c of (item.ItemChargeList || [])) {
+      for (const c of _chargeList(item)) {
         if (types.includes(c.ChargeType)) total += _amount(c.ChargeAmount);
       }
       return total;
     }
 
-    // "Other charges" = GiftWrap + Shipping/ShippingCharge, plus any
-    // non-tax, non-Principal ChargeType as a catch-all (per the user rule
-    // that anything non-tax falls into FBM/FBA Other).
+    // "Other charges" = every non-Principal, non-tax ChargeType — so
+    // GiftWrap, Shipping/ShippingCharge, ReturnShipping (RefundEvent-only),
+    // and any future ChargeType Amazon ships all land here per the user's
+    // catch-all rule. Tax types are dropped (seller net-zero).
     function _sumOtherCharges(item) {
-      const KNOWN_OTHER = new Set(['GiftWrap', 'Shipping', 'ShippingCharge']);
       const TAX_TYPES = new Set([
         'Tax', 'GiftWrapTax', 'ShippingTax',
         'MarketplaceFacilitatorTax-Principal',
@@ -258,19 +290,19 @@
         'RenewedProgramFee'
       ]);
       let total = 0;
-      for (const c of (item.ItemChargeList || [])) {
+      for (const c of _chargeList(item)) {
         const t = c.ChargeType;
         if (!t) continue;
         if (t === 'Principal') continue;
         if (TAX_TYPES.has(t)) continue;
-        if (KNOWN_OTHER.has(t) || !TAX_TYPES.has(t)) total += _amount(c.ChargeAmount);
+        total += _amount(c.ChargeAmount);
       }
       return total;
     }
 
     function _sumFees(item, predicate) {
       let total = 0;
-      for (const f of (item.ItemFeeList || [])) {
+      for (const f of _feeList(item)) {
         if (predicate(f.FeeType)) total += _amount(f.FeeAmount);
       }
       return total;
@@ -287,8 +319,11 @@
     }
 
     function _sumPromotions(item) {
+      // Promotions on Orders → PromotionList. On Refunds the equivalent
+      // is PromotionAdjustmentList with the same PromotionAmount shape.
+      const list = item.PromotionList || item.PromotionAdjustmentList || [];
       let total = 0;
-      for (const p of (item.PromotionList || [])) {
+      for (const p of list) {
         total += _amount(p.PromotionAmount);
       }
       return total;
@@ -351,7 +386,11 @@
         const isFba = f === 'amazon' || f === 'afn' || f === 'fba';
         const prefix = isFba ? 'FBA' : 'FBM';
 
-        add(`${prefix} Sales`, 'income', r.sale);
+        // Sale routing depends on event type: Orders go to Sales,
+        // Refunds go to Returns. Everything else routes the same way
+        // regardless of type — positives credit, negatives debit.
+        const saleLine = r.type === 'Refund' ? 'Returns' : 'Sales';
+        add(`${prefix} ${saleLine}`, 'income', r.sale);
         add(`${prefix} Other`, 'income', r.otherCharges);
         add(`${prefix} Other`, 'income', r.promotions);
         add(`${prefix} Transaction Fees`, 'expenses', r.transactionFees);
@@ -392,7 +431,7 @@
         : '';
       const countLine = `
         <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          ${rows.length.toLocaleString()} ShipmentEvent row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload
+          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds)
         </div>
       `;
       const warning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
@@ -430,7 +469,7 @@
     }
 
     // ─── CSV EXPORT ─────────────────────────────────────────────────────
-    // Exports the derived ShipmentEvent rows (9 columns per the schema) —
+    // Exports the derived transaction rows (Orders + Refunds, 10 columns) —
     // what ends up fed into the statement builder. Lets the user spot-check
     // the mapping per row without having to scroll the raw payload.
 
@@ -453,16 +492,16 @@
       if (!accessToken) { alert('Please sign in first'); return; }
       try {
         const { pages } = await _fetchUpstashInputs(startDate, endDate);
-        const rows = _deriveShipmentRows(pages, startDate, endDate);
+        const rows = _deriveTransactionRows(pages, startDate, endDate);
         if (rows.length === 0) {
-          alert('No ShipmentEvent rows in range — has this period been synced?');
+          alert('No transaction rows in range — has this period been synced?');
           return;
         }
-        const headers = ['order id', 'date', 'sku', 'qty', 'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions'];
+        const headers = ['type', 'order id', 'date', 'sku', 'qty', 'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions'];
         const lines = [headers.map(_csvCell).join(',')];
         for (const r of rows) {
           lines.push([
-            r.orderId, r.date, r.sku, r.qty,
+            r.type, r.orderId, r.date, r.sku, r.qty,
             _round2(r.sale), _round2(r.otherCharges),
             _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions)
           ].map(_csvCell).join(','));
