@@ -138,74 +138,34 @@
       }
     }
     
+    // Mappings now live in Upstash. The local shape (mappings.product /
+    // mappings.brand dicts keyed by campaign) is unchanged; the API returns
+    // the already-grouped shape directly.
     async function loadProductMappings() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      
-      if (!response.ok) {
+      try {
+        const res = await fetch('/api/mappings?action=get&type=product', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) { mappings.product = {}; return; }
+        const data = await res.json();
+        mappings.product = data.mappings || {};
+      } catch (e) {
+        console.error('loadProductMappings failed:', e);
         mappings.product = {};
-        return;
-      }
-      
-      const data = await response.json();
-      const rows = data.values || [];
-      
-      mappings.product = {};
-      
-      if (rows.length > 1) {
-        const headers = rows[0];
-        const campaignIndex = headers.indexOf('Campaign Name');
-        const brandIndex = headers.indexOf('Brand');
-        const skuIndex = headers.indexOf('SKU');
-        
-        for (let i = 1; i < rows.length; i++) {
-          const campaign = rows[i][campaignIndex];
-          const brand = rows[i][brandIndex];
-          const sku = rows[i][skuIndex];
-          
-          if (!campaign) continue;
-          
-          if (!mappings.product[campaign]) {
-            mappings.product[campaign] = { brand: '', skus: [] };
-          }
-          
-          if (brand) mappings.product[campaign].brand = brand;
-          if (sku) mappings.product[campaign].skus.push(sku);
-        }
       }
     }
-    
+
     async function loadBrandMappings() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      
-      if (!response.ok) {
+      try {
+        const res = await fetch('/api/mappings?action=get&type=brand', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) { mappings.brand = {}; return; }
+        const data = await res.json();
+        mappings.brand = data.mappings || {};
+      } catch (e) {
+        console.error('loadBrandMappings failed:', e);
         mappings.brand = {};
-        return;
-      }
-      
-      const data = await response.json();
-      const rows = data.values || [];
-      
-      mappings.brand = {};
-      
-      if (rows.length > 1) {
-        const headers = rows[0];
-        const campaignIndex = headers.indexOf('Campaign Name');
-        const brandIndex = headers.indexOf('Brand');
-        
-        for (let i = 1; i < rows.length; i++) {
-          const campaign = rows[i][campaignIndex];
-          const brand = rows[i][brandIndex];
-          
-          if (campaign && brand) {
-            mappings.brand[campaign] = brand;
-          }
-        }
       }
     }
     
@@ -462,186 +422,63 @@
       mappings.brand[campaign] = brand;
     }
     
+    // Saves go through /api/mappings. save-one atomically replaces the
+    // campaign's entry in the Upstash dict — no more delete-then-append dance.
     async function saveProductMapping(campaign) {
       const mapping = mappings.product[campaign];
       if (!mapping) return;
-      
       try {
-        // Delete existing mappings for this campaign
-        await deleteProductMappings(campaign);
-        
-        // Add new mappings (one row per SKU)
-        if (mapping.brand || mapping.skus.length > 0) {
-          const rows = mapping.skus.length > 0
-            ? mapping.skus.map(sku => [campaign, mapping.brand || '', sku])
-            : [[campaign, mapping.brand, '']];
-          
-          const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping:append?valueInputOption=RAW`;
-          await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: rows })
-          });
-        }
-        
-        alert('Product mapping saved!');
-        renderProductCampaigns(document.getElementById('product-search').value);
-        updateStats('product');
-        
-      } catch (error) {
-        alert('Failed to save mapping: ' + error.message);
-      }
-    }
-    
-    async function saveBrandMapping(campaign) {
-      const brand = mappings.brand[campaign];
-      if (!brand) return;
-      
-      try {
-        // Delete existing mapping for this campaign
-        await deleteBrandMappings(campaign);
-        
-        // Add new mapping
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping:append?valueInputOption=RAW`;
-        await fetch(url, {
+        const res = await fetch('/api/mappings?action=save-one&type=product', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ values: [[campaign, brand]] })
+          body: JSON.stringify({
+            campaign,
+            brand: mapping.brand || '',
+            skus: mapping.skus || []
+          })
         });
-        
-        alert('Brand mapping saved!');
-        renderBrandCampaigns(document.getElementById('brand-search').value);
-        updateStats('brand');
-        
+        const result = await res.json();
+        if (!res.ok || !result.success) throw new Error(result.error || `Save failed (${res.status})`);
+
+        // Saving with empty brand + empty skus deletes the entry on the API
+        // side; mirror that locally so the campaign re-reads as "Unmapped".
+        if (!mapping.brand && (!mapping.skus || mapping.skus.length === 0)) {
+          delete mappings.product[campaign];
+        }
+
+        alert('Product mapping saved!');
+        renderProductCampaigns(document.getElementById('product-search').value);
+        updateStats('product');
       } catch (error) {
         alert('Failed to save mapping: ' + error.message);
       }
     }
-    
-    async function deleteProductMappings(campaign) {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      
-      const data = await response.json();
-      const rows = data.values || [];
-      
-      // If sheet is empty or only has headers, nothing to delete
-      if (rows.length <= 1) {
-        // Make sure headers exist
-        if (rows.length === 0) {
-          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping?valueInputOption=RAW`;
-          await fetch(updateUrl, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: [['Campaign Name', 'Brand', 'SKU']] })
-          });
-        }
-        return;
+
+    async function saveBrandMapping(campaign) {
+      const brand = mappings.brand[campaign];
+      try {
+        const res = await fetch('/api/mappings?action=save-one&type=brand', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ campaign, brand: brand || '' })
+        });
+        const result = await res.json();
+        if (!res.ok || !result.success) throw new Error(result.error || `Save failed (${res.status})`);
+
+        if (!brand) delete mappings.brand[campaign];
+
+        alert('Brand mapping saved!');
+        renderBrandCampaigns(document.getElementById('brand-search').value);
+        updateStats('brand');
+      } catch (error) {
+        alert('Failed to save mapping: ' + error.message);
       }
-      
-      const headers = rows[0];
-      const campaignIndex = headers.findIndex(h => h.toLowerCase().includes('campaign name'));
-      
-      if (campaignIndex === -1) return;
-      
-      const filteredRows = [headers];
-      for (let i = 1; i < rows.length; i++) {
-        if (rows[i][campaignIndex] !== campaign) {
-          filteredRows.push(rows[i]);
-        }
-      }
-      
-      // Clear and rewrite with headers always included
-      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping:clear`;
-      await fetch(clearUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      // Always write back at least the headers
-      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping?valueInputOption=RAW`;
-      await fetch(updateUrl, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ values: filteredRows })
-      });
-    }
-    
-    async function deleteBrandMappings(campaign) {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      
-      const data = await response.json();
-      const rows = data.values || [];
-      
-      // If sheet is empty or only has headers, nothing to delete
-      if (rows.length <= 1) {
-        // Make sure headers exist
-        if (rows.length === 0) {
-          const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping?valueInputOption=RAW`;
-          await fetch(updateUrl, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: [['Campaign Name', 'Brand']] })
-          });
-        }
-        return;
-      }
-      
-      const headers = rows[0];
-      const campaignIndex = headers.findIndex(h => h.toLowerCase().includes('campaign name'));
-      
-      if (campaignIndex === -1) return;
-      
-      const filteredRows = [headers];
-      for (let i = 1; i < rows.length; i++) {
-        if (rows[i][campaignIndex] !== campaign) {
-          filteredRows.push(rows[i]);
-        }
-      }
-      
-      // Clear and rewrite with headers always included
-      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping:clear`;
-      await fetch(clearUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      // Always write back at least the headers
-      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping?valueInputOption=RAW`;
-      await fetch(updateUrl, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ values: filteredRows })
-      });
     }
     
     function updateStats(type) {

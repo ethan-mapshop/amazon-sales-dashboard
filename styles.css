@@ -1100,7 +1100,8 @@
        the centered 1400px column looks stranded without card chrome. */
     .main-content:has(#overview-page.active),
     .main-content:has(#salesvolume-page.active),
-    .main-content:has(#catalog-page.active) {
+    .main-content:has(#catalog-page.active),
+    .main-content:has(#mapping-page.active) {
       max-width: none;
       margin: 0;
     }

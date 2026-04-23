@@ -1400,16 +1400,22 @@
 
     <!-- MAPPING PAGE -->
     <div id="mapping-page" class="page">
-      <div class="card">
-        <div class="tabs" style="overflow-x: visible;">
+      <div class="page-header">
+        <div class="page-header-top">
+          <h2 class="section-title">Campaign Mapping</h2>
+          <div class="header-data-blurb">
+            <button class="btn btn-secondary" onclick="loadMappingData()" type="button" style="padding: 0.375rem 0.75rem; font-size: 0.8rem;">
+              🔄 Refresh
+            </button>
+          </div>
+        </div>
+        <div class="tabs">
           <button class="tab active" data-mapping-tab="product">Product Campaign Mapping</button>
           <button class="tab" data-mapping-tab="brand">Brand Campaign Mapping</button>
-          <button class="btn btn-secondary" onclick="loadMappingData()" style="margin-left: auto; margin-bottom: -2px; padding: 0.5rem 1rem; font-size: 0.8rem;">
-            🔄 Refresh
-          </button>
         </div>
+      </div>
 
-        <!-- Product Mapping Interface -->
+      <!-- Product Mapping Interface -->
         <div class="tab-content active" id="product-mapping">
           <div class="stats-bar">
             <div class="stat-item">
@@ -1500,7 +1506,6 @@
             </div>
           </div>
         </div>
-      </div>
     </div>
   </div> <!-- End main-content -->
 

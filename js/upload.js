@@ -276,9 +276,10 @@
       const sheetConfig = SHEET_CONFIGS[type];
 
       if (!data || !accessToken) return;
-      // Products now lives in Upstash (not the Sheet), so it doesn't need
-      // SPREADSHEET_ID — every other type still does.
-      if (type !== 'products' && !SPREADSHEET_ID) return;
+      // These types live in Upstash now and don't need SPREADSHEET_ID; every
+      // other type still uploads to Sheets and needs it.
+      const UPSTASH_TYPES = new Set(['products', 'productadmapping', 'brandadmapping']);
+      if (!UPSTASH_TYPES.has(type) && !SPREADSHEET_ID) return;
 
       const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
@@ -306,6 +307,37 @@
           );
         } catch (err) {
           console.error('Product upload failed:', err);
+          showStatus(type, 'error', `✗ ${err.message}`);
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = 'Process';
+        }
+        return;
+      }
+
+      // ProductAdMapping / BrandAdMapping uploads also go to Upstash via
+      // /api/mappings. The API groups flat CSV rows by Campaign Name, merges
+      // SKUs (for product mappings), and upserts into the KV dict.
+      if (type === 'productadmapping' || type === 'brandadmapping') {
+        const mapType = type === 'productadmapping' ? 'product' : 'brand';
+        try {
+          const res = await fetch(`/api/mappings?action=bulk-upsert&type=${mapType}`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ rows: data })
+          });
+          const result = await res.json();
+          if (!res.ok || !result.success) {
+            throw new Error(result.error || `Upsert failed (${res.status})`);
+          }
+          showStatus(type, 'success',
+            `✓ Success! Added ${result.addedCount}, updated ${result.updatedCount} (${result.total} total ${mapType} mappings)`
+          );
+        } catch (err) {
+          console.error('Mapping upload failed:', err);
           showStatus(type, 'error', `✗ ${err.message}`);
         } finally {
           btn.disabled = false;
