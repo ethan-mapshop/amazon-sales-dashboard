@@ -39,8 +39,8 @@ async function handleSync(req, res) {
     console.log(`[TRANSACTIONS SYNC] Starting sync for ${month}`);
 
     const { start, end } = monthBounds(month);
-    const rawEvents = await fetchFinancialEvents(start, end);
-    const aggregates = aggregateEvents(rawEvents, month);
+    const { pages, pageCount, eventCount } = await fetchFinancialEvents(start, end);
+    const aggregates = aggregateEvents(pages, month);
 
     await kv.set(`transactions:${month}`, aggregates);
     const index = await kv.get('transactions:index') || [];
@@ -48,10 +48,12 @@ async function handleSync(req, res) {
     await kv.set('transactions:index', updatedIndex);
     await kv.set(`transactions:last-synced:${month}`, new Date().toISOString());
 
-    console.log(`[TRANSACTIONS SYNC] ${month}: ${aggregates.length} SKU-fulfillment aggregates`);
+    console.log(`[TRANSACTIONS SYNC] ${month}: pages=${pageCount} events=${eventCount} aggregates=${aggregates.length}`);
     return res.status(200).json({
       success: true,
       month,
+      pageCount,
+      eventCount,
       records: aggregates.length,
       message: `Transactions sync complete for ${month}`
     });
@@ -136,14 +138,18 @@ function createSellingPartner() {
 
 // listFinancialEvents paginates; each page returns a FinancialEvents object
 // containing event-type arrays (ShipmentEventList, RefundEventList, etc.).
+// amazon-sp-api has historically returned different shapes across versions —
+// sometimes { FinancialEvents, NextToken } at the top, sometimes wrapped in
+// { payload: { ... } }. We defensively unwrap and hunt for NextToken.
 async function fetchFinancialEvents(postedAfter, postedBefore) {
   const sp = createSellingPartner();
   const pages = [];
   let nextToken = null;
   let calls = 0;
+  let eventCount = 0;
 
   do {
-    const response = await sp.callAPI({
+    const raw = await sp.callAPI({
       operation: 'listFinancialEvents',
       endpoint: 'finances',
       query: {
@@ -153,14 +159,42 @@ async function fetchFinancialEvents(postedAfter, postedBefore) {
         ...(nextToken ? { NextToken: nextToken } : {})
       }
     });
-    pages.push(response.FinancialEvents || {});
-    nextToken = response.NextToken || null;
+
+    // Unwrap payload if the SDK didn't already.
+    const body = raw?.payload ?? raw ?? {};
+    const financialEvents = body.FinancialEvents || body.financialEvents || {};
+    // NextToken sits at the top of the body, not inside FinancialEvents.
+    nextToken = body.NextToken || body.nextToken || null;
+
+    const pageEvents = countEvents(financialEvents);
+    eventCount += pageEvents;
+    pages.push(financialEvents);
     calls++;
+
+    console.log(`[TRANSACTIONS SYNC] page ${calls}: events=${pageEvents} hasNextToken=${!!nextToken}`);
+
     if (nextToken) await sleep(500); // respect rate limits
   } while (nextToken && calls < 200); // safety cap
 
-  console.log(`[TRANSACTIONS SYNC] Fetched ${calls} page(s) of financial events`);
-  return pages;
+  return { pages, pageCount: calls, eventCount };
+}
+
+// Count every event across all the known list fields on one page so we can
+// tell legitimate "100 unique SKUs" from "pagination silently bailed."
+function countEvents(fe) {
+  const lists = [
+    'ShipmentEventList', 'RefundEventList', 'GuaranteeClaimEventList',
+    'ChargebackEventList', 'ServiceFeeEventList', 'AdjustmentEventList',
+    'PayWithAmazonEventList', 'RentalTransactionEventList',
+    'ProductAdsPaymentEventList', 'RetrochargeEventList',
+    'PerformanceBondRefundEventList', 'TrialShipmentEventList'
+  ];
+  let total = 0;
+  for (const name of lists) {
+    const arr = fe[name];
+    if (Array.isArray(arr)) total += arr.length;
+  }
+  return total;
 }
 
 // ─── AGGREGATION ─────────────────────────────────────────────────────────────
