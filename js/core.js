@@ -194,29 +194,31 @@
     
     updateAuthUI();
     
-    // Tab switching (upload tabs)
+    // Tab switching (upload tabs + mapping tabs). Scope the sibling lookup to
+    // the nearest .page ancestor so the handler keeps working regardless of
+    // whether the tab row is wrapped in a .card (Upload) or sits directly
+    // inside a .page-header (Mapping, after the flat-page restyle).
     document.querySelectorAll('.tab[data-tab]').forEach(tab => {
       tab.addEventListener('click', () => {
-        const parent = tab.closest('.card');
-        parent.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        parent.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        
+        const scope = tab.closest('.page');
+        if (!scope) return;
+        scope.querySelectorAll('.tab[data-tab]').forEach(t => t.classList.remove('active'));
+        scope.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         const tabName = tab.dataset.tab;
-        parent.querySelector(`#${tabName}-content`).classList.add('active');
+        scope.querySelector(`#${tabName}-content`)?.classList.add('active');
       });
     });
-    
-    // Tab switching (mapping tabs)
+
     document.querySelectorAll('.tab[data-mapping-tab]').forEach(tab => {
       tab.addEventListener('click', () => {
-        const parent = tab.closest('.card');
-        parent.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        parent.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        
+        const scope = tab.closest('.page');
+        if (!scope) return;
+        scope.querySelectorAll('.tab[data-mapping-tab]').forEach(t => t.classList.remove('active'));
+        scope.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         const tabName = tab.dataset.mappingTab;
-        parent.querySelector(`#${tabName}-mapping`).classList.add('active');
+        scope.querySelector(`#${tabName}-mapping`)?.classList.add('active');
       });
     });
     
