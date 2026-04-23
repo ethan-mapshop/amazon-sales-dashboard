@@ -249,7 +249,12 @@
     // _buildStatement using the SERVICE_FEE_LINE_MAP.
     function _pushServiceFeeRows(rows, ev, startDate, endDate) {
       const date = (ev.PostedDate || '').substring(0, 10);
-      if (!date || date < startDate || date > endDate) return;
+      // ServiceFeeEvents frequently ship without a PostedDate. The sync
+      // already scoped them to the requested month via PostedAfter /
+      // PostedBefore, and KV stores them under transactions:raw:YYYY-MM —
+      // so an empty date doesn't mean "out of range," it means "Amazon
+      // didn't include the field." Only filter when we actually have one.
+      if (date && (date < startDate || date > endDate)) return;
       const base = {
         type: 'ServiceFee',
         orderId: ev.AmazonOrderId || '',
@@ -276,7 +281,11 @@
 
     function _pushEventItemRows(rows, ev, type, items, qtySign, startDate, endDate) {
       const date = (ev.PostedDate || '').substring(0, 10);
-      if (!date || date < startDate || date > endDate) return;
+      // Only filter out events that have a date and fall outside the
+      // window. Events with no PostedDate came from a KV bucket already
+      // scoped to the requested month(s) — trust that scope rather than
+      // dropping them because one field was missing.
+      if (date && (date < startDate || date > endDate)) return;
       const orderId = ev.AmazonOrderId || '';
 
       for (const item of (items || [])) {
