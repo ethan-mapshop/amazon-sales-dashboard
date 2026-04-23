@@ -1,23 +1,25 @@
     // Helper function to set date range presets
     
-    // Tab switching functions
+    // Tab switching functions. There are four Overview tabs total — these
+    // two Sheets-backed ones plus the Upstash variants in overview-upstash.js
+    // — so we hide every view first to handle switching in both directions.
     function showYTD() {
+      ['monthly-view', 'ytd-upstash-view', 'monthly-upstash-view'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = 'none';
+      });
+      document.querySelectorAll('#overview-page .page-header .tabs .tab').forEach(t => t.classList.remove('active'));
       document.getElementById('ytd-view').style.display = 'block';
-      document.getElementById('monthly-view').style.display = 'none';
       document.getElementById('ytd-tab').classList.add('active');
-      document.getElementById('monthly-tab').classList.remove('active');
-      
-      // Initialize year dropdown if not already done
       initializeYearDropdown();
     }
-    
+
     function showMonthly() {
-      document.getElementById('ytd-view').style.display = 'none';
+      ['ytd-view', 'ytd-upstash-view', 'monthly-upstash-view'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = 'none';
+      });
+      document.querySelectorAll('#overview-page .page-header .tabs .tab').forEach(t => t.classList.remove('active'));
       document.getElementById('monthly-view').style.display = 'block';
-      document.getElementById('ytd-tab').classList.remove('active');
       document.getElementById('monthly-tab').classList.add('active');
-      
-      // Initialize dropdowns if not already done
       initializeMonthlyDropdowns();
     }
     

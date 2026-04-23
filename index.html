@@ -599,6 +599,12 @@
             <button id="ytd-tab" class="tab" onclick="showYTD()">
               Year-to-Date Profitability
             </button>
+            <button id="monthly-upstash-tab" class="tab" onclick="showMonthlyUpstash()">
+              Monthly Profitability &mdash; Upstash
+            </button>
+            <button id="ytd-upstash-tab" class="tab" onclick="showYTDUpstash()">
+              Year-to-Date Profitability &mdash; Upstash
+            </button>
           </div>
         </div>
 
@@ -652,6 +658,60 @@
             <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
               <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
               <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly View — Upstash -->
+        <div id="monthly-upstash-view" style="display: none;">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+              <label style="font-weight: 600;">Month:</label>
+              <select id="monthly-upstash-month-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 140px;">
+                <option value="0">January</option>
+                <option value="1">February</option>
+                <option value="2">March</option>
+                <option value="3">April</option>
+                <option value="4">May</option>
+                <option value="5">June</option>
+                <option value="6">July</option>
+                <option value="7">August</option>
+                <option value="8">September</option>
+                <option value="9">October</option>
+                <option value="10">November</option>
+                <option value="11">December</option>
+              </select>
+              <label style="font-weight: 600;">Year:</label>
+              <select id="monthly-upstash-year-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
+              </select>
+              <button class="btn" onclick="setMonthlyUpstashLastMonth()" style="padding: 0.5rem 1rem;">Last Month</button>
+            </div>
+          </div>
+
+          <div id="monthly-upstash-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability (from Upstash)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- YTD View — Upstash -->
+        <div id="ytd-upstash-view" style="display: none;">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+              <label style="font-weight: 600;">Year:</label>
+              <select id="ytd-upstash-year-select" onchange="generateYTDUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
+              </select>
+              <button class="btn" onclick="setYTDUpstashYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+              <button class="btn" onclick="setYTDUpstashYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+            </div>
+          </div>
+
+          <div id="ytd-upstash-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability (from Upstash)</div>
             </div>
           </div>
         </div>
@@ -1517,6 +1577,7 @@
   <script src="js/brand-product.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/catalog.js"></script>
+  <script src="js/overview-upstash.js"></script>
   <script src="js/credentials.js"></script>
   <script src="js/listings.js"></script>
   <script src="js/keywords.js"></script>
