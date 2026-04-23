@@ -216,7 +216,11 @@
             rows.push({
               orderId,
               date,
-              sku: item.SellerSKU || '',
+              // SP-API sometimes returns SellerSKU with HTML-entity-encoded
+              // ampersands ("&amp;") where the real SKU has a literal "&".
+              // Decode at the edge so every downstream consumer (lookup,
+              // missing-SKU warning, CSV export) sees the real SKU string.
+              sku: _normalizeSku(item.SellerSKU),
               qty: parseInt(item.QuantityShipped, 10) || 0,
               sale:            _sumCharges(item, ['Principal']),
               otherCharges:    _sumOtherCharges(item),
@@ -312,6 +316,14 @@
       'FBA Inventory Storage Fees', 'FBA Inventory Reimbursement', 'FBA Ad Spend',
       'Other Expenses', 'Unallocated Ad Spend'
     ];
+
+    // Decode HTML-entity-encoded ampersands that SP-API sometimes returns
+    // in SellerSKU strings ("&amp;" → "&"). The Products catalog stores
+    // the real character, so normalizing the incoming value at the edge
+    // lets all downstream code do plain string lookups against the catalog.
+    function _normalizeSku(sku) {
+      return String(sku || '').replace(/&amp;/g, '&');
+    }
 
     function _buildStatement(rows, products) {
       const statement = {
@@ -536,7 +548,7 @@
       for (const item of itemList) {
         const itemBase = {
           ...base,
-          seller_sku: item.SellerSKU || '',
+          seller_sku: _normalizeSku(item.SellerSKU),
           quantity: item.QuantityShipped ?? '',
           description: item.ProductDescription || ''
         };
@@ -564,7 +576,7 @@
         event_type: 'ServiceFeeEvent',
         posted_date: (ev.PostedDate || '').substring(0, 10),
         amazon_order_id: ev.AmazonOrderId || '',
-        seller_sku: ev.SellerSKU || '',
+        seller_sku: _normalizeSku(ev.SellerSKU),
         reason: ev.FeeReason || '',
         description: ev.FeeDescription || '',
         quantity: '',
@@ -597,7 +609,7 @@
       for (const item of items) {
         rows.push({
           ...base,
-          seller_sku: item.SellerSKU || '',
+          seller_sku: _normalizeSku(item.SellerSKU),
           description: item.ProductDescription || '',
           quantity: item.Quantity ?? '',
           fee_type: 'Adjustment',
