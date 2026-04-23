@@ -7,7 +7,7 @@ import { kv } from '@vercel/kv';
 //  POST ?action=migrate                      — one-time: copy from Sheets Products tab
 //  GET  ?action=last-updated                 — when was the catalog last written
 //
-// Schema per product: { sku, name, brand, fulfillment, cost, asin, type }
+// Schema per product: { sku, name, brand, fulfillment, cost, asin, type, status }
 // KV layout:
 //   products            → array of product objects (source of truth)
 //   products:updated-at → ISO timestamp of the last write
@@ -87,12 +87,16 @@ async function handleBulkUpsert(req, res) {
     for (const p of incoming) {
       const sku = p?.sku;
       if (!sku) continue;
-      const normalized = normalizeProduct(p);
+      // Partial normalization: only fields present on the incoming object
+      // end up in the merged result. This way an upload CSV that's missing
+      // a column (e.g. status) doesn't clobber existing values for that
+      // field on already-stored products.
+      const partial = normalizeProduct(p, { partial: true });
       if (bySku[sku]) {
-        bySku[sku] = { ...bySku[sku], ...normalized };
+        bySku[sku] = { ...defaultsFor(bySku[sku]), ...bySku[sku], ...partial };
         updatedCount++;
       } else {
-        bySku[sku] = normalized;
+        bySku[sku] = { ...defaultsFor(partial), ...partial };
         addedCount++;
       }
     }
@@ -163,9 +167,10 @@ async function handleMigrate(req, res) {
     }
 
     // Normalize header names (case-insensitive) so we accept the exact Sheet
-    // columns the user described: sku, name, brand, fulfillment, cost, asin, type.
+    // columns the user described. "status" is optional — it was added later
+    // and the legacy Sheet may not have it yet.
     const headerRow = rows[0].map(h => String(h || '').trim().toLowerCase());
-    const FIELDS = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type'];
+    const FIELDS = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status'];
     const colIdx = {};
     for (const f of FIELDS) colIdx[f] = headerRow.indexOf(f);
 
@@ -202,19 +207,37 @@ async function handleMigrate(req, res) {
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
-// Keep only the fields we care about, coerce cost to a number so downstream
-// math doesn't have to. Everything else is a trimmed string.
-function normalizeProduct(p) {
+// Known product fields. Order matters for CSV/migration.
+const PRODUCT_FIELDS = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status'];
+
+// Shape each incoming product consistently. In { partial: true } mode we
+// only emit fields that were actually present on the input — useful for
+// bulk-upsert so a CSV that omits a column doesn't wipe that field on
+// existing products. In full mode every known field is emitted, defaulting
+// strings to '' and cost to 0.
+function normalizeProduct(p, { partial = false } = {}) {
   const str = (v) => (v == null ? '' : String(v).trim());
-  const cost = parseFloat(p.cost);
+  const out = {};
+  for (const f of PRODUCT_FIELDS) {
+    const present = Object.prototype.hasOwnProperty.call(p, f);
+    if (partial && !present) continue;
+    if (f === 'cost') {
+      const cost = parseFloat(p.cost);
+      out.cost = Number.isFinite(cost) ? cost : 0;
+    } else {
+      out[f] = str(p[f]);
+    }
+  }
+  return out;
+}
+
+// Fill any missing known fields with sensible defaults (empty string / 0).
+// Used by bulk-upsert to guarantee stored products always have every field,
+// even if an upload only set a subset.
+function defaultsFor(_partial) {
   return {
-    sku:         str(p.sku),
-    name:        str(p.name),
-    brand:       str(p.brand),
-    fulfillment: str(p.fulfillment),
-    cost:        Number.isFinite(cost) ? cost : 0,
-    asin:        str(p.asin),
-    type:        str(p.type)
+    sku: '', name: '', brand: '', fulfillment: '',
+    cost: 0, asin: '', type: '', status: ''
   };
 }
 

@@ -1105,6 +1105,45 @@
       margin: 0;
     }
 
+    /* Toolbar above the Product Catalog table: Only-active checkbox on the
+       left, Export CSV button on the right. */
+    .catalog-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .catalog-active-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      text-transform: none;
+      letter-spacing: normal;
+      font-weight: 500;
+      margin-bottom: 0;
+    }
+
+    .catalog-active-toggle input[type="checkbox"] {
+      accent-color: var(--accent-orange);
+      cursor: pointer;
+      width: auto;
+      margin: 0;
+    }
+
+    /* Filter dropdowns sit inside the <th> with the column label above them. */
+    .catalog-filter-select {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
     /* Page header: matches the sidebar brand block height so their
        bottom borders align; breaks out of .main-content padding so
        the bottom divider spans the full page width. */
