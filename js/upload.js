@@ -123,53 +123,50 @@
       return `${year}-${month}-${day}`;
     }
     
-    function detectAndSkipMetadata(jsonData) {
-      // Check if first row contains Amazon metadata
-      if (jsonData.length === 0) return { data: jsonData, skipped: 0 };
-      
-      const firstRow = jsonData[0];
-      const firstValue = Object.values(firstRow)[0];
-      
-      // If first value contains metadata text, this file has the 7-row header
-      if (firstValue && typeof firstValue === 'string' && 
-          firstValue.includes('Includes Amazon Marketplace')) {
-        // Skip first 7 rows and re-read
-        return { needsReparse: true, skipRows: 7 };
+    // Scan the first N rows of the sheet for a row containing every required
+    // column (case-insensitive). Handles Amazon reports with any preamble
+    // length (the old logic hard-coded 7; newer reports now use 9, and who
+    // knows what future exports will do). Returns the 0-indexed row, or -1.
+    function findHeaderRow(sheet, requiredColumns, maxScan = 20) {
+      if (!sheet || !sheet['!ref']) return -1;
+      const range = XLSX.utils.decode_range(sheet['!ref']);
+      const required = requiredColumns.map(c => String(c).trim().toLowerCase());
+      const lastScan = Math.min(range.e.r, range.s.r + maxScan);
+      for (let r = range.s.r; r <= lastScan; r++) {
+        const rowVals = [];
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+          if (cell && cell.v != null) rowVals.push(String(cell.v).trim().toLowerCase());
+        }
+        if (required.every(col => rowVals.includes(col))) return r;
       }
-      
-      return { data: jsonData, skipped: 0 };
+      return -1;
     }
-    
+
     function handleFile(file, type) {
       const reader = new FileReader();
       const sheetConfig = SHEET_CONFIGS[type];
-      
+
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target.result);
           const workbook = XLSX.read(data, { type: 'array' });
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-          
+
+          // Auto-detect the header row by scanning for one that contains all
+          // required columns. Falls back to sheetConfig.skipRows if the scan
+          // doesn't find a match (e.g. required-column name changed).
+          const detectedHeader = findHeaderRow(firstSheet, sheetConfig.requiredColumns);
+          const skipRows = detectedHeader >= 0 ? detectedHeader : sheetConfig.skipRows;
+
           let jsonData;
-          let skipRows = sheetConfig.skipRows;
-          
-          // First pass - check for metadata
-          let initialData = XLSX.utils.sheet_to_json(firstSheet);
-          const metadataCheck = detectAndSkipMetadata(initialData);
-          
-          if (metadataCheck.needsReparse) {
-            // File has metadata, skip those rows
-            skipRows = metadataCheck.skipRows;
-          }
-          
-          // Parse with correct skip
           if (skipRows > 0) {
             const range = XLSX.utils.decode_range(firstSheet['!ref']);
             range.s.r = skipRows;
             const newRange = XLSX.utils.encode_range(range);
             jsonData = XLSX.utils.sheet_to_json(firstSheet, { range: newRange });
           } else {
-            jsonData = initialData;
+            jsonData = XLSX.utils.sheet_to_json(firstSheet);
           }
           
           if (jsonData.length === 0) {
