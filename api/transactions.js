@@ -32,6 +32,7 @@ export default async function handler(req, res) {
     if (action === 'get')        return handleGet(req, res);
     if (action === 'get-range')  return handleGetRange(req, res);
     if (action === 'get-months') return handleGetMonths(req, res);
+    if (action === 'get-raw')    return handleGetRaw(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -62,6 +63,13 @@ async function handleSync(req, res) {
 
     const values = [SHEET_HEADERS, ...rows];
     await kv.set(`transactions:${month}`, { values });
+
+    // Also store the raw SP-API payload so the user can inspect every
+    // field Amazon returned — the Sheets-shape rows drop fields we
+    // didn't map (FeeReason on ServiceFee events, AdjustmentType on
+    // AdjustmentEvents, individual FeeList entries, etc.). A debug
+    // endpoint and the "Export Detail CSV" button both read this back.
+    await kv.set(`transactions:raw:${month}`, { pages });
 
     const index = (await kv.get('transactions:index')) || [];
     const updatedIndex = [...new Set([...index, month])].sort();
@@ -152,6 +160,31 @@ async function handleGetMonths(req, res) {
     return res.status(200).json({ success: true, months: index });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to list months: ' + error.message });
+  }
+}
+
+// Returns the raw SP-API FinancialEvents pages for one month exactly as
+// they came back from listFinancialEvents. For debugging / mapping work
+// where the Sheets-shape rows have lost fields (FeeReason on ServiceFee,
+// AdjustmentType on Adjustment, per-FeeList entries, etc.).
+async function handleGetRaw(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const { month } = req.query;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'month=YYYY-MM required' });
+    }
+
+    const stored = await kv.get(`transactions:raw:${month}`);
+    return res.status(200).json({
+      success: true,
+      month,
+      pages: stored?.pages || []
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to get raw: ' + error.message });
   }
 }
 
