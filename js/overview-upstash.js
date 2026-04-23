@@ -1,18 +1,21 @@
     // Profitability Overview — Upstash-backed variant.
     //
-    // Runs alongside the existing Sheets-backed Monthly / YTD tabs so the
-    // numbers can be compared side-by-side while we verify the migration.
-    // Pulls transactions from /api/transactions (SP-API Finances → Upstash
-    // monthly aggregates) and products from /api/products. Ad spend,
-    // shipping costs, and campaign → brand mapping are NOT yet migrated —
-    // those columns show zero with a note until the rest of the pipeline
-    // is in place.
+    // Delegates to the shared loadOverviewData in js/brand-product.js with
+    // inputs pre-fetched from our KV-backed APIs instead of Google Sheets.
+    // Every downstream step (parsing, categorization, rendering) runs
+    // through the exact same code path as the Sheets-backed tab, so any
+    // delta between the two tabs reflects a data-source difference, not a
+    // logic difference.
+    //
+    // What comes from where:
+    //   transactions → /api/transactions (already Sheets-shape)
+    //   products     → /api/products      (converted to Sheets-shape)
+    //   mappings     → /api/mappings      (converted to Sheets-shape)
+    //   ad spend     → Google Sheets      (not migrated yet)
+    //   shipping     → Google Sheets      (not migrated yet)
 
     // ─── VIEW SWITCHING ─────────────────────────────────────────────────
 
-    // Hide every top-level view under #overview-page and clear the active
-    // state from every overview tab. Each show*() function calls this
-    // first, then flips its own view + tab on.
     function _hideAllOverviewViews() {
       ['ytd-view', 'monthly-view', 'ytd-upstash-view', 'monthly-upstash-view']
         .forEach(id => {
@@ -52,7 +55,6 @@
       }
       const monthSel = document.getElementById('monthly-upstash-month-select');
       if (monthSel && !monthSel.value) {
-        // Default to last completed month.
         const now = new Date();
         const lastMonth = now.getMonth() - 1;
         monthSel.value = lastMonth >= 0 ? lastMonth : 11;
@@ -96,251 +98,210 @@
     }
 
     // ─── REPORT GENERATION ──────────────────────────────────────────────
+    // Mirror the Sheets-backed generateMonthlyReport / generateYTDReport
+    // flow step for step — same three-period load, same comparisons helper,
+    // same second pass to render with comparisons attached. Only difference:
+    // we call loadOverviewDataFromUpstash instead of loadOverviewData.
 
     async function generateMonthlyUpstashReport() {
-      const container = document.getElementById('monthly-upstash-content');
-      if (!accessToken) {
-        container.innerHTML = _placeholder('Sign in to view monthly profitability');
-        return;
-      }
-
       const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
       const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
-      if (!Number.isFinite(month) || !Number.isFinite(year)) {
-        container.innerHTML = _placeholder('Pick a month and year');
-        return;
-      }
-      const yyyyMM = `${year}-${String(month + 1).padStart(2, '0')}`;
+      if (isNaN(month) || isNaN(year)) return;
 
-      container.innerHTML = _placeholder('Loading...');
+      const container = document.getElementById('monthly-upstash-content');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
 
       try {
-        const { aggregates, products, lastSynced } = await _fetchMonthData(yyyyMM);
-        if (aggregates.length === 0) {
-          container.innerHTML = _noDataForMonth(yyyyMM);
-          return;
-        }
-        const metrics = _computeMetrics(aggregates, products);
-        container.innerHTML = _renderReport(yyyyMM, metrics, lastSynced);
-      } catch (err) {
-        console.error('Monthly Upstash report failed:', err);
-        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+        const currentStart = new Date(year, month, 1);
+        const currentEnd   = new Date(year, month + 1, 0);
+        const currentStartStr = currentStart.toISOString().split('T')[0];
+        const currentEndStr   = currentEnd.toISOString().split('T')[0];
+
+        const prevMonth = month === 0 ? 11 : month - 1;
+        const prevYear  = month === 0 ? year - 1 : year;
+        const prevStart = new Date(prevYear, prevMonth, 1);
+        const prevEnd   = new Date(prevYear, prevMonth + 1, 0);
+        const prevStartStr = prevStart.toISOString().split('T')[0];
+        const prevEndStr   = prevEnd.toISOString().split('T')[0];
+
+        const yoyYear  = year - 1;
+        const yoyStart = new Date(yoyYear, month, 1);
+        const yoyEnd   = new Date(yoyYear, month + 1, 0);
+        const yoyStartStr = yoyStart.toISOString().split('T')[0];
+        const yoyEndStr   = yoyEnd.toISOString().split('T')[0];
+
+        const [currentData, prevData, yoyData] = await Promise.all([
+          loadOverviewDataFromUpstash(currentStartStr, currentEndStr, 'monthly-upstash-content', true),
+          loadOverviewDataFromUpstash(prevStartStr,   prevEndStr,    'monthly-upstash-content', true),
+          loadOverviewDataFromUpstash(yoyStartStr,    yoyEndStr,     'monthly-upstash-content', true)
+        ]);
+
+        const comparisons = calculateComparisons(currentData, prevData, yoyData);
+        await loadOverviewDataFromUpstash(currentStartStr, currentEndStr, 'monthly-upstash-content', false, comparisons);
+      } catch (error) {
+        console.error('Error generating Monthly Upstash report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
       }
     }
 
     async function generateYTDUpstashReport() {
+      const year = document.getElementById('ytd-upstash-year-select').value;
+      if (!year) return;
+
       const container = document.getElementById('ytd-upstash-content');
-      if (!accessToken) {
-        container.innerHTML = _placeholder('Sign in to view YTD profitability');
-        return;
-      }
-
-      const year = parseInt(document.getElementById('ytd-upstash-year-select').value, 10);
-      if (!Number.isFinite(year)) {
-        container.innerHTML = _placeholder('Pick a year');
-        return;
-      }
-
-      container.innerHTML = _placeholder('Loading...');
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
 
       try {
-        const { aggregates, products } = await _fetchRangeData(`${year}-01`, `${year}-12`);
-        if (aggregates.length === 0) {
-          container.innerHTML = _noDataForYear(year);
-          return;
+        const today = new Date();
+        const selectedYear = parseInt(year, 10);
+        const isCurrentYear = selectedYear === today.getFullYear();
+
+        const startDate = `${year}-01-01`;
+        let endDate;
+        if (isCurrentYear) {
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+          endDate = new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0).toISOString().split('T')[0];
+        } else {
+          endDate = `${year}-12-31`;
         }
-        const metrics = _computeMetrics(aggregates, products);
-        container.innerHTML = _renderReport(`${year} YTD`, metrics, null);
+
+        const prevYear = selectedYear - 1;
+        const prevStartDate = `${prevYear}-01-01`;
+        let prevEndDate;
+        if (isCurrentYear) {
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const prevLastCompleteMonthYear = today.getMonth() === 0 ? prevYear - 1 : prevYear;
+          prevEndDate = new Date(prevLastCompleteMonthYear, lastCompleteMonth + 1, 0).toISOString().split('T')[0];
+        } else {
+          prevEndDate = `${prevYear}-12-31`;
+        }
+
+        const [currentData, prevData] = await Promise.all([
+          loadOverviewDataFromUpstash(startDate, endDate, 'ytd-upstash-content', true),
+          loadOverviewDataFromUpstash(prevStartDate, prevEndDate, 'ytd-upstash-content', true)
+        ]);
+
+        const comparisons = calculateYTDComparisons(currentData, prevData);
+        await loadOverviewDataFromUpstash(startDate, endDate, 'ytd-upstash-content', false, comparisons);
+      } catch (error) {
+        console.error('Error generating YTD Upstash report:', error);
+        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+      }
+    }
+
+    // ─── DELEGATE TO THE SHARED RENDERER ─────────────────────────────────
+    // Thin wrapper around the Sheets-backed loadOverviewData. Pre-fetches
+    // inputs from our KV APIs (plus Sheets for the not-yet-migrated
+    // pieces), packages them in the same bundle shape Sheets would return,
+    // and hands them to loadOverviewData via its providedInputs param.
+
+    async function loadOverviewDataFromUpstash(startDate, endDate, containerId, returnData = false, comparisons = null) {
+      if (!accessToken) {
+        alert('Please sign in first');
+        return;
+      }
+
+      try {
+        const inputs = await _fetchOverviewInputsFromUpstash(startDate, endDate);
+        return await loadOverviewData(startDate, endDate, containerId, returnData, comparisons, inputs);
       } catch (err) {
-        console.error('YTD Upstash report failed:', err);
-        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+        console.error('Upstash overview fetch failed:', err);
+        if (returnData) return ZERO_METRICS;
+        const container = document.getElementById(containerId);
+        if (container) {
+          container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${err.message}</div>`;
+        }
       }
     }
 
-    // ─── DATA FETCH ─────────────────────────────────────────────────────
+    // ─── INPUT BUNDLE ────────────────────────────────────────────────────
+    // Produces the same { transactionsData, productsData, productAdsData,
+    // brandAdsData, shippingData, productMappingData, brandMappingData }
+    // shape that _fetchOverviewInputsFromSheets returns, but sourced from
+    // /api/* endpoints wherever migration has happened. Ad spend and
+    // shipping still pull from Sheets until those migrations ship.
 
-    async function _fetchMonthData(yyyyMM) {
-      const headers = { Authorization: `Bearer ${accessToken}` };
-      const [txRes, prodRes] = await Promise.all([
-        fetch(`/api/transactions?action=get&month=${yyyyMM}`, { headers }),
-        fetch('/api/products?action=get', { headers })
+    async function _fetchOverviewInputsFromUpstash(startDate, endDate) {
+      const authHeader = { Authorization: `Bearer ${accessToken}` };
+      const startMonth = startDate.slice(0, 7);
+      const endMonth   = endDate.slice(0, 7);
+
+      const sheet = (name) => fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${name}`,
+        { headers: authHeader }
+      );
+
+      const [
+        txRes, prodRes, prodMapRes, brandMapRes,
+        productAdsRes, brandAdsRes, shippingRes
+      ] = await Promise.all([
+        fetch(`/api/transactions?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch('/api/products?action=get', { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=product', { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=brand', { headers: authHeader }),
+        sheet('ProductAdSpend'),
+        sheet('BrandAdSpend'),
+        sheet('ShippingCosts')
       ]);
-      if (!txRes.ok)   throw new Error(`Transactions fetch failed (${txRes.status})`);
-      if (!prodRes.ok) throw new Error(`Products fetch failed (${prodRes.status})`);
-      const txData   = await txRes.json();
-      const prodData = await prodRes.json();
+
+      if (!txRes.ok)   throw new Error('Failed to load Transactions from Upstash');
+      if (!prodRes.ok) throw new Error('Failed to load Products from Upstash');
+
+      const txJson       = await txRes.json();
+      const prodJson     = await prodRes.json();
+      const prodMapJson  = prodMapRes.ok  ? await prodMapRes.json()  : { mappings: {} };
+      const brandMapJson = brandMapRes.ok ? await brandMapRes.json() : { mappings: {} };
+      const productAdsData = productAdsRes.ok ? await productAdsRes.json() : { values: [] };
+      const brandAdsData   = brandAdsRes.ok   ? await brandAdsRes.json()   : { values: [] };
+      const shippingData   = shippingRes.ok   ? await shippingRes.json()   : { values: [] };
+
       return {
-        aggregates: txData.aggregates || [],
-        products:   prodData.products || [],
-        lastSynced: txData.lastSynced || null
+        // Transactions come from /api/transactions already in { values: [...] }
+        // shape — same as the Sheets API response.
+        transactionsData: { values: txJson.values || [] },
+        productsData:     _productsToSheetsShape(prodJson.products || []),
+        productAdsData,
+        brandAdsData,
+        shippingData,
+        productMappingData: _productMappingsToSheetsShape(prodMapJson.mappings || {}),
+        brandMappingData:   _brandMappingsToSheetsShape(brandMapJson.mappings || {})
       };
     }
 
-    async function _fetchRangeData(startMonth, endMonth) {
-      const headers = { Authorization: `Bearer ${accessToken}` };
-      const [txRes, prodRes] = await Promise.all([
-        fetch(`/api/transactions?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers }),
-        fetch('/api/products?action=get', { headers })
-      ]);
-      if (!txRes.ok)   throw new Error(`Transactions fetch failed (${txRes.status})`);
-      if (!prodRes.ok) throw new Error(`Products fetch failed (${prodRes.status})`);
-      const txData   = await txRes.json();
-      const prodData = await prodRes.json();
-      return {
-        aggregates: txData.aggregates || [],
-        products:   prodData.products || []
-      };
+    // ─── KV → SHEETS-SHAPE CONVERTERS ────────────────────────────────────
+    // Each takes a KV-backed dict/array and returns { values: [header, ...rows] }
+    // that matches the layout the Sheets-backed parser in brand-product.js
+    // expects. Keeps the downstream code path identical for both sources.
+
+    function _productsToSheetsShape(products) {
+      // parseProducts/loadOverviewData look up 'sku', 'cost', 'brand'
+      // via case-insensitive findHeaderIndex — lowercase headers work.
+      const headers = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status'];
+      const rows = products.map(p => headers.map(h => (p?.[h] ?? '')));
+      return { values: [headers, ...rows] };
     }
 
-    // ─── COMPUTATION ────────────────────────────────────────────────────
-
-    // Fold aggregates + products into { fbm, fba, total } metrics. Matches
-    // the shape ZERO_METRICS uses in brand-product.js so downstream code
-    // can consume either pipeline interchangeably later.
-    //
-    // Sign conventions from api/transactions.js:
-    //   - productSales, shippingCredits, giftWrapCredits  → positive
-    //   - sellingFees, fbaFees, promotionalRebates, other → already negative
-    // So we sum opex directly (it stays negative) and add it when computing
-    // profit. Product cost is positive (multiplied by abs(quantity) to
-    // handle the negative quantity that shows up on refund aggregates).
-    function _computeMetrics(aggregates, products) {
-      const bySku = {};
-      for (const p of (products || [])) if (p?.sku) bySku[p.sku] = p;
-
-      const empty = () => ({ income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 });
-      const m = { fbm: empty(), fba: empty(), total: empty() };
-
-      for (const a of aggregates) {
-        const bucket = a.fulfillment === 'AFN' ? m.fba : m.fbm;
-        const income = (a.productSales || 0) + (a.shippingCredits || 0) + (a.giftWrapCredits || 0);
-        const opex   = (a.promotionalRebates || 0) + (a.sellingFees || 0) + (a.fbaFees || 0) + (a.other || 0);
-        const unitCost = bySku[a.sku] ? (parseFloat(bySku[a.sku].cost) || 0) : 0;
-        const productCost = unitCost * Math.abs(a.quantity || 0);
-
-        bucket.income       += income;
-        bucket.opex         += opex;           // stays negative
-        bucket.productCosts += productCost;
+    function _productMappingsToSheetsShape(mappings) {
+      // ProductAdMapping tab has one row per (campaign, sku). A campaign
+      // with a brand but no SKUs gets a single row with empty SKU so the
+      // campaign → brand relation isn't lost.
+      const headers = ['Campaign Name', 'Brand', 'SKU'];
+      const rows = [];
+      for (const [campaign, data] of Object.entries(mappings)) {
+        const brand = data?.brand || '';
+        const skus  = Array.isArray(data?.skus) ? data.skus : [];
+        if (skus.length === 0) {
+          rows.push([campaign, brand, '']);
+        } else {
+          for (const sku of skus) rows.push([campaign, brand, sku]);
+        }
       }
-
-      for (const ch of ['fbm', 'fba']) {
-        const b = m[ch];
-        b.profit = b.income + b.opex - b.productCosts - b.adSpend;
-        b.margin = b.income > 0 ? (b.profit / b.income) * 100 : 0;
-      }
-      m.total.income       = m.fbm.income       + m.fba.income;
-      m.total.opex         = m.fbm.opex         + m.fba.opex;
-      m.total.productCosts = m.fbm.productCosts + m.fba.productCosts;
-      m.total.adSpend      = m.fbm.adSpend      + m.fba.adSpend;
-      m.total.profit       = m.total.income + m.total.opex - m.total.productCosts - m.total.adSpend;
-      m.total.margin       = m.total.income > 0 ? (m.total.profit / m.total.income) * 100 : 0;
-      return m;
+      return { values: [headers, ...rows] };
     }
 
-    // ─── RENDER ─────────────────────────────────────────────────────────
-
-    function _renderReport(label, m, lastSynced) {
-      const fmt$   = (n) => '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const signed = (n) => (n < 0 ? '-' + fmt$(n) : fmt$(n));
-      const pct    = (n) => (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
-
-      const thLeft   = 'text-align: left;  padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;';
-      const thRight  = 'text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;';
-      const tdLabel  = 'padding: 0.75rem; border-bottom: 1px solid var(--border);';
-      const tdNum    = `${tdLabel} text-align: right; font-family: 'Roboto Mono', monospace;`;
-
-      const row = (rowLabel, key) => `
-        <tr>
-          <td style="${tdLabel}">${rowLabel}</td>
-          <td style="${tdNum}">${fmt$(m.fbm[key])}</td>
-          <td style="${tdNum}">${fmt$(m.fba[key])}</td>
-          <td style="${tdNum}">${fmt$(m.total[key])}</td>
-        </tr>`;
-
-      const profitRow = `
-        <tr style="font-weight: 700; background: var(--bg-secondary);">
-          <td style="padding: 0.75rem;">Profit</td>
-          <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${m.fbm.profit   >= 0 ? 'var(--success)' : 'var(--error)'};">${signed(m.fbm.profit)}</td>
-          <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${m.fba.profit   >= 0 ? 'var(--success)' : 'var(--error)'};">${signed(m.fba.profit)}</td>
-          <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; color: ${m.total.profit >= 0 ? 'var(--success)' : 'var(--error)'};">${signed(m.total.profit)}</td>
-        </tr>`;
-
-      const marginRow = `
-        <tr>
-          <td style="${tdLabel}">Margin</td>
-          <td style="${tdNum}">${pct(m.fbm.margin)}</td>
-          <td style="${tdNum}">${pct(m.fba.margin)}</td>
-          <td style="${tdNum}">${pct(m.total.margin)}</td>
-        </tr>`;
-
-      const lastSyncedLine = lastSynced
-        ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Last synced: ${_formatSyncTime(lastSynced)}</div>`
-        : '';
-
-      return `
-        <div style="font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem;">${label}</div>
-        ${lastSyncedLine}
-
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 1.5rem;">
-          <thead>
-            <tr>
-              <th style="${thLeft}">Metric</th>
-              <th style="${thRight}">FBM</th>
-              <th style="${thRight}">FBA</th>
-              <th style="${thRight}">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${row('Income', 'income')}
-            ${row('OpEx (fees)', 'opex')}
-            ${row('Product Costs', 'productCosts')}
-            ${row('Ad Spend', 'adSpend')}
-            ${profitRow}
-            ${marginRow}
-          </tbody>
-        </table>
-
-        <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
-          <strong style="color: var(--text-primary);">Heads up:</strong>
-          Ad Spend is $0 here because <code>/api/adspend</code> isn't built yet.
-          Shipping costs (what we pay to ship) also aren't included — they're still in the ShippingCosts Sheet and not migrated.
-          Income and fee totals should match the Sheets-based Monthly Profitability tab for the same month;
-          Profit and Margin will differ until Ad Spend and Shipping are migrated.
-        </div>
-      `;
-    }
-
-    function _placeholder(text) {
-      return `
-        <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-          <div style="font-size: 1.125rem;">${text}</div>
-        </div>`;
-    }
-
-    function _noDataForMonth(yyyyMM) {
-      return `
-        <div style="padding: 3rem; text-align: center; color: var(--text-secondary);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📭</div>
-          <div style="font-size: 1.125rem; margin-bottom: 0.5rem;">No transactions synced for ${yyyyMM}</div>
-          <div style="font-size: 0.9rem;">Trigger a sync: <code>/api/transactions?action=sync&month=${yyyyMM}</code></div>
-        </div>`;
-    }
-
-    function _noDataForYear(year) {
-      return `
-        <div style="padding: 3rem; text-align: center; color: var(--text-secondary);">
-          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📭</div>
-          <div style="font-size: 1.125rem;">No transactions synced for any month in ${year}</div>
-        </div>`;
-    }
-
-    function _formatSyncTime(iso) {
-      if (!iso) return '—';
-      const d = new Date(iso);
-      if (Number.isNaN(d.getTime())) return iso;
-      return d.toLocaleString(undefined, {
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-      });
+    function _brandMappingsToSheetsShape(mappings) {
+      const headers = ['Campaign Name', 'Brand'];
+      const rows = Object.entries(mappings).map(([campaign, brand]) => [campaign, brand]);
+      return { values: [headers, ...rows] };
     }

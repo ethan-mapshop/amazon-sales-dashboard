@@ -2,10 +2,20 @@ import SellingPartner from 'amazon-sp-api';
 import { kv } from '@vercel/kv';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
-//  GET ?action=sync        [&month=YYYY-MM]    — pull & aggregate one month
-//  GET ?action=get         &month=YYYY-MM      — read one month's aggregates
-//  GET ?action=get-range   &startMonth=&endMonth=  — read a contiguous range
-//  GET ?action=get-months                       — list synced months
+//  GET ?action=sync        [&month=YYYY-MM]            — pull SP-API & store
+//  GET ?action=get         &month=YYYY-MM              — Sheets-shape rows for one month
+//  GET ?action=get-range   &startMonth=&endMonth=      — Sheets-shape rows over a span
+//  GET ?action=get-months                               — list of synced months
+//
+// KV layout:
+//   transactions:YYYY-MM         → { values: [[headerRow], ...dataRows] }
+//                                  Rows mirror the Amazon "Date Range Financial
+//                                  Activity" CSV that the existing Sheets-backed
+//                                  Profitability Overview parses. One row per
+//                                  ShipmentItem / refund-item / service-fee /
+//                                  adjustment — never pre-aggregated.
+//   transactions:index           → ['YYYY-MM', ...]
+//   transactions:last-synced:YYYY-MM → ISO timestamp
 export default async function handler(req, res) {
   const { action } = req.query;
   if (!action) return res.status(400).json({ error: 'Action parameter required' });
@@ -27,8 +37,16 @@ export default async function handler(req, res) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
+// Column names exactly as the existing Sheets Transactions tab uses them,
+// matched lowercase by js/brand-product.js parseTransactions /
+// calculateFinancialStatement. Do not change the order or casing.
+const SHEET_HEADERS = [
+  'date/time', 'type', 'order id', 'sku', 'description', 'quantity', 'fulfillment',
+  'product sales', 'shipping credits', 'gift wrap credits', 'promotional rebates',
+  'selling fees', 'fba fees', 'other', 'total'
+];
+
 // ─── SYNC ────────────────────────────────────────────────────────────────────
-// Cron hits with no params → previous month. Button hits with ?month=YYYY-MM.
 async function handleSync(req, res) {
   try {
     const month = req.query.month || previousMonthISO();
@@ -40,21 +58,23 @@ async function handleSync(req, res) {
 
     const { start, end } = monthBounds(month);
     const { pages, pageCount, eventCount } = await fetchFinancialEvents(start, end);
-    const aggregates = aggregateEvents(pages, month);
+    const rows = extractRows(pages);
 
-    await kv.set(`transactions:${month}`, aggregates);
-    const index = await kv.get('transactions:index') || [];
+    const values = [SHEET_HEADERS, ...rows];
+    await kv.set(`transactions:${month}`, { values });
+
+    const index = (await kv.get('transactions:index')) || [];
     const updatedIndex = [...new Set([...index, month])].sort();
     await kv.set('transactions:index', updatedIndex);
     await kv.set(`transactions:last-synced:${month}`, new Date().toISOString());
 
-    console.log(`[TRANSACTIONS SYNC] ${month}: pages=${pageCount} events=${eventCount} aggregates=${aggregates.length}`);
+    console.log(`[TRANSACTIONS SYNC] ${month}: pages=${pageCount} events=${eventCount} rows=${rows.length}`);
     return res.status(200).json({
       success: true,
       month,
       pageCount,
       eventCount,
-      records: aggregates.length,
+      rows: rows.length,
       message: `Transactions sync complete for ${month}`
     });
   } catch (error) {
@@ -63,7 +83,7 @@ async function handleSync(req, res) {
   }
 }
 
-// ─── GET ─────────────────────────────────────────────────────────────────────
+// ─── READ ────────────────────────────────────────────────────────────────────
 async function handleGet(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
@@ -74,15 +94,20 @@ async function handleGet(req, res) {
       return res.status(400).json({ error: 'month=YYYY-MM required' });
     }
 
-    const [aggregates, lastSynced] = await Promise.all([
+    const [stored, lastSynced] = await Promise.all([
       kv.get(`transactions:${month}`),
       kv.get(`transactions:last-synced:${month}`)
     ]);
 
+    // Response intentionally mirrors the Google Sheets API response shape so
+    // the existing loadOverviewData logic can consume either source
+    // unchanged: { values: [[header], ...rows] }. No extra normalization.
+    const values = stored?.values || [SHEET_HEADERS];
+
     return res.status(200).json({
       success: true,
       month,
-      aggregates: aggregates || [],
+      values,
       lastSynced: lastSynced || null
     });
   } catch (error) {
@@ -100,12 +125,20 @@ async function handleGetRange(req, res) {
       return res.status(400).json({ error: 'startMonth and endMonth required (YYYY-MM)' });
     }
 
-    const index = await kv.get('transactions:index') || [];
+    const index = (await kv.get('transactions:index')) || [];
     const months = index.filter(m => m >= startMonth && m <= endMonth);
     const buckets = await Promise.all(months.map(m => kv.get(`transactions:${m}`)));
-    const aggregates = buckets.flat().filter(Boolean);
 
-    return res.status(200).json({ success: true, startMonth, endMonth, aggregates });
+    // Merge many monthly buckets into a single { values: [...] } that looks
+    // just like what one big Sheets read would return — header once, then
+    // every data row from every month in order.
+    const values = [SHEET_HEADERS];
+    for (const b of buckets) {
+      if (!b || !Array.isArray(b.values) || b.values.length < 2) continue;
+      for (let i = 1; i < b.values.length; i++) values.push(b.values[i]);
+    }
+
+    return res.status(200).json({ success: true, startMonth, endMonth, values });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to get range: ' + error.message });
   }
@@ -115,15 +148,14 @@ async function handleGetMonths(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
-
-    const index = await kv.get('transactions:index') || [];
+    const index = (await kv.get('transactions:index')) || [];
     return res.status(200).json({ success: true, months: index });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to list months: ' + error.message });
   }
 }
 
-// ─── SP-API ──────────────────────────────────────────────────────────────────
+// ─── SP-API FETCH ────────────────────────────────────────────────────────────
 
 function createSellingPartner() {
   return new SellingPartner({
@@ -136,11 +168,6 @@ function createSellingPartner() {
   });
 }
 
-// listFinancialEvents paginates; each page returns a FinancialEvents object
-// containing event-type arrays (ShipmentEventList, RefundEventList, etc.).
-// amazon-sp-api has historically returned different shapes across versions —
-// sometimes { FinancialEvents, NextToken } at the top, sometimes wrapped in
-// { payload: { ... } }. We defensively unwrap and hunt for NextToken.
 async function fetchFinancialEvents(postedAfter, postedBefore) {
   const sp = createSellingPartner();
   const pages = [];
@@ -159,11 +186,8 @@ async function fetchFinancialEvents(postedAfter, postedBefore) {
         ...(nextToken ? { NextToken: nextToken } : {})
       }
     });
-
-    // Unwrap payload if the SDK didn't already.
     const body = raw?.payload ?? raw ?? {};
     const financialEvents = body.FinancialEvents || body.financialEvents || {};
-    // NextToken sits at the top of the body, not inside FinancialEvents.
     nextToken = body.NextToken || body.nextToken || null;
 
     const pageEvents = countEvents(financialEvents);
@@ -172,15 +196,12 @@ async function fetchFinancialEvents(postedAfter, postedBefore) {
     calls++;
 
     console.log(`[TRANSACTIONS SYNC] page ${calls}: events=${pageEvents} hasNextToken=${!!nextToken}`);
-
-    if (nextToken) await sleep(500); // respect rate limits
-  } while (nextToken && calls < 200); // safety cap
+    if (nextToken) await sleep(500);
+  } while (nextToken && calls < 200);
 
   return { pages, pageCount: calls, eventCount };
 }
 
-// Count every event across all the known list fields on one page so we can
-// tell legitimate "100 unique SKUs" from "pagination silently bailed."
 function countEvents(fe) {
   const lists = [
     'ShipmentEventList', 'RefundEventList', 'GuaranteeClaimEventList',
@@ -197,65 +218,60 @@ function countEvents(fe) {
   return total;
 }
 
-// ─── AGGREGATION ─────────────────────────────────────────────────────────────
-// Collapse raw SP-API events into monthly per-(sku, fulfillment) rows whose
-// columns mirror the Amazon "Date Range Financial Activity" report shape
-// the Sheets-based loader already expects.
+// ─── ROW EXTRACTION ──────────────────────────────────────────────────────────
+// Emit one Sheets-shape row per SP-API line item. No aggregation. The existing
+// loadOverviewData categorizer will group these by type/fulfillment/description
+// on the client side, identically to how it handles Sheets-sourced rows.
 
-function aggregateEvents(pages, yearMonth) {
-  // First pass: learn each SKU's fulfillment from shipment events, where
-  // the FBA-fee signal is reliable. Used as a hint when processing refunds
-  // and adjustments — those items often drop the fee line entirely, so the
-  // per-item heuristic would misclassify them and create phantom MFN buckets.
-  const skuFulfillmentHint = buildSkuFulfillmentHint(pages);
-
-  const agg = {};
+function extractRows(pages) {
+  // Shipment events give us a reliable SKU → fulfillment ("Amazon" / "Seller")
+  // map. Refunds and other events often lack the FBA fee signal, so we fall
+  // back to this hint when emitting their rows.
+  const hint = buildSkuFulfillmentHint(pages);
+  const rows = [];
 
   for (const events of pages) {
-    for (const shipment of (events.ShipmentEventList || [])) {
-      // Shipments also use the hint — SP-API occasionally returns a shipment
-      // item with an empty ItemFeeList (promotional/adjustment events), and
-      // the per-item "has FBA fee?" check would misclassify those as MFN,
-      // creating a phantom MFN bucket for what's actually an AFN SKU. The
-      // hint is built from shipment events that *do* have FBA fees, so any
-      // sibling shipment of that SKU inherits the correct fulfillment.
-      // Tradeoff: a genuinely dual-channel SKU (rare) is collapsed into
-      // whichever fulfillment it first appeared as in a shipment with fees.
-      applyItems(agg, yearMonth, shipment.ShipmentItemList, +1, skuFulfillmentHint);
+    // ── Orders ────────────────────────────────────────────────────────
+    for (const ev of (events.ShipmentEventList || [])) {
+      pushItemRows(rows, ev, 'Order', +1, ev.ShipmentItemList, hint);
     }
-    for (const refund of (events.RefundEventList || [])) {
-      // Refund amounts are already signed negative by Amazon.
-      applyItems(agg, yearMonth, refund.ShipmentItemAdjustmentList, +1, skuFulfillmentHint);
+
+    // ── Refunds ──────────────────────────────────────────────────────
+    for (const ev of (events.RefundEventList || [])) {
+      pushItemRows(rows, ev, 'Refund', -1, itemAdjList(ev), hint);
     }
-    for (const ga of (events.GuaranteeClaimEventList || [])) {
-      applyItems(agg, yearMonth, ga.ShipmentItemAdjustmentList, +1, skuFulfillmentHint);
+
+    // ── Chargeback-like events ───────────────────────────────────────
+    for (const ev of (events.GuaranteeClaimEventList || [])) {
+      pushItemRows(rows, ev, 'Chargeback Refund', -1, itemAdjList(ev), hint);
     }
-    for (const cb of (events.ChargebackEventList || [])) {
-      applyItems(agg, yearMonth, cb.ShipmentItemAdjustmentList, +1, skuFulfillmentHint);
+    for (const ev of (events.ChargebackEventList || [])) {
+      pushItemRows(rows, ev, 'Chargeback Refund', -1, itemAdjList(ev), hint);
     }
-    // Order-level / subscription-level fees without SKU attribution:
-    for (const fee of (events.ServiceFeeEventList || [])) {
-      applyOrderLevelFees(agg, yearMonth, fee.FeeList, fee.FulfillmentChannel || 'MFN');
+
+    // ── Retrocharges ─────────────────────────────────────────────────
+    for (const ev of (events.RetrochargeEventList || [])) {
+      pushItemRows(rows, ev, 'Order_Retrocharge', +1, itemAdjList(ev), hint);
     }
-    for (const adj of (events.AdjustmentEventList || [])) {
-      applyOrderLevelAdjustments(agg, yearMonth, adj);
+
+    // ── Service fees (storage, subscriptions, inbound placement, ...) ──
+    for (const ev of (events.ServiceFeeEventList || [])) {
+      pushServiceFeeRow(rows, ev);
+    }
+
+    // ── Adjustments (inventory reimbursements, corrections, ...) ──────
+    for (const ev of (events.AdjustmentEventList || [])) {
+      pushAdjustmentRows(rows, ev);
     }
   }
 
-  // Finalize totalAmount from bucketed columns (matches Sheets "total" column).
-  const rows = Object.values(agg);
-  for (const r of rows) {
-    r.totalAmount = round2(
-      r.productSales + r.shippingCredits + r.giftWrapCredits +
-      r.promotionalRebates + r.sellingFees + r.fbaFees + r.other
-    );
-  }
   return rows;
 }
 
-// Map SKU → "AFN" | "MFN" learned exclusively from shipment events.
-// AFN wins any tie (a SKU that was ever FBA-shipped this month is considered
-// an FBA SKU for the purposes of bucketing this month's refunds/adjustments).
+function itemAdjList(ev) {
+  return ev.ShipmentItemAdjustmentList || ev.ShipmentItemList || [];
+}
+
 function buildSkuFulfillmentHint(pages) {
   const hint = {};
   for (const events of pages) {
@@ -263,124 +279,173 @@ function buildSkuFulfillmentHint(pages) {
       for (const item of (shipment.ShipmentItemList || [])) {
         const sku = item.SellerSKU;
         if (!sku) continue;
-        const f = inferFulfillment(item);
-        if (f === 'AFN' || !hint[sku]) hint[sku] = f;
+        const label = inferFulfillmentLabel(item);
+        // "Amazon" (FBA) wins — a SKU that shipped FBA at least once this
+        // month is treated as FBA for refund/adjustment attribution below.
+        if (label === 'Amazon' || !hint[sku]) hint[sku] = label;
       }
     }
   }
   return hint;
 }
 
-function applyItems(agg, yearMonth, items, sign, skuFulfillmentHint) {
-  for (const item of (items || [])) {
+function inferFulfillmentLabel(item) {
+  const fees = extractList(item.ItemFeeList || item.ItemFeeAdjustmentList);
+  const hasFBAFee = fees.some(f => typeof f?.FeeType === 'string' && f.FeeType.startsWith('FBA'));
+  return hasFBAFee ? 'Amazon' : 'Seller';
+}
+
+// For ShipmentEvent and refund/chargeback/retrocharge events: emit one row
+// per line item, collapsing the item's ItemChargeList + ItemFeeList into
+// the Amazon report's 7 money columns.
+function pushItemRows(rows, event, type, quantitySign, itemList, hint) {
+  const date = event.PostedDate || '';
+  const orderId = event.AmazonOrderId || '';
+
+  for (const item of (itemList || [])) {
     const sku = item.SellerSKU || '';
-    // If the caller supplied a hint (refund/adjustment path), prefer what
-    // the shipment events told us about this SKU. Fall back to the per-item
-    // heuristic if the SKU wasn't seen shipped this month.
-    const fulfillment = (skuFulfillmentHint && skuFulfillmentHint[sku])
-      ? skuFulfillmentHint[sku]
-      : inferFulfillment(item);
-    const bucket = getBucket(agg, yearMonth, sku, fulfillment);
+    const fulfillment = (sku && hint[sku]) ? hint[sku] : inferFulfillmentLabel(item);
+    const quantity = (parseInt(item.QuantityShipped, 10) || 0) * quantitySign;
 
-    bucket.quantity += (parseInt(item.QuantityShipped) || 0) * sign;
-
-    for (const charge of extractList(item.ItemChargeList)) {
-      const amt = currencyAmount(charge.ChargeAmount) * sign;
-      categorize(bucket, 'charge', charge.ChargeType, amt);
+    const b = emptyMoneyBuckets();
+    for (const c of extractList(item.ItemChargeList || item.ItemChargeAdjustmentList)) {
+      categorizeCharge(b, c.ChargeType, currencyAmount(c.ChargeAmount));
     }
-    for (const fee of extractList(item.ItemFeeList)) {
-      const amt = currencyAmount(fee.FeeAmount) * sign;
-      categorize(bucket, 'fee', fee.FeeType, amt);
+    for (const f of extractList(item.ItemFeeList || item.ItemFeeAdjustmentList)) {
+      categorizeFee(b, f.FeeType, currencyAmount(f.FeeAmount));
     }
-    // Refund-specific extras (PromotionAdjustmentList, ItemTaxWithheldList) are
-    // skipped for now — they belong in "other" by default via categorize().
+    const total = sumBuckets(b);
+
+    rows.push([
+      date, type, orderId, sku, '', quantity, fulfillment,
+      round2(b.productSales), round2(b.shippingCredits), round2(b.giftWrapCredits),
+      round2(b.promotionalRebates), round2(b.sellingFees), round2(b.fbaFees),
+      round2(b.other), round2(total)
+    ]);
   }
 }
 
-function applyOrderLevelFees(agg, yearMonth, feeList, fulfillment) {
-  const bucket = getBucket(agg, yearMonth, '', fulfillment);
-  for (const fee of (feeList || [])) {
-    const amt = currencyAmount(fee.FeeAmount);
-    categorize(bucket, 'fee', fee.FeeType, amt);
+// Service fees (storage, inbound placement, subscriptions, etc.) — emit one
+// row per event. All amounts land in the "other" column so the existing
+// categorizer routes them by description / type string. The type string is
+// chosen to match how Amazon's Transaction report labels these.
+function pushServiceFeeRow(rows, event) {
+  const date = event.PostedDate || '';
+  const orderId = event.AmazonOrderId || '';
+  const sku = event.SellerSKU || '';
+  const description = event.FeeDescription || event.FeeReason || '';
+  const fulfillment = event.FulfillmentChannel === 'AFN' ? 'Amazon' : 'Seller';
+  const type = looksLikeFBAInventoryFee(description) ? 'FBA Inventory Fee' : 'Service Fee';
+
+  let otherTotal = 0;
+  let fbaFeesTotal = 0;
+  for (const f of (event.FeeList || [])) {
+    const amt = currencyAmount(f.FeeAmount);
+    if (typeof f.FeeType === 'string' && f.FeeType.startsWith('FBA')) {
+      fbaFeesTotal += amt;
+    } else {
+      otherTotal += amt;
+    }
+  }
+
+  rows.push([
+    date, type, orderId, sku, description, 0, fulfillment,
+    0, 0, 0, 0, 0, round2(fbaFeesTotal), round2(otherTotal),
+    round2(fbaFeesTotal + otherTotal)
+  ]);
+}
+
+function looksLikeFBAInventoryFee(desc) {
+  if (!desc) return false;
+  const d = desc.toLowerCase();
+  return d.includes('storage') || d.includes('inbound') || d.includes('fba');
+}
+
+// AdjustmentEvent covers inventory reimbursements and misc corrections.
+// Emit one row per adjustment item so per-SKU amounts don't get lost.
+function pushAdjustmentRows(rows, event) {
+  const date = event.PostedDate || '';
+  const adjustmentType = event.AdjustmentType || '';
+  const items = event.AdjustmentItemList || [];
+  const isReimbursement = /reimburs/i.test(adjustmentType);
+  const description = isReimbursement
+    ? `FBA Inventory Reimbursement${adjustmentType ? ' - ' + adjustmentType : ''}`
+    : adjustmentType;
+
+  if (items.length === 0) {
+    // Event-level adjustment with no per-item rows.
+    const amt = currencyAmount(event.AdjustmentAmount);
+    rows.push([
+      date, 'Fee Adjustment', '', '', description, 0, 'Seller',
+      0, 0, 0, 0, 0, 0, round2(amt), round2(amt)
+    ]);
+    return;
+  }
+
+  for (const item of items) {
+    const sku = item.SellerSKU || '';
+    const perUnit = currencyAmount(item.PerUnitAmount);
+    const qty = parseInt(item.Quantity, 10) || 0;
+    const amt = perUnit * qty;
+    const productDescription = item.ProductDescription || description;
+
+    rows.push([
+      date, 'Fee Adjustment', '', sku, productDescription, qty, 'Seller',
+      0, 0, 0, 0, 0, 0, round2(amt), round2(amt)
+    ]);
   }
 }
 
-function applyOrderLevelAdjustments(agg, yearMonth, adj) {
-  const bucket = getBucket(agg, yearMonth, '', 'MFN');
-  for (const item of (adj.AdjustmentItemList || [])) {
-    const amt = currencyAmount(item.PerUnitAmount) * (parseInt(item.Quantity) || 1);
-    bucket.other += amt;
-  }
+// ─── MONEY-COLUMN BUCKETING ──────────────────────────────────────────────────
+// Maps SP-API ChargeType / FeeType strings to the 7 columns Amazon's
+// Date Range Financial Activity report uses.
+
+function emptyMoneyBuckets() {
+  return {
+    productSales: 0, shippingCredits: 0, giftWrapCredits: 0,
+    promotionalRebates: 0, sellingFees: 0, fbaFees: 0, other: 0
+  };
 }
 
-function getBucket(agg, yearMonth, sku, fulfillment) {
-  const key = `${sku}|${fulfillment}`;
-  if (!agg[key]) {
-    agg[key] = {
-      yearMonth, sku, fulfillment,
-      productSales: 0, shippingCredits: 0, giftWrapCredits: 0,
-      promotionalRebates: 0, sellingFees: 0, fbaFees: 0, other: 0,
-      totalAmount: 0, quantity: 0
-    };
-  }
-  return agg[key];
+function sumBuckets(b) {
+  return b.productSales + b.shippingCredits + b.giftWrapCredits +
+         b.promotionalRebates + b.sellingFees + b.fbaFees + b.other;
 }
 
-// Bucket a charge/fee amount into one of the 7 Amazon report columns.
-function categorize(bucket, kind, type, amount) {
+function categorizeCharge(b, type, amount) {
   if (!type || !Number.isFinite(amount) || amount === 0) return;
-
-  if (kind === 'charge') {
-    switch (type) {
-      case 'Principal':
-        bucket.productSales += amount; return;
-      case 'Shipping':
-        bucket.shippingCredits += amount; return;
-      case 'GiftWrap':
-        bucket.giftWrapCredits += amount; return;
-      case 'ShippingPromotion':
-      case 'ItemPromotion':
-      case 'Promotion':
-        bucket.promotionalRebates += amount; return;
-      case 'Tax':
-      case 'GiftWrapTax':
-      case 'ShippingTax':
-      case 'MarketplaceFacilitatorTax-Principal':
-      case 'MarketplaceFacilitatorTax-Shipping':
-      case 'MarketplaceFacilitatorVAT-Principal':
-      case 'MarketplaceFacilitatorVAT-Shipping':
-        // Tax is collected & remitted by Amazon — net-zero to the seller.
-        return;
-      default:
-        bucket.other += amount; return;
-    }
-  }
-
-  if (kind === 'fee') {
-    switch (type) {
-      case 'Commission':
-      case 'FixedClosingFee':
-      case 'VariableClosingFee':
-      case 'RefundCommission':
-      case 'PerItemFee':
-        bucket.sellingFees += amount; return;
-      case 'FBAPerUnitFulfillmentFee':
-      case 'FBAPerOrderFulfillmentFee':
-      case 'FBAWeightBasedFee':
-        bucket.fbaFees += amount; return;
-      default:
-        bucket.other += amount; return;
-    }
+  switch (type) {
+    case 'Principal':          b.productSales += amount; return;
+    case 'Shipping':           b.shippingCredits += amount; return;
+    case 'GiftWrap':           b.giftWrapCredits += amount; return;
+    case 'ShippingPromotion':
+    case 'ItemPromotion':
+    case 'Promotion':          b.promotionalRebates += amount; return;
+    case 'Tax':
+    case 'GiftWrapTax':
+    case 'ShippingTax':
+    case 'MarketplaceFacilitatorTax-Principal':
+    case 'MarketplaceFacilitatorTax-Shipping':
+    case 'MarketplaceFacilitatorVAT-Principal':
+    case 'MarketplaceFacilitatorVAT-Shipping':
+      return; // Marketplace facilitator tax is net-zero to the seller.
+    default:                   b.other += amount; return;
   }
 }
 
-// FBA vs FBM heuristic: item-level fees include FBAPerUnitFulfillmentFee when
-// Amazon fulfilled it. Matches the current Sheets column well enough for our
-// monthly aggregation; we can cross-reference orders KV later if needed.
-function inferFulfillment(item) {
-  const fees = extractList(item.ItemFeeList);
-  const hasFBAFee = fees.some(f => typeof f.FeeType === 'string' && f.FeeType.startsWith('FBA'));
-  return hasFBAFee ? 'AFN' : 'MFN';
+function categorizeFee(b, type, amount) {
+  if (!type || !Number.isFinite(amount) || amount === 0) return;
+  switch (type) {
+    case 'Commission':
+    case 'FixedClosingFee':
+    case 'VariableClosingFee':
+    case 'RefundCommission':
+    case 'PerItemFee':         b.sellingFees += amount; return;
+    case 'FBAPerUnitFulfillmentFee':
+    case 'FBAPerOrderFulfillmentFee':
+    case 'FBAWeightBasedFee':  b.fbaFees += amount; return;
+    default:                   b.other += amount; return;
+  }
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -393,13 +458,12 @@ async function verifyGoogleToken(req) {
   return { ok: true };
 }
 
-// SP-API sometimes returns ItemChargeList as { ItemChargeList: [...] } and
-// sometimes as the plain array — normalize both.
 function extractList(maybeWrapped) {
   if (!maybeWrapped) return [];
   if (Array.isArray(maybeWrapped)) return maybeWrapped;
   const inner = maybeWrapped.ItemChargeList || maybeWrapped.ItemFeeList ||
-                maybeWrapped.FeeList || maybeWrapped.ChargeList;
+                maybeWrapped.FeeList || maybeWrapped.ChargeList ||
+                maybeWrapped.ItemChargeAdjustmentList || maybeWrapped.ItemFeeAdjustmentList;
   return Array.isArray(inner) ? inner : [];
 }
 
@@ -412,7 +476,7 @@ function currencyAmount(money) {
 function monthBounds(yyyymm) {
   const [y, m] = yyyymm.split('-').map(Number);
   const startDate = new Date(Date.UTC(y, m - 1, 1));
-  const endDate = new Date(Date.UTC(y, m, 1)); // first of next month, exclusive
+  const endDate = new Date(Date.UTC(y, m, 1));
   return {
     start: startDate.toISOString().replace(/\.\d{3}Z$/, 'Z'),
     end:   endDate.toISOString().replace(/\.\d{3}Z$/, 'Z')
@@ -421,9 +485,7 @@ function monthBounds(yyyymm) {
 
 function previousMonthISO() {
   const now = new Date();
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth(); // 0-indexed; prev month
-  const prev = new Date(Date.UTC(y, m - 1, 1));
+  const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 

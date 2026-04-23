@@ -47,17 +47,56 @@
       if (adEl) adEl.textContent = findLatestSheetDate(productAdsData?.values, 'date') || '—';
     }
 
-    async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null) {
+    // Fetches every Sheets tab the Profitability Overview consumes and returns
+    // a bundle in the same shape the Google Sheets API produces
+    // ({ values: [[header], ...rows] }). Extracted so the Upstash variant in
+    // overview-upstash.js can substitute its own fetcher that produces the
+    // same bundle shape from KV-backed endpoints — keeping the downstream
+    // parsing + categorization + render code path identical between the two.
+    async function _fetchOverviewInputsFromSheets() {
+      const sheet = (name) => fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${name}`,
+        { headers: { 'Authorization': `Bearer ${accessToken}` } }
+      );
+
+      const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes, productMappingRes, brandMappingRes] = await Promise.all([
+        sheet('Transactions'),
+        sheet('Products'),
+        sheet('ProductAdSpend'),
+        sheet('BrandAdSpend'),
+        sheet('ShippingCosts'),
+        sheet('ProductAdMapping'),
+        sheet('BrandAdMapping')
+      ]);
+
+      if (!transactionsRes.ok) throw new Error('Failed to load Transactions');
+      if (!productsRes.ok) throw new Error('Failed to load Products');
+
+      const transactionsData   = await transactionsRes.json();
+      const productsData       = await productsRes.json();
+      const productAdsData     = productAdsRes.ok     ? await productAdsRes.json()     : { values: [] };
+      const brandAdsData       = brandAdsRes.ok       ? await brandAdsRes.json()       : { values: [] };
+      const shippingData       = shippingRes.ok       ? await shippingRes.json()       : { values: [] };
+      const productMappingData = productMappingRes.ok ? await productMappingRes.json() : { values: [] };
+      const brandMappingData   = brandMappingRes.ok   ? await brandMappingRes.json()   : { values: [] };
+
+      return {
+        transactionsData, productsData, productAdsData, brandAdsData,
+        shippingData, productMappingData, brandMappingData
+      };
+    }
+
+    async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null, providedInputs = null) {
       if (!accessToken) {
         alert('Please sign in first');
         return;
       }
-      
+
       if (!startDate || !endDate) {
         alert('Please select a date range');
         return;
       }
-      
+
       console.log('Loading data for container:', containerId);
       const container = document.getElementById(containerId);
       if (!container) {
@@ -65,33 +104,17 @@
         alert('Error: Container not found. Please refresh the page.');
         return;
       }
-      
+
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
-      
+
       try {
-        const sheet = (name) => fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${name}`,
-          { headers: { 'Authorization': `Bearer ${accessToken}` } }
-        );
-
-        const [transactionsRes, productsRes, productAdsRes, brandAdsRes, shippingRes] = await Promise.all([
-          sheet('Transactions'),
-          sheet('Products'),
-          sheet('ProductAdSpend'),
-          sheet('BrandAdSpend'),
-          sheet('ShippingCosts')
-        ]);
-
-        if (!transactionsRes.ok) throw new Error('Failed to load Transactions');
-        if (!productsRes.ok) throw new Error('Failed to load Products');
-
-        const transactionsData = await transactionsRes.json();
-        const productsData = await productsRes.json();
-        const productAdsData = productAdsRes.ok ? await productAdsRes.json() : { values: [] };
-        const brandAdsData   = brandAdsRes.ok   ? await brandAdsRes.json()   : { values: [] };
+        // providedInputs lets overview-upstash.js reuse this function with
+        // inputs it fetched from /api/* endpoints instead of Sheets. When
+        // called directly (no providedInputs), pull from Sheets as before.
+        const inputs = providedInputs || await _fetchOverviewInputsFromSheets();
+        const { transactionsData, productsData, productAdsData, brandAdsData, shippingData, productMappingData, brandMappingData } = inputs;
 
         updateOverviewDataBlurb(transactionsData, productAdsData);
-        const shippingData   = shippingRes.ok   ? await shippingRes.json()   : { values: [] };
         
         const transactionsRows = transactionsData.values || [];
         
@@ -146,58 +169,35 @@
             }
           }
         
-        // Load mapping data for ad spend allocation
-        const [productMappingRes, brandMappingRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdMapping`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdMapping`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          })
-        ]);
-        
-        // Parse product mappings (Campaign Name -> SKUs)
+        // Mappings are now part of the inputs bundle (either pre-fetched from
+        // Sheets or supplied by the Upstash loader). Parse them out of the
+        // bundle in the same shape the downstream ad-spend allocator expects.
         const productCampaignToSkus = {};
-        if (productMappingRes.ok) {
-          const mappingData = await productMappingRes.json();
-          const mappingRows = mappingData.values || [];
-          if (mappingRows.length > 1) {
-            const headers = mappingRows[0];
-            const campaignIndex = headers.indexOf('Campaign Name');
-            const skuIndex = headers.indexOf('SKU');
-            
-            for (let i = 1; i < mappingRows.length; i++) {
-              const campaign = mappingRows[i][campaignIndex];
-              const sku = mappingRows[i][skuIndex];
-              
-              if (campaign && sku) {
-                if (!productCampaignToSkus[campaign]) {
-                  productCampaignToSkus[campaign] = [];
-                }
-                productCampaignToSkus[campaign].push(sku);
-              }
+        const productMappingRows = productMappingData.values || [];
+        if (productMappingRows.length > 1) {
+          const headers = productMappingRows[0];
+          const campaignIndex = headers.indexOf('Campaign Name');
+          const skuIndex = headers.indexOf('SKU');
+          for (let i = 1; i < productMappingRows.length; i++) {
+            const campaign = productMappingRows[i][campaignIndex];
+            const sku = productMappingRows[i][skuIndex];
+            if (campaign && sku) {
+              if (!productCampaignToSkus[campaign]) productCampaignToSkus[campaign] = [];
+              productCampaignToSkus[campaign].push(sku);
             }
           }
         }
-        
-        // Parse brand mappings (Campaign Name -> Brand)
+
         const brandCampaignToBrand = {};
-        if (brandMappingRes.ok) {
-          const mappingData = await brandMappingRes.json();
-          const mappingRows = mappingData.values || [];
-          if (mappingRows.length > 1) {
-            const headers = mappingRows[0];
-            const campaignIndex = headers.indexOf('Campaign Name');
-            const brandIndex = headers.indexOf('Brand');
-            
-            for (let i = 1; i < mappingRows.length; i++) {
-              const campaign = mappingRows[i][campaignIndex];
-              const brand = mappingRows[i][brandIndex];
-              
-              if (campaign && brand) {
-                brandCampaignToBrand[campaign] = brand;
-              }
-            }
+        const brandMappingRows = brandMappingData.values || [];
+        if (brandMappingRows.length > 1) {
+          const headers = brandMappingRows[0];
+          const campaignIndex = headers.indexOf('Campaign Name');
+          const brandIndex = headers.indexOf('Brand');
+          for (let i = 1; i < brandMappingRows.length; i++) {
+            const campaign = brandMappingRows[i][campaignIndex];
+            const brand = brandMappingRows[i][brandIndex];
+            if (campaign && brand) brandCampaignToBrand[campaign] = brand;
           }
         }
         
