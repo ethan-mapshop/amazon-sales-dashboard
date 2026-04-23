@@ -332,8 +332,11 @@
           missing.get(r.sku).add(r.orderId);
           continue; // Can't categorize without knowing fulfillment.
         }
-        const fulfillment = (prod.fulfillment || '').trim();
-        const isFba = fulfillment === 'Amazon';
+        // Accept common spellings of the fulfillment value rather than
+        // relying on one exact string. Seen in the wild: "Amazon", "AFN",
+        // "FBA", sometimes lower/title-cased, sometimes with whitespace.
+        const f = String(prod.fulfillment || '').trim().toLowerCase();
+        const isFba = f === 'amazon' || f === 'afn' || f === 'fba';
         const prefix = isFba ? 'FBA' : 'FBM';
 
         add(`${prefix} Sales`, 'income', r.sale);
@@ -363,27 +366,25 @@
     // ─── RENDER ─────────────────────────────────────────────────────────
 
     function _renderUpstashStatement(container, { statement, missingSkus, rows, lastSynced, startDate, endDate }) {
-      const warning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
-      const period = startDate === endDate.slice(0, 7) + '-' + endDate.slice(8)
-        ? `${startDate} – ${endDate}`
-        : `${startDate} – ${endDate}`;
+      // Delegate to the existing full renderer — it draws both the
+      // traditional Income/Expenses tables AND the FBM/FBA/Total
+      // Profitability Breakdown panels on the right. Keeping that behavior
+      // intact is the whole point of the drop-in replacement.
+      renderFinancialStatement(statement, startDate, endDate, container, null);
+
+      // Prepend the Upstash-specific context (row count, last-synced, and
+      // the missing-SKU warning) so the user can see at a glance how many
+      // rows were derived and whether any were skipped.
       const syncLine = lastSynced
         ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Last synced: ${_formatSyncTime(lastSynced)}</div>`
         : '';
-      const headerLine = `
-        <div style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">${period}</div>
+      const countLine = `
         <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
           ${rows.length.toLocaleString()} ShipmentEvent row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload
         </div>
       `;
-
-      container.innerHTML = `
-        ${headerLine}
-        ${syncLine}
-        ${warning}
-        ${_renderSection('Income', statement.income)}
-        ${_renderSection('Expenses', statement.expenses)}
-      `;
+      const warning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
+      container.innerHTML = syncLine + countLine + warning + container.innerHTML;
     }
 
     function _renderMissingSkuWarning(missing) {
@@ -411,46 +412,6 @@
               </tr>
             </thead>
             <tbody>${rows}</tbody>
-          </table>
-        </div>
-      `;
-    }
-
-    function _renderSection(label, lines) {
-      const fmt = (n) => '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      let totalDebit = 0, totalCredit = 0;
-      const rows = Object.entries(lines).map(([category, amounts]) => {
-        totalDebit  += amounts.debit;
-        totalCredit += amounts.credit;
-        return `
-          <tr>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border);">${category}</td>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${amounts.debit  > 0 ? fmt(amounts.debit)  : '$0.00'}</td>
-            <td style="padding: 0.625rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">${amounts.credit > 0 ? fmt(amounts.credit) : '$0.00'}</td>
-          </tr>
-        `;
-      }).join('');
-
-      const color = label === 'Income' ? 'var(--success)' : 'var(--error)';
-      return `
-        <div style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: ${color};">${label}</h3>
-          <table style="width: 100%;">
-            <thead>
-              <tr>
-                <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
-                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Debit</th>
-                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); width: 25%; min-width: 140px;">Credit</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows}
-              <tr style="font-weight: 700; background: var(--bg-secondary);">
-                <td style="padding: 0.75rem;">Totals</td>
-                <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${fmt(totalDebit)}</td>
-                <td style="padding: 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace;">${fmt(totalCredit)}</td>
-              </tr>
-            </tbody>
           </table>
         </div>
       `;
