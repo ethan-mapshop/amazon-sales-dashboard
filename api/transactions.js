@@ -203,21 +203,28 @@ function countEvents(fe) {
 // the Sheets-based loader already expects.
 
 function aggregateEvents(pages, yearMonth) {
+  // First pass: learn each SKU's fulfillment from shipment events, where
+  // the FBA-fee signal is reliable. Used as a hint when processing refunds
+  // and adjustments — those items often drop the fee line entirely, so the
+  // per-item heuristic would misclassify them and create phantom MFN buckets.
+  const skuFulfillmentHint = buildSkuFulfillmentHint(pages);
+
   const agg = {};
 
   for (const events of pages) {
     for (const shipment of (events.ShipmentEventList || [])) {
-      applyItems(agg, yearMonth, shipment.ShipmentItemList, +1);
+      // Shipments: per-item heuristic, no hint. Preserves dual-channel SKUs.
+      applyItems(agg, yearMonth, shipment.ShipmentItemList, +1, null);
     }
     for (const refund of (events.RefundEventList || [])) {
       // Refund amounts are already signed negative by Amazon.
-      applyItems(agg, yearMonth, refund.ShipmentItemAdjustmentList, +1);
+      applyItems(agg, yearMonth, refund.ShipmentItemAdjustmentList, +1, skuFulfillmentHint);
     }
     for (const ga of (events.GuaranteeClaimEventList || [])) {
-      applyItems(agg, yearMonth, ga.ShipmentItemAdjustmentList, +1);
+      applyItems(agg, yearMonth, ga.ShipmentItemAdjustmentList, +1, skuFulfillmentHint);
     }
     for (const cb of (events.ChargebackEventList || [])) {
-      applyItems(agg, yearMonth, cb.ShipmentItemAdjustmentList, +1);
+      applyItems(agg, yearMonth, cb.ShipmentItemAdjustmentList, +1, skuFulfillmentHint);
     }
     // Order-level / subscription-level fees without SKU attribution:
     for (const fee of (events.ServiceFeeEventList || [])) {
@@ -239,10 +246,33 @@ function aggregateEvents(pages, yearMonth) {
   return rows;
 }
 
-function applyItems(agg, yearMonth, items, sign) {
+// Map SKU → "AFN" | "MFN" learned exclusively from shipment events.
+// AFN wins any tie (a SKU that was ever FBA-shipped this month is considered
+// an FBA SKU for the purposes of bucketing this month's refunds/adjustments).
+function buildSkuFulfillmentHint(pages) {
+  const hint = {};
+  for (const events of pages) {
+    for (const shipment of (events.ShipmentEventList || [])) {
+      for (const item of (shipment.ShipmentItemList || [])) {
+        const sku = item.SellerSKU;
+        if (!sku) continue;
+        const f = inferFulfillment(item);
+        if (f === 'AFN' || !hint[sku]) hint[sku] = f;
+      }
+    }
+  }
+  return hint;
+}
+
+function applyItems(agg, yearMonth, items, sign, skuFulfillmentHint) {
   for (const item of (items || [])) {
     const sku = item.SellerSKU || '';
-    const fulfillment = inferFulfillment(item);
+    // If the caller supplied a hint (refund/adjustment path), prefer what
+    // the shipment events told us about this SKU. Fall back to the per-item
+    // heuristic if the SKU wasn't seen shipped this month.
+    const fulfillment = (skuFulfillmentHint && skuFulfillmentHint[sku])
+      ? skuFulfillmentHint[sku]
+      : inferFulfillment(item);
     const bucket = getBucket(agg, yearMonth, sku, fulfillment);
 
     bucket.quantity += (parseInt(item.QuantityShipped) || 0) * sign;
