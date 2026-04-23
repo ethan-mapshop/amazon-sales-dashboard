@@ -28,11 +28,12 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    if (action === 'sync')       return handleSync(req, res);
-    if (action === 'get')        return handleGet(req, res);
-    if (action === 'get-range')  return handleGetRange(req, res);
-    if (action === 'get-months') return handleGetMonths(req, res);
-    if (action === 'get-raw')    return handleGetRaw(req, res);
+    if (action === 'sync')           return handleSync(req, res);
+    if (action === 'get')            return handleGet(req, res);
+    if (action === 'get-range')      return handleGetRange(req, res);
+    if (action === 'get-months')     return handleGetMonths(req, res);
+    if (action === 'get-raw')        return handleGetRaw(req, res);
+    if (action === 'fetch-order-raw') return handleFetchOrderRaw(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -160,6 +161,53 @@ async function handleGetMonths(req, res) {
     return res.status(200).json({ success: true, months: index });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to list months: ' + error.message });
+  }
+}
+
+// Fetches a single order's financial events directly from SP-API using
+// listFinancialEventsByOrderId. Returns whatever Amazon sends back, no
+// parsing, no reshaping — so you can see exactly what the sync script is
+// working with for a specific order. Paginates in case one order has
+// more events than fit on a single page.
+async function handleFetchOrderRaw(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const orderId = req.query.orderId;
+    if (!orderId) return res.status(400).json({ error: 'orderId query param required' });
+
+    const sp = createSellingPartner();
+    const pages = [];
+    let nextToken = null;
+    let calls = 0;
+
+    do {
+      const raw = await sp.callAPI({
+        operation: 'listFinancialEventsByOrderId',
+        endpoint: 'finances',
+        path: { orderId },
+        query: {
+          MaxResultsPerPage: 100,
+          ...(nextToken ? { NextToken: nextToken } : {})
+        }
+      });
+      const body = raw?.payload ?? raw ?? {};
+      pages.push(body);
+      nextToken = body.NextToken || body.nextToken || null;
+      calls++;
+      if (nextToken) await sleep(500);
+    } while (nextToken && calls < 20);
+
+    return res.status(200).json({
+      success: true,
+      orderId,
+      pageCount: calls,
+      pages
+    });
+  } catch (error) {
+    console.error('[FETCH ORDER RAW] Error:', error);
+    return res.status(500).json({ error: 'Failed: ' + error.message });
   }
 }
 
