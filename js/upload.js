@@ -98,25 +98,22 @@
     }
     
     function excelSerialToISODate(serial) {
-      // Convert Excel serial number to ISO date (YYYY-MM-DD)
-      // Avoiding timezone issues by calculating directly
+      // Convert Excel serial number to ISO date (YYYY-MM-DD).
+      // Excel stores dates as "days since 1899-12-31" where serial 1 = 1900-01-01.
+      // It also has a historical bug where it thinks 1900 was a leap year — so
+      // serial 60 is a phantom "Feb 29, 1900" and every real date after that is
+      // off by one. We subtract one from serials above that boundary to
+      // compensate. Using UTC throughout avoids timezone shifts.
       if (!serial || isNaN(serial)) return null;
-      
-      // Excel's epoch is December 30, 1899 (serial 0)
-      // Calculate days since epoch
+
       const days = Math.floor(serial);
-      
-      // Excel bug: treats 1900 as a leap year (it wasn't)
-      // So dates after Feb 28, 1900 need adjustment
       const adjustedDays = days > 59 ? days - 1 : days;
-      
-      // Calculate from epoch using UTC to avoid timezone shifts
-      const epochDate = Date.UTC(1899, 11, 30); // Dec 30, 1899
+
+      const epochDate = Date.UTC(1899, 11, 31); // Dec 31, 1899 — serial 1 = next day
       const millisecondsPerDay = 24 * 60 * 60 * 1000;
       const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
       const date = new Date(targetTime);
-      
-      // Use UTC methods to extract date parts (no timezone conversion)
+
       const year = date.getUTCFullYear();
       const month = String(date.getUTCMonth() + 1).padStart(2, '0');
       const day = String(date.getUTCDate()).padStart(2, '0');

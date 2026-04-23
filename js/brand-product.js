@@ -816,10 +816,11 @@
         // Parse date (handle Excel serial or ISO format)
         let date = null;
         if (typeof dateStr === 'number') {
-          // Excel serial date
+          // Excel serial date — epoch is Dec 31, 1899 (serial 1 = 1900-01-01).
+          // Subtract one for serials past 59 to skip Excel's phantom Feb 29, 1900.
           const days = Math.floor(dateStr);
           const adjustedDays = days > 59 ? days - 1 : days;
-          const epochDate = Date.UTC(1899, 11, 30);
+          const epochDate = Date.UTC(1899, 11, 31);
           const millisecondsPerDay = 24 * 60 * 60 * 1000;
           const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
           const d = new Date(targetTime);
@@ -863,10 +864,11 @@
         // Parse date (handle Excel serial or ISO format)
         let date = null;
         if (typeof dateStr === 'number') {
-          // Excel serial date
+          // Excel serial date — epoch is Dec 31, 1899 (serial 1 = 1900-01-01).
+          // Subtract one for serials past 59 to skip Excel's phantom Feb 29, 1900.
           const days = Math.floor(dateStr);
           const adjustedDays = days > 59 ? days - 1 : days;
-          const epochDate = Date.UTC(1899, 11, 30);
+          const epochDate = Date.UTC(1899, 11, 31);
           const millisecondsPerDay = 24 * 60 * 60 * 1000;
           const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
           const d = new Date(targetTime);
@@ -910,10 +912,11 @@
         // Parse date (handle Excel serial or ISO format)
         let date = null;
         if (typeof dateStr === 'number') {
-          // Excel serial date
+          // Excel serial date — epoch is Dec 31, 1899 (serial 1 = 1900-01-01).
+          // Subtract one for serials past 59 to skip Excel's phantom Feb 29, 1900.
           const days = Math.floor(dateStr);
           const adjustedDays = days > 59 ? days - 1 : days;
-          const epochDate = Date.UTC(1899, 11, 30);
+          const epochDate = Date.UTC(1899, 11, 31);
           const millisecondsPerDay = 24 * 60 * 60 * 1000;
           const targetTime = epochDate + (adjustedDays * millisecondsPerDay);
           const d = new Date(targetTime);
