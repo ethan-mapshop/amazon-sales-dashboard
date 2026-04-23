@@ -117,6 +117,10 @@
           generateMonthlyReport(); // Auto-load last month's data
         }
       }
+
+      if (pageName === 'catalog' && accessToken) {
+        loadProductCatalog();
+      }
       
       if (pageName === 'brandproduct') {
         showBPMonthly(); // Default to Monthly view

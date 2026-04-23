@@ -27,6 +27,7 @@
     <a class="nav-item" onclick="showPage('listing')">Listing Optimization</a>
 
     <div class="nav-group-label">Tools</div>
+    <a class="nav-item" onclick="showPage('catalog')">Product Catalog</a>
     <a class="nav-item" onclick="showPage('mapping')">Campaign Mapping</a>
     <a class="nav-item" onclick="showPage('upload')">Data Upload</a>
     <a class="nav-item" onclick="showPage('integrations')">Integrations</a>
@@ -42,6 +43,28 @@
   </nav>
 
   <div class="main-content">
+    <!-- PRODUCT CATALOG PAGE -->
+    <div id="catalog-page" class="page">
+      <div class="page-header">
+        <div class="page-header-top">
+          <h2 class="section-title">Product Catalog</h2>
+          <div id="catalog-blurb" class="header-data-blurb">
+            <span>ℹ️</span>
+            <span><strong id="catalog-count">—</strong> products</span>
+            <span class="blurb-sep">|</span>
+            <span>Last updated: <strong id="catalog-updated">—</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="catalog-content">
+        <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+          <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📦</div>
+          <div style="font-size: 1.125rem;">Sign in to view the product catalog</div>
+        </div>
+      </div>
+    </div>
+
     <!-- UPLOAD PAGE -->
     <div id="upload-page" class="page">
       <!-- Configuration Card -->
@@ -1488,6 +1511,7 @@
   <script src="js/sales-monthly.js"></script>
   <script src="js/brand-product.js"></script>
   <script src="js/charts.js"></script>
+  <script src="js/catalog.js"></script>
   <script src="js/credentials.js"></script>
   <script src="js/listings.js"></script>
   <script src="js/keywords.js"></script>

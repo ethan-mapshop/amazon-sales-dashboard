@@ -213,8 +213,15 @@ function aggregateEvents(pages, yearMonth) {
 
   for (const events of pages) {
     for (const shipment of (events.ShipmentEventList || [])) {
-      // Shipments: per-item heuristic, no hint. Preserves dual-channel SKUs.
-      applyItems(agg, yearMonth, shipment.ShipmentItemList, +1, null);
+      // Shipments also use the hint — SP-API occasionally returns a shipment
+      // item with an empty ItemFeeList (promotional/adjustment events), and
+      // the per-item "has FBA fee?" check would misclassify those as MFN,
+      // creating a phantom MFN bucket for what's actually an AFN SKU. The
+      // hint is built from shipment events that *do* have FBA fees, so any
+      // sibling shipment of that SKU inherits the correct fulfillment.
+      // Tradeoff: a genuinely dual-channel SKU (rare) is collapsed into
+      // whichever fulfillment it first appeared as in a shipment with fees.
+      applyItems(agg, yearMonth, shipment.ShipmentItemList, +1, skuFulfillmentHint);
     }
     for (const refund of (events.RefundEventList || [])) {
       // Refund amounts are already signed negative by Amazon.

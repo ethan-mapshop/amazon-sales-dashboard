@@ -274,14 +274,46 @@
     async function processUpload(type) {
       const data = uploadedData[type];
       const sheetConfig = SHEET_CONFIGS[type];
-      
-      if (!data || !accessToken || !SPREADSHEET_ID) return;
-      
+
+      if (!data || !accessToken) return;
+      // Products now lives in Upstash (not the Sheet), so it doesn't need
+      // SPREADSHEET_ID — every other type still does.
+      if (type !== 'products' && !SPREADSHEET_ID) return;
+
       const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
       btn.innerHTML = 'Processing<span class="loading"></span>';
       hideStatus(type);
-      
+
+      // Products bypass the Sheets path entirely and upsert into Upstash via
+      // /api/products. Same update-or-add-by-SKU semantics as before.
+      if (type === 'products') {
+        try {
+          const res = await fetch('/api/products?action=bulk-upsert', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ products: data })
+          });
+          const result = await res.json();
+          if (!res.ok || !result.success) {
+            throw new Error(result.error || `Upsert failed (${res.status})`);
+          }
+          showStatus(type, 'success',
+            `✓ Success! Added ${result.addedCount}, updated ${result.updatedCount} (${result.total} total in catalog)`
+          );
+        } catch (err) {
+          console.error('Product upload failed:', err);
+          showStatus(type, 'error', `✗ ${err.message}`);
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = 'Process';
+        }
+        return;
+      }
+
       try {
         const spreadsheetId = SPREADSHEET_ID;
         const sheetName = sheetConfig.sheetName;
