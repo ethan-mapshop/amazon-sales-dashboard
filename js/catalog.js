@@ -1,6 +1,6 @@
     // Product Catalog — reads from /api/products (Upstash KV).
     // Rendered with the same table style as the Profitability Overview pages:
-    // bg-secondary header row, border-bottom row separators, Roboto Mono for
+    // bg-secondary header rows, border-bottom row separators, Roboto Mono for
     // identifier / numeric columns.
 
     // Module state: the full catalog + current filter selections. Kept outside
@@ -9,8 +9,20 @@
     let catalogFilters = { brand: '', fulfillment: '', status: '', type: '' };
     let catalogOnlyActive = false;
 
-    // Columns that get a filter dropdown in their header.
-    const CATALOG_FILTERABLE = ['brand', 'fulfillment', 'status', 'type'];
+    // Column order shown in the table and used for CSV export.
+    const CATALOG_COLUMNS = [
+      { field: 'brand',       label: 'Brand',       filter: true },
+      { field: 'name',        label: 'Name',        filter: false },
+      { field: 'sku',         label: 'SKU',         filter: false, mono: true },
+      { field: 'asin',        label: 'ASIN',        filter: false, mono: true },
+      { field: 'fulfillment', label: 'Fulfillment', filter: true },
+      { field: 'cost',        label: 'Cost',        filter: false, align: 'right', mono: true },
+      { field: 'type',        label: 'Type',        filter: true },
+      { field: 'status',      label: 'Status',      filter: true }
+    ];
+
+    // Sort order applied on load: brand → status → sku → fulfillment, all A-Z.
+    const CATALOG_SORT_FIELDS = ['brand', 'status', 'sku', 'fulfillment'];
 
     async function loadProductCatalog() {
       const container = document.getElementById('catalog-content');
@@ -29,7 +41,7 @@
         });
         if (!res.ok) throw new Error(`Failed to load products (${res.status})`);
         const data = await res.json();
-        catalogAllProducts = Array.isArray(data.products) ? data.products : [];
+        catalogAllProducts = sortCatalog(Array.isArray(data.products) ? data.products : []);
 
         const updEl = document.getElementById('catalog-updated');
         if (updEl) updEl.textContent = data.updatedAt ? data.updatedAt.slice(0, 10) : '—';
@@ -53,14 +65,41 @@
       }
     }
 
-    // Build the full catalog markup: toolbar, table with filter-enabled headers,
-    // and an empty <tbody> that applyCatalogFilters() populates. Called once
-    // per load; filter changes don't re-run this, only the tbody update.
+    // Sort by brand, then status, then sku, then fulfillment — all A-Z.
+    // Empty strings sort before any populated value so "blank" products
+    // cluster at the top of their group.
+    function sortCatalog(products) {
+      return [...products].sort((a, b) => {
+        for (const field of CATALOG_SORT_FIELDS) {
+          const cmp = String(a[field] || '').localeCompare(String(b[field] || ''));
+          if (cmp !== 0) return cmp;
+        }
+        return 0;
+      });
+    }
+
+    // Build the full catalog markup: toolbar, two-row <thead> (filters on top,
+    // labels right above the data), and an empty <tbody> that
+    // applyCatalogFilters() populates. Called once per load; filter changes
+    // don't re-run this, only the tbody update.
     function renderCatalogLayout() {
       const container = document.getElementById('catalog-content');
-      const thBase   = 'padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem; vertical-align: top;';
-      const thLeft   = `text-align: left; ${thBase}`;
-      const thRight  = `text-align: right; ${thBase}`;
+
+      const thBase = 'padding: 0.5rem 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;';
+      const thLabelBase = 'padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;';
+
+      // Row 1: filter dropdowns (or blank cells) aligned above each column.
+      const filterCells = CATALOG_COLUMNS.map(col => {
+        const align = col.align === 'right' ? 'text-align: right;' : 'text-align: left;';
+        if (!col.filter) return `<th style="${align} ${thBase}"></th>`;
+        return `<th style="${align} ${thBase}">${filterDropdown(col.field)}</th>`;
+      }).join('');
+
+      // Row 2: column labels, aligned right above the data cells.
+      const labelCells = CATALOG_COLUMNS.map(col => {
+        const align = col.align === 'right' ? 'text-align: right;' : 'text-align: left;';
+        return `<th style="${align} ${thLabelBase}">${col.label}</th>`;
+      }).join('');
 
       container.innerHTML = `
         <div class="catalog-toolbar">
@@ -72,22 +111,13 @@
 
         <table style="width: 100%; border-collapse: collapse;">
           <thead>
-            <tr>
-              <th style="${thLeft}">SKU</th>
-              <th style="${thLeft}">Name</th>
-              <th style="${thLeft}">${filterHeader('Brand', 'brand')}</th>
-              <th style="${thLeft}">${filterHeader('Fulfillment', 'fulfillment')}</th>
-              <th style="${thLeft}">${filterHeader('Status', 'status')}</th>
-              <th style="${thRight}">Cost</th>
-              <th style="${thLeft}">ASIN</th>
-              <th style="${thLeft}">${filterHeader('Type', 'type')}</th>
-            </tr>
+            <tr>${filterCells}</tr>
+            <tr>${labelCells}</tr>
           </thead>
           <tbody id="catalog-tbody"></tbody>
         </table>
       `;
 
-      // Wire up events after the nodes exist.
       document.getElementById('catalog-only-active').addEventListener('change', (e) => {
         catalogOnlyActive = e.target.checked;
         applyCatalogFilters();
@@ -95,19 +125,20 @@
 
       document.getElementById('catalog-export-btn').addEventListener('click', exportCatalogCSV);
 
-      for (const field of CATALOG_FILTERABLE) {
-        const sel = document.getElementById(`catalog-filter-${field}`);
+      for (const col of CATALOG_COLUMNS) {
+        if (!col.filter) continue;
+        const sel = document.getElementById(`catalog-filter-${col.field}`);
         if (!sel) continue;
         sel.addEventListener('change', (e) => {
-          catalogFilters[field] = e.target.value;
+          catalogFilters[col.field] = e.target.value;
           applyCatalogFilters();
         });
       }
     }
 
-    // Header cell markup: label stacked over a compact dropdown populated from
-    // the distinct values in the current dataset.
-    function filterHeader(label, field) {
+    // Compact <select> populated from the distinct values in the current
+    // dataset. Lives above its column's label in the <thead>.
+    function filterDropdown(field) {
       const values = [...new Set(
         catalogAllProducts.map(p => p[field]).filter(v => v != null && v !== '')
       )].sort((a, b) => String(a).localeCompare(String(b)));
@@ -117,11 +148,10 @@
         .join('');
 
       return `
-        <div>${label}</div>
         <select
           id="catalog-filter-${field}"
           class="catalog-filter-select"
-          style="width: auto; padding: 0.25rem 0.5rem; margin-top: 0.375rem; font-size: 0.75rem; font-weight: 400;"
+          style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; font-weight: 400;"
         >
           <option value="">All</option>
           ${options}
@@ -134,9 +164,10 @@
     function getFilteredCatalog() {
       return catalogAllProducts.filter(p => {
         if (catalogOnlyActive && p.status !== 'Active') return false;
-        for (const field of CATALOG_FILTERABLE) {
-          const selected = catalogFilters[field];
-          if (selected && p[field] !== selected) return false;
+        for (const col of CATALOG_COLUMNS) {
+          if (!col.filter) continue;
+          const selected = catalogFilters[col.field];
+          if (selected && p[col.field] !== selected) return false;
         }
         return true;
       });
@@ -157,31 +188,25 @@
     }
 
     function renderCatalogRow(p) {
-      const tdBase = 'padding: 0.75rem; border-bottom: 1px solid var(--border);';
-      const tdMono = `${tdBase} font-family: 'Roboto Mono', monospace;`;
-      const tdMonoRight = `${tdMono} text-align: right;`;
-      return `
-        <tr>
-          <td style="${tdMono}">${escapeHtml(p.sku)}</td>
-          <td style="${tdBase}">${escapeHtml(p.name)}</td>
-          <td style="${tdBase}">${escapeHtml(p.brand)}</td>
-          <td style="${tdBase}">${escapeHtml(p.fulfillment)}</td>
-          <td style="${tdBase}">${escapeHtml(p.status)}</td>
-          <td style="${tdMonoRight}">${formatCost(p.cost)}</td>
-          <td style="${tdMono}">${escapeHtml(p.asin)}</td>
-          <td style="${tdBase}">${escapeHtml(p.type)}</td>
-        </tr>
-      `;
+      const cells = CATALOG_COLUMNS.map(col => {
+        const align = col.align === 'right' ? 'text-align: right;' : '';
+        const mono  = col.mono ? "font-family: 'Roboto Mono', monospace;" : '';
+        const style = `padding: 0.75rem; border-bottom: 1px solid var(--border); ${align} ${mono}`;
+        const raw   = p[col.field];
+        const value = col.field === 'cost' ? formatCost(raw) : escapeHtml(raw);
+        return `<td style="${style}">${value}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
     }
 
-    // Export the currently filtered list as a CSV. Uses the same column order
-    // as the Sheet's Products tab so the file round-trips cleanly.
+    // Export the currently filtered list as a CSV. Column order matches the
+    // on-screen table so the file round-trips cleanly through upload.
     function exportCatalogCSV() {
       const rows = getFilteredCatalog();
-      const headers = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status'];
-      const lines = [headers.join(',')];
+      const fields = CATALOG_COLUMNS.map(c => c.field);
+      const lines = [fields.join(',')];
       for (const p of rows) {
-        lines.push(headers.map(h => csvEscape(p[h] ?? '')).join(','));
+        lines.push(fields.map(f => csvEscape(p[f] ?? '')).join(','));
       }
       const csv = lines.join('\r\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
