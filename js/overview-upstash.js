@@ -54,10 +54,17 @@
     //     anything else with a SKU                            → FBA Inventory Adjustment
     //     anything else without a SKU                         → Other Expenses
     //
-    // Not wired yet (waiting on user schema):
-    //   ChargebackEventList, GuaranteeClaimEventList, RetrochargeEventList.
-    //   Ad spend + shipping still read from the Sheets tabs until those
-    //   migrations ship.
+    //   ChargebackEventList, GuaranteeClaimEventList, RetrochargeEventList
+    //   — these are rare enough that per user direction, we emit per-item
+    //   rows (so the derived CSV stays granular) but the statement
+    //   categorizer collapses each row's entire net amount into
+    //   Other Expenses. type is 'Chargeback' / 'GuaranteeClaim' /
+    //   'Retrocharge' so they filter out cleanly in CSV review.
+    //
+    // Every SP-API FinancialEvent list we've seen populated in real data
+    // is now wired. Ad spend + shipping still read from the Sheets tabs
+    // until the Advertising API migration and ShippingCosts migration
+    // ship separately.
 
     // ─── VIEW SWITCHING ─────────────────────────────────────────────────
 
@@ -253,6 +260,20 @@
         }
         for (const ev of (page.AdjustmentEventList || [])) {
           _pushAdjustmentRows(rows, ev, startDate, endDate);
+        }
+        // Chargeback / GuaranteeClaim / Retrocharge events are uncommon
+        // enough that per the user's call, we drop the entire event
+        // amount into Other Expenses without further breakdown. Still
+        // emit per-item rows so the derived CSV remains granular, just
+        // all columns collapse to Other Expenses in the statement.
+        for (const ev of (page.ChargebackEventList || [])) {
+          _pushEventItemRows(rows, ev, 'Chargeback',     ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
+        }
+        for (const ev of (page.GuaranteeClaimEventList || [])) {
+          _pushEventItemRows(rows, ev, 'GuaranteeClaim', ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
+        }
+        for (const ev of (page.RetrochargeEventList || [])) {
+          _pushEventItemRows(rows, ev, 'Retrocharge',    ev.ShipmentItemAdjustmentList, +1, startDate, endDate);
         }
       }
       return rows;
@@ -557,6 +578,18 @@
           continue;
         }
 
+        // Chargeback / GuaranteeClaim / Retrocharge rows dump their entire
+        // net amount into Other Expenses. Per-item detail is preserved in
+        // the CSV but collapses here since these event types are rare
+        // enough not to warrant a dedicated statement line.
+        if (r.type === 'Chargeback' || r.type === 'GuaranteeClaim' || r.type === 'Retrocharge') {
+          const net = (r.sale || 0) + (r.otherCharges || 0) +
+                      (r.fbaFees || 0) + (r.transactionFees || 0) +
+                      (r.promotions || 0);
+          add('Other Expenses', 'expenses', net);
+          continue;
+        }
+
         const prod = products[r.sku];
         if (!prod) {
           if (!missing.has(r.sku)) missing.set(r.sku, new Set());
@@ -618,7 +651,7 @@
         : '';
       const countLine = `
         <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds + Service Fees + Adjustments)
+          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds + Service Fees + Adjustments + Chargebacks/Guarantees/Retrocharges)
         </div>
       `;
       const missingWarning  = missingSkus.length  > 0 ? _renderMissingSkuWarning(missingSkus)   : '';
