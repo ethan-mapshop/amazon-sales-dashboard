@@ -41,9 +41,21 @@
     //   Unknown FeeTypes fall back to Other Expenses and get listed in a
     //   yellow warning block above the report for the user to triage.
     //
+    //   AdjustmentEventList — one derived row per AdjustmentItemList entry
+    //   with type='Adjustment' and {adjustmentType, adjustmentAmount}.
+    //   AdjustmentType routes via _adjustmentLine:
+    //     WAREHOUSE_LOST, COMPENSATED_CLAWBACK,
+    //     MISSING_FROM_INBOUND, MISSING_FROM_INBOUND_CLAWBACK  → FBA Inventory Adjustment
+    //     ReturnPostageBilling_* (Tracking/Postage/
+    //     TransactionFee/FuelSurcharge/OversizeSurcharge/
+    //     DeliveryAreaSurcharge), PostageBilling_PostageAdjustment
+    //                                                         → FBA Returns Fees
+    //     Other                                               → Other Expenses
+    //     anything else with a SKU                            → FBA Inventory Adjustment
+    //     anything else without a SKU                         → Other Expenses
+    //
     // Not wired yet (waiting on user schema):
-    //   AdjustmentEventList, ChargebackEventList, GuaranteeClaimEventList,
-    //   RetrochargeEventList.
+    //   ChargebackEventList, GuaranteeClaimEventList, RetrochargeEventList.
     //   Ad spend + shipping still read from the Sheets tabs until those
     //   migrations ship.
 
@@ -239,8 +251,64 @@
         for (const ev of (page.ServiceFeeEventList || [])) {
           _pushServiceFeeRows(rows, ev, startDate, endDate);
         }
+        for (const ev of (page.AdjustmentEventList || [])) {
+          _pushAdjustmentRows(rows, ev, startDate, endDate);
+        }
       }
       return rows;
+    }
+
+    // AdjustmentEvent has an event-level AdjustmentType plus an
+    // AdjustmentItemList with per-SKU detail (TotalAmount per item). Emit
+    // one row per item so SKU-specific amounts are visible in the derived
+    // CSV; if the event has no items, emit one event-level row using
+    // ev.AdjustmentAmount as the total.
+    function _pushAdjustmentRows(rows, ev, startDate, endDate) {
+      const date = (ev.PostedDate || '').substring(0, 10);
+      if (date && (date < startDate || date > endDate)) return;
+
+      const adjustmentType = ev.AdjustmentType || '';
+      const items = ev.AdjustmentItemList || [];
+      const base = {
+        type: 'Adjustment',
+        orderId: '',
+        date,
+        qty: 0,
+        sale: 0, otherCharges: 0, fbaFees: 0, transactionFees: 0, promotions: 0,
+        feeType: '', feeAmount: 0
+      };
+
+      if (items.length === 0) {
+        rows.push({
+          ...base,
+          sku: '',
+          adjustmentType,
+          adjustmentAmount: _amount(ev.AdjustmentAmount)
+        });
+        return;
+      }
+
+      for (const item of items) {
+        const amt = _amount(item.TotalAmount) ||
+                    (_amount(item.PerUnitAmount) * (parseInt(item.Quantity, 10) || 0));
+        rows.push({
+          ...base,
+          sku: _normalizeSku(item.SellerSKU),
+          qty: parseInt(item.Quantity, 10) || 0,
+          adjustmentType,
+          adjustmentAmount: amt
+        });
+      }
+    }
+
+    // Route an Adjustment row to the right Expense line. Checks the four
+    // explicit sets first, then the "Other" special case, then falls back
+    // to the "has SKU?" rule.
+    function _adjustmentLine(r) {
+      if (ADJUSTMENT_INVENTORY_TYPES.has(r.adjustmentType))   return 'FBA Inventory Adjustment';
+      if (ADJUSTMENT_RETURNS_FEE_TYPES.has(r.adjustmentType)) return 'FBA Returns Fees';
+      if (r.adjustmentType === 'Other')                       return 'Other Expenses';
+      return r.sku ? 'FBA Inventory Adjustment' : 'Other Expenses';
     }
 
     // ServiceFeeEvent has no items — just a FeeList at the event level.
@@ -403,14 +471,13 @@
       'FBA Product Costs', 'FBA Transaction Fees', 'FBA Fees',
       'FBA Returns Fees',
       'FBA Inbound Placement Fees', 'FBA Inbound Shipping Costs',
-      'FBA Inventory Storage Fees', 'FBA Inventory Reimbursement', 'FBA Ad Spend',
+      'FBA Inventory Storage Fees', 'FBA Inventory Adjustment', 'FBA Ad Spend',
       'Other Expenses', 'Unallocated Ad Spend'
     ];
 
-    // ServiceFeeEvent FeeType → Expense line item. See the user-supplied
-    // mapping for ShipmentEvent / RefundEvent — same format extended.
+    // ServiceFeeEvent FeeType → Expense line item.
     // Anything not in this map falls into "Other Expenses" so nothing is
-    // silently lost; unmapped types are logged to the console for review.
+    // silently lost; unmapped types surface in a warning block.
     const SERVICE_FEE_LINE_MAP = {
       FBADisposalFee:               'FBA Returns Fees',
       CustomerReturnHRRUnitFee:     'FBA Returns Fees',
@@ -420,6 +487,26 @@
       FBALongTermStorageFee:        'FBA Inventory Storage Fees',
       Subscription:                 'Other Expenses'
     };
+
+    // AdjustmentEvent AdjustmentType → Expense line item. Unlike service
+    // fees, adjustments have a fallback that depends on whether the row
+    // carries a SKU: SKU-bearing adjustments land in FBA Inventory
+    // Adjustment, SKU-less ones in Other Expenses. See _adjustmentLine.
+    const ADJUSTMENT_INVENTORY_TYPES = new Set([
+      'WAREHOUSE_LOST',
+      'COMPENSATED_CLAWBACK',
+      'MISSING_FROM_INBOUND',
+      'MISSING_FROM_INBOUND_CLAWBACK'
+    ]);
+    const ADJUSTMENT_RETURNS_FEE_TYPES = new Set([
+      'PostageBilling_PostageAdjustment',
+      'ReturnPostageBilling_Tracking',
+      'ReturnPostageBilling_Postage',
+      'ReturnPostageBilling_TransactionFee',
+      'ReturnPostageBilling_FuelSurcharge',
+      'ReturnPostageBilling_OversizeSurcharge',
+      'ReturnPostageBilling_DeliveryAreaSurcharge'
+    ]);
 
     // Decode HTML-entity-encoded ampersands that SP-API sometimes returns
     // in SellerSKU strings ("&amp;" → "&"). The Products catalog stores
@@ -459,6 +546,14 @@
           } else {
             add(line, 'expenses', r.feeAmount);
           }
+          continue;
+        }
+
+        // Adjustment rows route by AdjustmentType via _adjustmentLine,
+        // with a "has SKU?" fallback for types not in the explicit maps.
+        // No Products-catalog lookup needed.
+        if (r.type === 'Adjustment') {
+          add(_adjustmentLine(r), 'expenses', r.adjustmentAmount);
           continue;
         }
 
@@ -523,7 +618,7 @@
         : '';
       const countLine = `
         <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds + Service Fees)
+          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds + Service Fees + Adjustments)
         </div>
       `;
       const missingWarning  = missingSkus.length  > 0 ? _renderMissingSkuWarning(missingSkus)   : '';
@@ -623,7 +718,12 @@
           alert('No transaction rows in range — has this period been synced?');
           return;
         }
-        const headers = ['type', 'order id', 'date', 'sku', 'qty', 'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions', 'fee type', 'fee amount'];
+        const headers = [
+          'type', 'order id', 'date', 'sku', 'qty',
+          'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions',
+          'fee type', 'fee amount',
+          'adjustment type', 'adjustment amount'
+        ];
         const lines = [headers.map(_csvCell).join(',')];
         for (const r of rows) {
           lines.push([
@@ -631,7 +731,9 @@
             _round2(r.sale), _round2(r.otherCharges),
             _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions),
             r.feeType || '',
-            r.feeAmount != null ? _round2(r.feeAmount) : ''
+            r.feeAmount != null ? _round2(r.feeAmount) : '',
+            r.adjustmentType || '',
+            r.adjustmentAmount != null ? _round2(r.adjustmentAmount) : ''
           ].map(_csvCell).join(','));
         }
         _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), filename);

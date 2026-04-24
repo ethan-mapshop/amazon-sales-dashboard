@@ -1529,7 +1529,7 @@
           'FBA Inbound Placement Fees': { debit: 0, credit: 0 },
           'FBA Inbound Shipping Costs': { debit: 0, credit: 0 },
           'FBA Inventory Storage Fees': { debit: 0, credit: 0 },
-          'FBA Inventory Reimbursement': { debit: 0, credit: 0 },
+          'FBA Inventory Adjustment': { debit: 0, credit: 0 },
           'FBA Ad Spend': { debit: 0, credit: 0 },
           'Other Expenses': { debit: 0, credit: 0 },
           'Unallocated Ad Spend': { debit: 0, credit: 0 }
@@ -1599,9 +1599,12 @@
           addAmount('FBA Other', 'income', promoRebates);
         }
         
-        // FBA Inventory Reimbursement: description starts with "FBA Inventory Reimbursement"
+        // FBA Inventory Adjustment line is populated when Amazon's Transaction
+        // report description starts with the literal text "FBA Inventory
+        // Reimbursement" (Amazon's wording). The line itself was renamed;
+        // the source-text match string stays as Amazon writes it.
         if (description.startsWith('FBA Inventory Reimbursement')) {
-          addAmount('FBA Inventory Reimbursement', 'expenses', other);
+          addAmount('FBA Inventory Adjustment', 'expenses', other);
         }
         
         // EXPENSE CALCULATIONS
@@ -1730,7 +1733,7 @@
         (statement.expenses['FBA Inbound Placement Fees']?.debit || 0) - (statement.expenses['FBA Inbound Placement Fees']?.credit || 0) +
         (statement.expenses['FBA Inbound Shipping Costs']?.debit || 0) - (statement.expenses['FBA Inbound Shipping Costs']?.credit || 0) +
         (statement.expenses['FBA Inventory Storage Fees']?.debit || 0) - (statement.expenses['FBA Inventory Storage Fees']?.credit || 0) +
-        (statement.expenses['FBA Inventory Reimbursement']?.debit || 0) - (statement.expenses['FBA Inventory Reimbursement']?.credit || 0);
+        (statement.expenses['FBA Inventory Adjustment']?.debit || 0) - (statement.expenses['FBA Inventory Adjustment']?.credit || 0);
       
       const fbaProductCosts = (statement.expenses['FBA Product Costs']?.debit || 0) - (statement.expenses['FBA Product Costs']?.credit || 0);
       const fbaAdSpend = statement.expenses['FBA Ad Spend']?.debit || 0;
