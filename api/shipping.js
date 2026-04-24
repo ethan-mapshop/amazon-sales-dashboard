@@ -43,6 +43,7 @@ export default async function handler(req, res) {
     if (action === 'get')                 return handleGet(req, res);
     if (action === 'get-range')           return handleGetRange(req, res);
     if (action === 'get-months')          return handleGetMonths(req, res);
+    if (action === 'sample-raw')          return handleSampleRaw(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets') return handleMigrateFromSheets(req, res);
@@ -242,6 +243,32 @@ async function handleDeleteSheetsRows(req, res) {
     });
   } catch (error) {
     return res.status(500).json({ error: 'Delete failed: ' + error.message });
+  }
+}
+
+// ─── DIAGNOSTIC: sample-raw ──────────────────────────────────────────────────
+// Returns the first page of ShipStation's /shipments response unchanged so
+// you can inspect the raw field names and values. Doesn't touch KV.
+async function handleSampleRaw(req, res) {
+  try {
+    if (!process.env.SHIPSTATION_API_KEY || !process.env.SHIPSTATION_API_SECRET) {
+      return res.status(500).json({ error: 'ShipStation credentials not set' });
+    }
+    const month = req.query.month || previousMonthISO();
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const { start, end } = monthBoundDates(month);
+
+    const url = `https://ssapi.shipstation.com/shipments?shipDateStart=${start}&shipDateEnd=${end}&pageSize=5&page=1&includeShipmentItems=true`;
+    const r = await fetch(url, { headers: ssAuthHeader() });
+    const body = await r.json();
+    return res.status(200).json({
+      success: r.ok,
+      status: r.status,
+      urlRequested: url,
+      body
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Sample failed: ' + error.message });
   }
 }
 
