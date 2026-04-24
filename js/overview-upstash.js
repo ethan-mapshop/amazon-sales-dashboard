@@ -210,10 +210,16 @@
           endDate
         });
 
-        const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend);
+        // Shipping costs are 100% FBM (seller fulfills), so no allocation
+        // needed — just sum the rows in the date window and hand the total
+        // to the statement builder. Per-SKU detail is preserved in KV for
+        // the future Brand & Product page migration.
+        const shippingCosts = _sumShippingInRange(inputs.shippingRows, startDate, endDate);
+
+        const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts);
         _renderUpstashStatement(container, {
           statement, missingSkus, unmappedFees, rows,
-          lastSynced: inputs.lastSynced, startDate, endDate, adSpend
+          lastSynced: inputs.lastSynced, startDate, endDate, adSpend, shippingCosts
         });
       } catch (err) {
         console.error('Upstash overview failed:', err);
@@ -228,23 +234,25 @@
       const startMonth = startDate.slice(0, 7);
       const endMonth   = endDate.slice(0, 7);
 
-      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes] = await Promise.all([
+      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes, shipRes] = await Promise.all([
         fetch(`/api/transactions?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch('/api/products?action=get', { headers: authHeader }),
         fetch(`/api/adspend?action=get-range&type=sp&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch(`/api/adspend?action=get-range&type=sb&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch('/api/mappings?action=get&type=product', { headers: authHeader }),
-        fetch('/api/mappings?action=get&type=brand',   { headers: authHeader })
+        fetch('/api/mappings?action=get&type=brand',   { headers: authHeader }),
+        fetch(`/api/shipping?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader })
       ]);
       if (!txRes.ok)   throw new Error(`Transactions fetch failed (${txRes.status})`);
       if (!prodRes.ok) throw new Error(`Products fetch failed (${prodRes.status})`);
 
       const tx         = await txRes.json();
       const prod       = await prodRes.json();
-      const spAd       = spAdRes.ok    ? await spAdRes.json()    : { rows: [] };
-      const sbAd       = sbAdRes.ok    ? await sbAdRes.json()    : { rows: [] };
-      const prodMap    = prodMapRes.ok ? await prodMapRes.json() : { mappings: {} };
+      const spAd       = spAdRes.ok     ? await spAdRes.json()    : { rows: [] };
+      const sbAd       = sbAdRes.ok     ? await sbAdRes.json()    : { rows: [] };
+      const prodMap    = prodMapRes.ok  ? await prodMapRes.json() : { mappings: {} };
       const brandMap   = brandMapRes.ok ? await brandMapRes.json() : { mappings: {} };
+      const shipping   = shipRes.ok     ? await shipRes.json()    : { rows: [] };
 
       // Products keyed by SKU for O(1) lookup during derivation. We also
       // build a brand → [skus] index since Sponsored Brands allocation needs
@@ -294,6 +302,7 @@
         brandToSkus,
         spAdRows: spAd.rows || [],
         sbAdRows: sbAd.rows || [],
+        shippingRows: shipping.rows || [],
         productCampaignToSkus,
         brandCampaignToBrand,
         lastSynced
@@ -599,6 +608,20 @@
       return String(sku || '').replace(/&amp;/g, '&');
     }
 
+    // Sum the `cost` field of shipping rows whose shipDate falls inside
+    // [startDate, endDate]. Handles both API rows (sku-bearing, cost
+    // already allocated per SKU) and Sheets-backfilled rows (sku-less,
+    // cost is the shipment total) — both contribute to the period total.
+    function _sumShippingInRange(shippingRows, startDate, endDate) {
+      let total = 0;
+      for (const r of (shippingRows || [])) {
+        const d = r.shipDate || '';
+        if (d && (d < startDate || d > endDate)) continue;
+        total += Number(r.cost) || 0;
+      }
+      return total;
+    }
+
     // Is this SKU's fulfillment field one of the "Amazon/FBA" spellings?
     // Seen in the wild: "Amazon", "AFN", "FBA", various casings/whitespace.
     function _isFbaProduct(product) {
@@ -735,7 +758,7 @@
       return { fba, fbm, unallocated, unallocatedProductCampaigns, unallocatedBrandCampaigns };
     }
 
-    function _buildStatement(rows, products, adSpend = null) {
+    function _buildStatement(rows, products, adSpend = null, shippingCosts = 0) {
       const statement = {
         income: Object.fromEntries(STATEMENT_INCOME_LINES.map(k => [k, { debit: 0, credit: 0 }])),
         expenses: Object.fromEntries(STATEMENT_EXPENSE_LINES.map(k => [k, { debit: 0, credit: 0 }]))
@@ -749,6 +772,13 @@
         if (adSpend.fba > 0)          statement.expenses['FBA Ad Spend'].debit += adSpend.fba;
         if (adSpend.fbm > 0)          statement.expenses['FBM Ad Spend'].debit += adSpend.fbm;
         if (adSpend.unallocated > 0)  statement.expenses['Unallocated Ad Spend'].debit += adSpend.unallocated;
+      }
+
+      // Shipping costs are always FBM — seller-fulfilled shipments have
+      // costs we paid out-of-pocket. FBA shipping is wrapped into Amazon's
+      // FBA Fees on the SP-API side and doesn't flow through here.
+      if (shippingCosts > 0) {
+        statement.expenses['FBM Shipping Costs'].debit += shippingCosts;
       }
 
       const missing = new Map(); // sku → Set of orderIds using it
