@@ -1294,30 +1294,37 @@
           if (fulfillment && !bucket.fulfillment) bucket.fulfillment = fulfillment;
         }
 
-        // ── Aggregate Upstash side: sku → { order, refund, fulfillment } ──
+        // ── Aggregate Upstash side: sku → { order, refund } ──────────────
+        // Fulfillment is resolved from the catalog at merge time (not here)
+        // so SKUs that exist in Sheets but have zero Upstash rows still
+        // report their current catalog classification instead of falsely
+        // looking "not in catalog."
         const rows = _deriveTransactionRows(upstashInputs.pages, startDate, endDate);
         const upstashPerSku = Object.create(null);
         for (const r of rows) {
           if (!r.sku || (r.type !== 'Order' && r.type !== 'Refund')) continue;
           let bucket = upstashPerSku[r.sku];
-          if (!bucket) {
-            const prod = upstashInputs.products[r.sku];
-            bucket = upstashPerSku[r.sku] = {
-              order: 0, refund: 0,
-              fulfillment: prod ? String(prod.fulfillment || '').trim() : ''
-            };
-          }
+          if (!bucket) bucket = upstashPerSku[r.sku] = { order: 0, refund: 0 };
           if (r.type === 'Order')  bucket.order  += r.sale;
           else                      bucket.refund += r.sale;
         }
 
         // ── Merge + sort by |order diff| desc ─────────────────────────────
+        // Catalog lookup is done unconditionally for every SKU in the union,
+        // regardless of whether that SKU appeared in Upstash derived rows,
+        // so the "Catalog Fulfillment" column is always trustworthy.
         const skus = new Set([...Object.keys(sheetsPerSku), ...Object.keys(upstashPerSku)]);
         const diffs = [];
         let sheetsTotal = 0, upstashTotal = 0;
         for (const sku of skus) {
           const s = sheetsPerSku[sku]  || { order: 0, refund: 0, fulfillment: '' };
-          const u = upstashPerSku[sku] || { order: 0, refund: 0, fulfillment: '' };
+          const u = upstashPerSku[sku] || { order: 0, refund: 0 };
+          const prod = upstashInputs.products[sku];
+          let catalogFulfillment;
+          if (!prod) catalogFulfillment = '(not in catalog)';
+          else if (!String(prod.fulfillment || '').trim()) catalogFulfillment = '(blank)';
+          else catalogFulfillment = String(prod.fulfillment).trim();
+
           sheetsTotal  += s.order;
           upstashTotal += u.order;
           diffs.push({
@@ -1328,7 +1335,7 @@
             sheetsRefund:  s.refund,
             upstashRefund: u.refund,
             sheetsFulfillment: s.fulfillment,
-            catalogFulfillment: u.fulfillment
+            catalogFulfillment
           });
         }
         diffs.sort((a, b) => Math.abs(b.orderDiff) - Math.abs(a.orderDiff));
@@ -1353,15 +1360,23 @@
       };
       const diffColor = (n) => n > 0.005 ? 'var(--success, #1f9d55)' : (n < -0.005 ? 'var(--error)' : 'var(--text-secondary)');
 
+      // Synthetic markers shouldn't participate in the classification-shift
+      // comparison — "(not in catalog)" and "(blank)" mean "we don't have
+      // a catalog value to compare against," not "the classification flipped."
+      const isRealFulfillment = (v) => v && v !== '(not in catalog)' && v !== '(blank)';
+      const fulfillmentShifted = (d) =>
+        isRealFulfillment(d.sheetsFulfillment) &&
+        isRealFulfillment(d.catalogFulfillment) &&
+        d.sheetsFulfillment.toLowerCase() !== d.catalogFulfillment.toLowerCase();
+
       // Only list SKUs with a meaningful order diff (≥ $0.01) OR with a
-      // fulfillment-classification mismatch. Everything else is noise.
+      // real fulfillment-classification mismatch. Everything else is noise.
       const filtered = diffs.filter(d =>
-        Math.abs(d.orderDiff) >= 0.01 ||
-        (d.sheetsFulfillment && d.catalogFulfillment && d.sheetsFulfillment.toLowerCase() !== d.catalogFulfillment.toLowerCase())
+        Math.abs(d.orderDiff) >= 0.01 || fulfillmentShifted(d)
       );
 
       const rowsHtml = filtered.map(d => {
-        const shifted = d.sheetsFulfillment && d.catalogFulfillment && d.sheetsFulfillment.toLowerCase() !== d.catalogFulfillment.toLowerCase();
+        const shifted = fulfillmentShifted(d);
         return `
           <tr>
             <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(d.sku || '(empty)')}</td>
