@@ -208,12 +208,16 @@ async function handleProbeV2024(req, res) {
     let maxCalls;
     if (orderId) {
       // relatedIdentifierName/Value is the documented filter as of 2026-01-28.
-      // postedAfter is required by the API, so fall back to a wide window
-      // that'll contain the order regardless of when it posted/releases.
+      // postedAfter is required and Amazon rejects anything older than
+      // ~2 years from now, so use "now minus 23 months" — the widest window
+      // Amazon will accept.
+      const now = new Date();
+      const windowStart = new Date(now.getTime());
+      windowStart.setUTCMonth(windowStart.getUTCMonth() - 23);
       query = {
         relatedIdentifierName: 'ORDER_ID',
         relatedIdentifierValue: orderId,
-        postedAfter: '2024-01-01T00:00:00Z'
+        postedAfter: windowStart.toISOString().replace(/\.\d{3}Z$/, 'Z')
       };
       maxCalls = 20;
     } else if (month) {
