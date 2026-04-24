@@ -7,6 +7,16 @@ import { kv } from '@vercel/kv';
 //   GET  ?action=get-range       &startMonth=&endMonth=      — raw pages, many months
 //   GET  ?action=get-months                                  — list of synced months
 //   GET  ?action=fetch-order-raw &orderId=                   — one order straight from SP-API
+//   GET  ?action=probe-v2024     [&month=|&orderId=]         — Finances v2024-06-19 probe (see below)
+//
+// probe-v2024 is a diagnostic for the planned migration away from v0
+// listFinancialEvents. The v0 endpoint silently excludes Deferred
+// transactions (notably B2B Invoiced Orders), so we're investigating the
+// newer v2024-06-19 listTransactions endpoint which surfaces them with
+// a transactionStatus field. This probe issues a tiny (1-day default, or
+// month-bounded, or order-id-filtered) request and returns the raw shape
+// + a summary so we can map breakdownType strings and deferralReasons to
+// our statement lines before writing production sync code.
 //
 // KV layout (raw only — no pre-processed store):
 //   transactions:raw:YYYY-MM         → { pages: [<FinancialEvents>, ...] }
@@ -32,6 +42,7 @@ export default async function handler(req, res) {
     if (action === 'get-range')       return handleGetRange(req, res);
     if (action === 'get-months')      return handleGetMonths(req, res);
     if (action === 'fetch-order-raw') return handleFetchOrderRaw(req, res);
+    if (action === 'probe-v2024')     return handleProbeV2024(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -170,6 +181,133 @@ async function handleFetchOrderRaw(req, res) {
   } catch (error) {
     console.error('[FETCH ORDER RAW] Error:', error);
     return res.status(500).json({ error: 'Failed: ' + error.message });
+  }
+}
+
+// ─── FINANCES v2024-06-19 PROBE ──────────────────────────────────────────────
+// Diagnostic-only. Does NOT write to KV. Issues listTransactions against the
+// new Finances API surface and returns the raw response plus a summary
+// (counts by transactionType / transactionStatus, every breakdownType and
+// deferralReason seen, the first transaction, and the first deferred
+// transaction found). Three input modes, in priority order:
+//   &orderId=114-...      — filter to one order (fastest, use this to find
+//                           the known-missing $6,412 sale)
+//   &month=YYYY-MM        — month window, capped at 10 paginated calls
+//   (default)             — last 24h, capped at 5 paginated calls
+//
+// Uses api_path to bypass whatever operation map the amazon-sp-api library
+// bundles — works regardless of library version. The library still signs
+// the request and manages the access token normally.
+async function handleProbeV2024(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const { orderId, month } = req.query;
+    let query;
+    let maxCalls;
+    if (orderId) {
+      // relatedIdentifierName/Value is the documented filter as of 2026-01-28.
+      // postedAfter is required by the API, so fall back to a wide window
+      // that'll contain the order regardless of when it posted/releases.
+      query = {
+        relatedIdentifierName: 'ORDER_ID',
+        relatedIdentifierValue: orderId,
+        postedAfter: '2024-01-01T00:00:00Z'
+      };
+      maxCalls = 20;
+    } else if (month) {
+      if (!/^\d{4}-\d{2}$/.test(month)) {
+        return res.status(400).json({ error: 'month must be YYYY-MM' });
+      }
+      const { start, end } = monthBounds(month);
+      query = { postedAfter: start, postedBefore: end };
+      maxCalls = 50;
+    } else {
+      const now = new Date();
+      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      query = {
+        postedAfter: dayAgo.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        postedBefore: now.toISOString().replace(/\.\d{3}Z$/, 'Z')
+      };
+      maxCalls = 5;
+    }
+
+    const sp = createSellingPartner();
+    const transactions = [];
+    let nextToken = null;
+    let calls = 0;
+
+    do {
+      const raw = await sp.callAPI({
+        api_path: '/finances/2024-06-19/transactions',
+        method: 'GET',
+        query: { ...query, ...(nextToken ? { nextToken } : {}) }
+      });
+      const body = raw?.payload ?? raw ?? {};
+      const list = Array.isArray(body.transactions) ? body.transactions : [];
+      transactions.push(...list);
+      nextToken = body.nextToken || null;
+      calls++;
+      console.log(`[PROBE V2024] page ${calls}: transactions=${list.length} hasNextToken=${!!nextToken}`);
+      // Rate limit is 0.5 req/s with burst of 10, so 2.2s between calls is safe.
+      if (nextToken && calls < maxCalls) await sleep(2200);
+    } while (nextToken && calls < maxCalls);
+
+    // Summary: what types/statuses came back, what breakdownType strings
+    // appear (so we know how to map to FBA Fees / Selling Fees / etc.), and
+    // what deferralReasons we see (so we know what to look for in production
+    // sync). All transactions included in the response for manual inspection.
+    const byType = {};
+    const byStatus = {};
+    const breakdownTypes = new Set();
+    const deferralReasons = new Set();
+    const relatedIdentifierNames = new Set();
+    let sampleDeferred = null;
+
+    const walkBreakdowns = (bs) => {
+      for (const b of (bs || [])) {
+        if (b?.breakdownType) breakdownTypes.add(b.breakdownType);
+        if (Array.isArray(b?.breakdowns)) walkBreakdowns(b.breakdowns);
+      }
+    };
+
+    for (const t of transactions) {
+      const tType = t.transactionType || '(null)';
+      const tStatus = t.transactionStatus || '(null)';
+      byType[tType] = (byType[tType] || 0) + 1;
+      byStatus[tStatus] = (byStatus[tStatus] || 0) + 1;
+      walkBreakdowns(t.breakdowns);
+      for (const item of (t.items || [])) walkBreakdowns(item.breakdowns);
+      for (const ctx of (t.contexts || [])) {
+        if (ctx?.deferralReason) deferralReasons.add(ctx.deferralReason);
+      }
+      for (const rid of (t.relatedIdentifiers || [])) {
+        if (rid?.relatedIdentifierName) relatedIdentifierNames.add(rid.relatedIdentifierName);
+      }
+      if (!sampleDeferred && (tStatus === 'DEFERRED' || tStatus === 'DEFERRED_RELEASED')) {
+        sampleDeferred = t;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      query,
+      pageCount: calls,
+      hitPageCap: nextToken !== null && calls >= maxCalls,
+      totalTransactions: transactions.length,
+      byType,
+      byStatus,
+      breakdownTypesSeen: [...breakdownTypes].sort(),
+      deferralReasonsSeen: [...deferralReasons].sort(),
+      relatedIdentifierNamesSeen: [...relatedIdentifierNames].sort(),
+      sampleFirst: transactions[0] || null,
+      sampleDeferred,
+      allTransactions: transactions
+    });
+  } catch (error) {
+    console.error('[PROBE V2024] Error:', error);
+    return res.status(500).json({ error: 'Probe failed: ' + error.message, stack: error.stack });
   }
 }
 
