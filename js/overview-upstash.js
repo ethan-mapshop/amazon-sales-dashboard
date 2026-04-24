@@ -190,10 +190,31 @@
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
 
       try {
-        const { pages, products, lastSynced } = await _fetchUpstashInputs(startDate, endDate);
-        const rows = _deriveTransactionRows(pages, startDate, endDate);
-        const { statement, missingSkus, unmappedFees } = _buildStatement(rows, products);
-        _renderUpstashStatement(container, { statement, missingSkus, unmappedFees, rows, lastSynced, startDate, endDate });
+        const inputs = await _fetchUpstashInputs(startDate, endDate);
+        const rows = _deriveTransactionRows(inputs.pages, startDate, endDate);
+
+        // Compute per-SKU sales-by-channel from derived Order rows. Used
+        // by the ad allocator for historical SP rows and SB rows where we
+        // need a proportional split across a campaign's / brand's SKUs.
+        const skuSales = _buildSkuSales(rows, inputs.products);
+
+        const adSpend = _allocateAdSpend({
+          spAdRows: inputs.spAdRows,
+          sbAdRows: inputs.sbAdRows,
+          products: inputs.products,
+          brandToSkus: inputs.brandToSkus,
+          productCampaignToSkus: inputs.productCampaignToSkus,
+          brandCampaignToBrand: inputs.brandCampaignToBrand,
+          skuSales,
+          startDate,
+          endDate
+        });
+
+        const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend);
+        _renderUpstashStatement(container, {
+          statement, missingSkus, unmappedFees, rows,
+          lastSynced: inputs.lastSynced, startDate, endDate, adSpend
+        });
       } catch (err) {
         console.error('Upstash overview failed:', err);
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
@@ -207,20 +228,52 @@
       const startMonth = startDate.slice(0, 7);
       const endMonth   = endDate.slice(0, 7);
 
-      const [txRes, prodRes] = await Promise.all([
+      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes] = await Promise.all([
         fetch(`/api/transactions?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
-        fetch('/api/products?action=get', { headers: authHeader })
+        fetch('/api/products?action=get', { headers: authHeader }),
+        fetch(`/api/adspend?action=get-range&type=sp&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch(`/api/adspend?action=get-range&type=sb&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=product', { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=brand',   { headers: authHeader })
       ]);
       if (!txRes.ok)   throw new Error(`Transactions fetch failed (${txRes.status})`);
       if (!prodRes.ok) throw new Error(`Products fetch failed (${prodRes.status})`);
 
-      const tx = await txRes.json();
-      const prod = await prodRes.json();
+      const tx         = await txRes.json();
+      const prod       = await prodRes.json();
+      const spAd       = spAdRes.ok    ? await spAdRes.json()    : { rows: [] };
+      const sbAd       = sbAdRes.ok    ? await sbAdRes.json()    : { rows: [] };
+      const prodMap    = prodMapRes.ok ? await prodMapRes.json() : { mappings: {} };
+      const brandMap   = brandMapRes.ok ? await brandMapRes.json() : { mappings: {} };
 
-      // Products keyed by SKU for O(1) lookup during derivation.
+      // Products keyed by SKU for O(1) lookup during derivation. We also
+      // build a brand → [skus] index since Sponsored Brands allocation needs
+      // to know which SKUs roll up under a given brand.
       const products = {};
+      const brandToSkus = {};
       for (const p of (prod.products || [])) {
-        if (p?.sku) products[p.sku] = p;
+        if (!p?.sku) continue;
+        products[p.sku] = p;
+        const brand = (p.brand || '').trim();
+        if (brand) {
+          if (!brandToSkus[brand]) brandToSkus[brand] = [];
+          brandToSkus[brand].push(p.sku);
+        }
+      }
+
+      // Campaign → SKU[] from /api/mappings (product) and campaign → brand
+      // (brand). These only matter for historical SP rows without an
+      // advertisedSku (Sheets-backfilled) and for SB rows (which are
+      // always campaign-level).
+      const productCampaignToSkus = {};
+      for (const [campaign, data] of Object.entries(prodMap.mappings || {})) {
+        if (Array.isArray(data?.skus) && data.skus.length > 0) {
+          productCampaignToSkus[campaign] = data.skus.slice();
+        }
+      }
+      const brandCampaignToBrand = {};
+      for (const [campaign, brand] of Object.entries(brandMap.mappings || {})) {
+        if (brand) brandCampaignToBrand[campaign] = brand;
       }
 
       // Grab the latest-synced timestamp across the months we're reading,
@@ -235,7 +288,16 @@
         }
       } catch { /* non-fatal */ }
 
-      return { pages: tx.pages || [], products, lastSynced };
+      return {
+        pages: tx.pages || [],
+        products,
+        brandToSkus,
+        spAdRows: spAd.rows || [],
+        sbAdRows: sbAd.rows || [],
+        productCampaignToSkus,
+        brandCampaignToBrand,
+        lastSynced
+      };
     }
 
     // ─── TRANSACTION DERIVE ─────────────────────────────────────────────
@@ -537,11 +599,158 @@
       return String(sku || '').replace(/&amp;/g, '&');
     }
 
-    function _buildStatement(rows, products) {
+    // Is this SKU's fulfillment field one of the "Amazon/FBA" spellings?
+    // Seen in the wild: "Amazon", "AFN", "FBA", various casings/whitespace.
+    function _isFbaProduct(product) {
+      const f = String(product?.fulfillment || '').trim().toLowerCase();
+      return f === 'amazon' || f === 'afn' || f === 'fba';
+    }
+
+    // Walk the derived Order rows and sum Principal revenue per SKU, split
+    // by the channel each SKU is actually sold through. Used by the ad
+    // allocator to proportionally split campaign-level spend across a
+    // campaign's / brand's SKUs by actual sales contribution.
+    function _buildSkuSales(rows, products) {
+      const skuSales = {}; // { sku: { fba, fbm } }
+      for (const r of rows) {
+        if (r.type !== 'Order') continue;
+        if (!r.sku) continue;
+        const prod = products[r.sku];
+        if (!prod) continue;
+        if (!skuSales[r.sku]) skuSales[r.sku] = { fba: 0, fbm: 0 };
+        const amount = r.sale || 0;
+        if (amount <= 0) continue; // ignore zero/negative principal on orders
+        if (_isFbaProduct(prod)) skuSales[r.sku].fba += amount;
+        else                      skuSales[r.sku].fbm += amount;
+      }
+      return skuSales;
+    }
+
+    // Allocate Sponsored Products + Sponsored Brands spend to FBA / FBM /
+    // Unallocated. Three paths:
+    //   1. SP row with sku (API-sourced)  → direct lookup: product.fulfillment
+    //   2. SP row without sku (historical) → campaign → SKUs via product
+    //                                         mapping; split by sales ratio
+    //                                         across that campaign's SKUs.
+    //   3. SB row (always sku-less)       → campaign → brand via brand
+    //                                         mapping; split by sales ratio
+    //                                         across that brand's SKUs (from
+    //                                         the Products catalog by brand).
+    // In all cases, anything we can't attribute lands in Unallocated so no
+    // spend disappears silently.
+    function _allocateAdSpend({ spAdRows, sbAdRows, products, brandToSkus, productCampaignToSkus, brandCampaignToBrand, skuSales, startDate, endDate }) {
+      let fba = 0, fbm = 0, unallocated = 0;
+      const unallocatedProductCampaigns = {};
+      const unallocatedBrandCampaigns = {};
+
+      const bumpUnallocatedProduct = (campaign, amount) => {
+        const key = campaign || '(blank)';
+        unallocatedProductCampaigns[key] = (unallocatedProductCampaigns[key] || 0) + amount;
+      };
+      const bumpUnallocatedBrand = (campaign, amount) => {
+        const key = campaign || '(blank)';
+        unallocatedBrandCampaigns[key] = (unallocatedBrandCampaigns[key] || 0) + amount;
+      };
+
+      const splitBySales = (skus, spend) => {
+        let totalFba = 0, totalFbm = 0;
+        for (const sku of skus) {
+          const s = skuSales[sku];
+          if (!s) continue;
+          totalFba += s.fba;
+          totalFbm += s.fbm;
+        }
+        const total = totalFba + totalFbm;
+        if (total === 0) return null; // caller sends to unallocated
+        return { fba: spend * (totalFba / total), fbm: spend * (totalFbm / total) };
+      };
+
+      // ── Sponsored Products ───────────────────────────────────────────
+      for (const row of (spAdRows || [])) {
+        const d = row.date || '';
+        if (d && (d < startDate || d > endDate)) continue;
+        const spend = Number(row.cost) || 0;
+        if (spend <= 0) continue;
+
+        if (row.sku) {
+          // Direct SKU attribution — no mapping needed.
+          const sku = _normalizeSku(row.sku);
+          const prod = products[sku];
+          if (!prod) {
+            unallocated += spend;
+            bumpUnallocatedProduct(row.campaign, spend);
+            continue;
+          }
+          if (_isFbaProduct(prod)) fba += spend;
+          else                      fbm += spend;
+          continue;
+        }
+
+        // Historical SP (no sku) — fall back to campaign → SKUs mapping.
+        const mapped = productCampaignToSkus[row.campaign] || [];
+        if (mapped.length === 0) {
+          unallocated += spend;
+          bumpUnallocatedProduct(row.campaign, spend);
+          continue;
+        }
+        const split = splitBySales(mapped, spend);
+        if (!split) {
+          unallocated += spend;
+          bumpUnallocatedProduct(row.campaign, spend);
+        } else {
+          fba += split.fba;
+          fbm += split.fbm;
+        }
+      }
+
+      // ── Sponsored Brands ─────────────────────────────────────────────
+      for (const row of (sbAdRows || [])) {
+        const d = row.date || '';
+        if (d && (d < startDate || d > endDate)) continue;
+        const spend = Number(row.cost) || 0;
+        if (spend <= 0) continue;
+
+        const brand = brandCampaignToBrand[row.campaign];
+        if (!brand) {
+          unallocated += spend;
+          bumpUnallocatedBrand(row.campaign, spend);
+          continue;
+        }
+        const brandSkus = brandToSkus[brand] || [];
+        if (brandSkus.length === 0) {
+          unallocated += spend;
+          bumpUnallocatedBrand(row.campaign, spend);
+          continue;
+        }
+        const split = splitBySales(brandSkus, spend);
+        if (!split) {
+          unallocated += spend;
+          bumpUnallocatedBrand(row.campaign, spend);
+        } else {
+          fba += split.fba;
+          fbm += split.fbm;
+        }
+      }
+
+      return { fba, fbm, unallocated, unallocatedProductCampaigns, unallocatedBrandCampaigns };
+    }
+
+    function _buildStatement(rows, products, adSpend = null) {
       const statement = {
         income: Object.fromEntries(STATEMENT_INCOME_LINES.map(k => [k, { debit: 0, credit: 0 }])),
         expenses: Object.fromEntries(STATEMENT_EXPENSE_LINES.map(k => [k, { debit: 0, credit: 0 }]))
       };
+
+      // Ad spend is computed outside this function (it needs both the ad
+      // data and the sku-sales derived here-ish). If provided, drop it
+      // straight onto the debit side of the three Ad Spend lines; ad spend
+      // is always money out, so signs are simple.
+      if (adSpend) {
+        if (adSpend.fba > 0)          statement.expenses['FBA Ad Spend'].debit += adSpend.fba;
+        if (adSpend.fbm > 0)          statement.expenses['FBM Ad Spend'].debit += adSpend.fbm;
+        if (adSpend.unallocated > 0)  statement.expenses['Unallocated Ad Spend'].debit += adSpend.unallocated;
+      }
+
       const missing = new Map(); // sku → Set of orderIds using it
 
       const add = (line, section, amount) => {
