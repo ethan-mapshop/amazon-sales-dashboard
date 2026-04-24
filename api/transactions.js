@@ -204,6 +204,10 @@ async function handleProbeV2024(req, res) {
     // live in env vars, the endpoint is bounded (pagination cap), and
     // there are no KV writes. Paste the URL straight into a browser.
     const { orderId, month } = req.query;
+    // &summary=1 drops allTransactions from the response so a month-wide
+    // probe doesn't dump 1000+ records. Summary fields + sampleFirst /
+    // sampleDeferred still come through (enough to map breakdowns).
+    const summaryOnly = req.query.summary === '1' || req.query.summary === 'true';
     let query;
     let maxCalls;
     if (orderId) {
@@ -294,7 +298,7 @@ async function handleProbeV2024(req, res) {
       }
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       query,
       pageCount: calls,
@@ -306,9 +310,10 @@ async function handleProbeV2024(req, res) {
       deferralReasonsSeen: [...deferralReasons].sort(),
       relatedIdentifierNamesSeen: [...relatedIdentifierNames].sort(),
       sampleFirst: transactions[0] || null,
-      sampleDeferred,
-      allTransactions: transactions
-    });
+      sampleDeferred
+    };
+    if (!summaryOnly) response.allTransactions = transactions;
+    return res.status(200).json(response);
   } catch (error) {
     console.error('[PROBE V2024] Error:', error);
     return res.status(500).json({ error: 'Probe failed: ' + error.message, stack: error.stack });
