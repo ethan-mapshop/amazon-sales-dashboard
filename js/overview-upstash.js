@@ -178,7 +178,9 @@
       document.getElementById('monthly-upstash-view').style.display = 'block';
       document.getElementById('monthly-upstash-tab').classList.add('active');
       _initMonthlyUpstashDropdowns();
-      if (!_monthlyUpstashAutoLoaded) {
+      // Only claim the auto-load slot if we have a token — a pre-sign-in
+      // attempt would render nothing and burn the flag.
+      if (!_monthlyUpstashAutoLoaded && accessToken) {
         _monthlyUpstashAutoLoaded = true;
         setMonthlyUpstashDate('lastMonth');
       }
@@ -194,7 +196,7 @@
       document.getElementById('ytd-upstash-view').style.display = 'block';
       document.getElementById('ytd-upstash-tab').classList.add('active');
       _initYTDUpstashDropdown();
-      if (!_ytdUpstashAutoLoaded) {
+      if (!_ytdUpstashAutoLoaded && accessToken) {
         _ytdUpstashAutoLoaded = true;
         setYTDUpstashYear('thisYear');
       }

@@ -87,13 +87,22 @@
     }
 
     async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null, providedInputs = null) {
+      // Guard early-exits: for prereq calls (returnData=true) return
+      // ZERO_METRICS so calculateComparisons has a valid shape to read from
+      // rather than crashing on `undefined.fbm`. For render calls, set an
+      // inline message in the container. Never use an alert — see user
+      // preferences.
       if (!accessToken) {
-        alert('Please sign in first');
+        if (returnData) return ZERO_METRICS;
+        const container = document.getElementById(containerId);
+        if (container) container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to load Profitability Overview data</div>';
         return;
       }
 
       if (!startDate || !endDate) {
-        alert('Please select a date range');
+        if (returnData) return ZERO_METRICS;
+        const container = document.getElementById(containerId);
+        if (container) container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--error);">Please select a date range</div>';
         return;
       }
 
@@ -101,7 +110,7 @@
       const container = document.getElementById(containerId);
       if (!container) {
         console.error('Container not found:', containerId);
-        alert('Error: Container not found. Please refresh the page.');
+        if (returnData) return ZERO_METRICS;
         return;
       }
 

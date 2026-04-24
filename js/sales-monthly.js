@@ -26,7 +26,10 @@
       document.getElementById('ytd-view').style.display = 'block';
       document.getElementById('ytd-tab').classList.add('active');
       initializeYearDropdown();
-      if (!_ytdAutoLoaded) {
+      // Only claim the auto-load slot if we have a token — otherwise the
+      // first attempt would run with no accessToken, render nothing, and
+      // flip the flag true so a subsequent sign-in wouldn't trigger it.
+      if (!_ytdAutoLoaded && accessToken) {
         _ytdAutoLoaded = true;
         setYTDYear('thisYear');
       }
@@ -40,7 +43,7 @@
       document.getElementById('monthly-view').style.display = 'block';
       document.getElementById('monthly-tab').classList.add('active');
       initializeMonthlyDropdowns();
-      if (!_monthlyAutoLoaded) {
+      if (!_monthlyAutoLoaded && accessToken) {
         _monthlyAutoLoaded = true;
         setMonthlyDate('lastMonth');
       }
@@ -175,6 +178,13 @@
 
       const container = document.getElementById('ytd-content');
 
+      // No token: render an inline sign-in prompt instead of firing the
+      // 2+2 Sheets fetches that would all bail out anyway.
+      if (!accessToken) {
+        if (container) container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to load Year-to-Date data</div>';
+        return;
+      }
+
       // Per-session cache: if we've already built this exact report, swap
       // the rendered HTML in and skip the 2×fetch-then-render round-trip.
       const cacheKey = `ytd-sheets|${year}`;
@@ -288,6 +298,13 @@
       }
 
       const container = document.getElementById('monthly-content');
+
+      // No token: render an inline sign-in prompt instead of firing the
+      // 3+1 Sheets fetches that would all bail out anyway.
+      if (!accessToken) {
+        if (container) container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to load Monthly data</div>';
+        return;
+      }
 
       // Per-session cache: swap the rendered HTML in if we've already built
       // this exact (year, month) report, skipping the 4-fetch round-trip.
