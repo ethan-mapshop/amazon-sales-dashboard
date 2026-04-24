@@ -200,9 +200,9 @@ async function handleFetchOrderRaw(req, res) {
 // the request and manages the access token normally.
 async function handleProbeV2024(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
-
+    // No Google auth check — matches handleSync's posture. SP-API creds
+    // live in env vars, the endpoint is bounded (pagination cap), and
+    // there are no KV writes. Paste the URL straight into a browser.
     const { orderId, month } = req.query;
     let query;
     let maxCalls;
