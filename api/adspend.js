@@ -52,6 +52,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
     if (action === 'dedupe-sheets-vs-api')    return handleDedupeSheetsVsApi(req, res);
+    if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -363,6 +364,50 @@ async function handleMigrateFromSheets(req, res) {
     console.error('[ADSPEND MIGRATE] Error:', error);
     return res.status(500).json({ error: 'Migrate failed: ' + error.message });
   }
+}
+
+// ─── DELETE SHEETS-MIGRATED ROWS ─────────────────────────────────────────────
+// Brute-force version of the dedupe: wipe every row that's missing a `sku`
+// from the specified month's bucket. Unconditional — doesn't check whether
+// API data is present, so it also clears any pure-Sheets month if you aim
+// it there. Leaves API rows (sku present) untouched. Returns before/after
+// counts and total cost so the cleanup is easy to verify.
+//
+// POST body: { type: 'sp' | 'sb', month: 'YYYY-MM' }
+async function handleDeleteSheetsRows(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const { type, month } = req.body || {};
+    if (!['sp', 'sb'].includes(type)) return res.status(400).json({ error: 'type must be sp or sb' });
+    if (!/^\d{4}-\d{2}$/.test(month || '')) return res.status(400).json({ error: 'month=YYYY-MM required' });
+
+    const stored = await kv.get(`adspend:${type}:raw:${month}`);
+    const rows = (stored && Array.isArray(stored.rows)) ? stored.rows : [];
+    const before = rows.length;
+    const beforeCost = rows.reduce((s, r) => s + (Number(r?.cost) || 0), 0);
+
+    const kept = rows.filter(r => r && typeof r.sku === 'string' && r.sku.length > 0);
+    const dropped = before - kept.length;
+    const keptCost = kept.reduce((s, r) => s + (Number(r.cost) || 0), 0);
+
+    await kv.set(`adspend:${type}:raw:${month}`, { rows: kept });
+
+    return res.status(200).json({
+      success: true,
+      type, month,
+      before: { rows: before, totalCost: round2(beforeCost) },
+      after:  { rows: kept.length, totalCost: round2(keptCost) },
+      dropped
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Delete failed: ' + error.message });
+  }
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
 }
 
 // ─── DEDUPE SHEETS VS API ────────────────────────────────────────────────────
