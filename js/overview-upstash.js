@@ -77,6 +77,92 @@
     let _monthlyUpstashAutoLoaded = false;
     let _ytdUpstashAutoLoaded = false;
 
+    // Months-with-data set, populated lazily from /api/transactions?action=
+    // get-months. Used to disable the Prev/Next buttons when the target
+    // period has no synced data. Null until the first fetch resolves;
+    // callers treat null as "unknown, leave buttons enabled".
+    let _upstashMonthsSet = null;
+    let _upstashMonthsPromise = null;
+
+    async function _ensureUpstashMonths() {
+      if (_upstashMonthsSet) return _upstashMonthsSet;
+      if (_upstashMonthsPromise) return _upstashMonthsPromise;
+      if (!accessToken) return null;
+      _upstashMonthsPromise = (async () => {
+        try {
+          const res = await fetch('/api/transactions?action=get-months', {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          _upstashMonthsSet = new Set(Array.isArray(data.months) ? data.months : []);
+          return _upstashMonthsSet;
+        } catch {
+          return null;
+        } finally {
+          _upstashMonthsPromise = null;
+        }
+      })();
+      return _upstashMonthsPromise;
+    }
+
+    function _upstashHasMonth(year, month) {
+      if (!_upstashMonthsSet) return true; // unknown → don't block
+      const ym = `${year}-${String(month + 1).padStart(2, '0')}`;
+      return _upstashMonthsSet.has(ym);
+    }
+
+    function _upstashHasYear(year) {
+      if (!_upstashMonthsSet) return true; // unknown → don't block
+      const prefix = `${year}-`;
+      for (const ym of _upstashMonthsSet) {
+        if (ym.startsWith(prefix)) return true;
+      }
+      return false;
+    }
+
+    // Disable the Prev/Next buttons on both Upstash tabs when the target
+    // period has no synced data. Called after any dropdown change and after
+    // the months set first loads. Safe to call even if the set isn't loaded
+    // yet — buttons stay enabled until we know otherwise.
+    function _refreshUpstashNavButtons() {
+      // Monthly Upstash: target = currently-selected (month, year) ± 1,
+      // rolling year across Jan/Dec.
+      const mSel = document.getElementById('monthly-upstash-month-select');
+      const ySel = document.getElementById('monthly-upstash-year-select');
+      const mPrev = document.getElementById('monthly-upstash-prev-btn');
+      const mNext = document.getElementById('monthly-upstash-next-btn');
+      if (mSel && ySel && mPrev && mNext) {
+        const m = parseInt(mSel.value, 10);
+        const y = parseInt(ySel.value, 10);
+        if (Number.isFinite(m) && Number.isFinite(y)) {
+          const prev = new Date(y, m - 1, 1);
+          const next = new Date(y, m + 1, 1);
+          mPrev.disabled = !_upstashHasMonth(prev.getFullYear(), prev.getMonth());
+          mNext.disabled = !_upstashHasMonth(next.getFullYear(), next.getMonth());
+        } else {
+          mPrev.disabled = false;
+          mNext.disabled = false;
+        }
+      }
+
+      // YTD Upstash: target = selected year ± 1, enabled if ANY month of
+      // that year has data (a year with partial data is still worth viewing).
+      const yySel = document.getElementById('ytd-upstash-year-select');
+      const yPrev = document.getElementById('ytd-upstash-prev-btn');
+      const yNext = document.getElementById('ytd-upstash-next-btn');
+      if (yySel && yPrev && yNext) {
+        const y = parseInt(yySel.value, 10);
+        if (Number.isFinite(y)) {
+          yPrev.disabled = !_upstashHasYear(y - 1);
+          yNext.disabled = !_upstashHasYear(y + 1);
+        } else {
+          yPrev.disabled = false;
+          yNext.disabled = false;
+        }
+      }
+    }
+
     function _hideAllOverviewViews() {
       ['ytd-view', 'monthly-view', 'ytd-upstash-view', 'monthly-upstash-view']
         .forEach(id => {
@@ -96,6 +182,11 @@
         _monthlyUpstashAutoLoaded = true;
         setMonthlyUpstashDate('lastMonth');
       }
+      // Kick off the months-list fetch (if not already cached) and refresh
+      // the Prev/Next disabled state once it resolves. Runs in the background
+      // so the user isn't blocked.
+      _ensureUpstashMonths().then(() => _refreshUpstashNavButtons());
+      _refreshUpstashNavButtons();
     }
 
     function showYTDUpstash() {
@@ -107,6 +198,8 @@
         _ytdUpstashAutoLoaded = true;
         setYTDUpstashYear('thisYear');
       }
+      _ensureUpstashMonths().then(() => _refreshUpstashNavButtons());
+      _refreshUpstashNavButtons();
     }
 
     function _initMonthlyUpstashDropdowns() {
@@ -170,6 +263,7 @@
         _setSelectByValueUpstash(yearSel, d.getFullYear());
       }
 
+      _refreshUpstashNavButtons();
       generateMonthlyUpstashReport();
     }
 
@@ -193,6 +287,7 @@
         _setSelectByValueUpstash(sel, cur + 1);
       }
 
+      _refreshUpstashNavButtons();
       generateYTDUpstashReport();
     }
 
@@ -227,6 +322,10 @@
       const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
       const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
       if (isNaN(month) || isNaN(year)) return;
+
+      // Catches the case where the user picks a new period from the dropdown
+      // directly (not via a preset button) — keep Prev/Next state in sync.
+      _refreshUpstashNavButtons();
 
       const container = document.getElementById('monthly-upstash-content');
       if (!container) return;
@@ -286,6 +385,9 @@
     async function generateYTDUpstashReport() {
       const year = document.getElementById('ytd-upstash-year-select').value;
       if (!year) return;
+
+      // Catches direct dropdown changes — keep Prev/Next state in sync.
+      _refreshUpstashNavButtons();
 
       const container = document.getElementById('ytd-upstash-content');
       if (!container) return;

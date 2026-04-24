@@ -324,6 +324,13 @@
       border-color: var(--accent-orange);
     }
 
+    .btn:disabled,
+    .btn[disabled] {
+      opacity: 0.4;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
     .btn-primary {
       background: var(--accent-orange);
       color: white;
