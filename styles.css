@@ -306,7 +306,7 @@
     
     .btn {
       padding: 0.75rem 1.5rem;
-      border: none;
+      border: 1px solid var(--border);
       border-radius: 6px;
       font-weight: 600;
       font-size: 0.95rem;
@@ -315,8 +315,15 @@
       text-transform: uppercase;
       letter-spacing: 0.05em;
       font-family: 'Work Sans', sans-serif;
+      background: var(--bg-card);
+      color: var(--text-primary);
     }
-    
+
+    .btn:hover:not(:disabled) {
+      background: var(--bg-secondary);
+      border-color: var(--accent-orange);
+    }
+
     .btn-primary {
       background: var(--accent-orange);
       color: white;

@@ -234,6 +234,16 @@
         container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
         return;
       }
+
+      // Per-session cache: swap the rendered HTML in if we've already built
+      // this (year, month) report, skipping the 3-period fetch fan-out.
+      const cacheKey = `monthly-upstash|${year}|${month}`;
+      const cached = window._overviewReportCache && window._overviewReportCache.get(cacheKey);
+      if (cached) {
+        container.innerHTML = cached;
+        return;
+      }
+
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
 
       try {
@@ -265,6 +275,8 @@
           shippingCosts: current.shippingCosts,
           comparisons
         });
+
+        if (window._overviewReportCache) window._overviewReportCache.set(cacheKey, container.innerHTML);
       } catch (err) {
         console.error('Upstash monthly overview failed:', err);
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
@@ -281,6 +293,16 @@
         container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
         return;
       }
+
+      // Per-session cache: swap the rendered HTML in if we've already built
+      // this year's report, skipping the 2-period fetch fan-out.
+      const cacheKey = `ytd-upstash|${year}`;
+      const cached = window._overviewReportCache && window._overviewReportCache.get(cacheKey);
+      if (cached) {
+        container.innerHTML = cached;
+        return;
+      }
+
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
 
       try {
@@ -330,6 +352,8 @@
           shippingCosts: current.shippingCosts,
           comparisons
         });
+
+        if (window._overviewReportCache) window._overviewReportCache.set(cacheKey, container.innerHTML);
       } catch (err) {
         console.error('Upstash YTD overview failed:', err);
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;

@@ -1,5 +1,20 @@
     // Helper function to set date range presets
-    
+
+    // Per-page-session report cache shared across all 4 Overview tabs.
+    // Keyed by "{view}|{startDate}|{endDate}" (or "{view}|{year}|{month}"
+    // for Monthly). Stores the final rendered innerHTML so switching among
+    // tabs — or back to a range we already computed — is instant. Cleared
+    // on browser refresh. Attached to window so both sales-monthly.js and
+    // overview-upstash.js share the same Map regardless of load order.
+    window._overviewReportCache = window._overviewReportCache || new Map();
+
+    // First-view auto-load flags for the Sheets-backed tabs. Same pattern
+    // as the Upstash tabs in overview-upstash.js — land the user on Last
+    // Month (Monthly) / This Year (YTD) the first time they open the page,
+    // then honor their dropdown selection on subsequent visits.
+    let _monthlyAutoLoaded = false;
+    let _ytdAutoLoaded = false;
+
     // Tab switching functions. There are four Overview tabs total — these
     // two Sheets-backed ones plus the Upstash variants in overview-upstash.js
     // — so we hide every view first to handle switching in both directions.
@@ -11,6 +26,10 @@
       document.getElementById('ytd-view').style.display = 'block';
       document.getElementById('ytd-tab').classList.add('active');
       initializeYearDropdown();
+      if (!_ytdAutoLoaded) {
+        _ytdAutoLoaded = true;
+        setYTDYear('thisYear');
+      }
     }
 
     function showMonthly() {
@@ -21,6 +40,10 @@
       document.getElementById('monthly-view').style.display = 'block';
       document.getElementById('monthly-tab').classList.add('active');
       initializeMonthlyDropdowns();
+      if (!_monthlyAutoLoaded) {
+        _monthlyAutoLoaded = true;
+        setMonthlyDate('lastMonth');
+      }
     }
     
     // Initialize year dropdown for YTD view
@@ -40,7 +63,11 @@
       }
     }
     
-    // Initialize month and year dropdowns for Monthly view
+    // Initialize month and year dropdowns for Monthly view. Previously this
+    // also reset the dropdowns to last month on every call, which clobbered
+    // the user's in-session selection when they navigated between tabs. The
+    // auto-load flag in showMonthly() now handles the initial-landing case,
+    // so this just needs to seed the year options once.
     function initializeMonthlyDropdowns() {
       const yearSelect = document.getElementById('monthly-year-select');
       if (yearSelect.options.length === 0) {
@@ -55,12 +82,6 @@
           yearSelect.appendChild(option);
         }
       }
-      
-      // Set to last month
-      const now = new Date();
-      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      document.getElementById('monthly-month-select').value = lastMonth.getMonth();
-      document.getElementById('monthly-year-select').value = lastMonth.getFullYear();
     }
     
     // YTD preset buttons
@@ -151,10 +172,20 @@
         console.error('No year selected');
         return;
       }
-      
+
       const container = document.getElementById('ytd-content');
+
+      // Per-session cache: if we've already built this exact report, swap
+      // the rendered HTML in and skip the 2×fetch-then-render round-trip.
+      const cacheKey = `ytd-sheets|${year}`;
+      const cached = window._overviewReportCache.get(cacheKey);
+      if (cached) {
+        container.innerHTML = cached;
+        return;
+      }
+
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
-      
+
       try {
         // Calculate YTD date range
         const today = new Date();
@@ -199,10 +230,12 @@
         
         // Calculate YoY comparisons
         const comparisons = calculateYTDComparisons(currentData, prevData);
-        
+
         // Now load current data again but render it with comparisons
         await loadOverviewData(startDate, endDate, 'ytd-content', false, comparisons);
-        
+
+        window._overviewReportCache.set(cacheKey, container.innerHTML);
+
       } catch (error) {
         console.error('Error generating YTD report:', error);
         container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
@@ -248,15 +281,25 @@
     async function generateMonthlyReport() {
       const month = parseInt(document.getElementById('monthly-month-select').value);
       const year = parseInt(document.getElementById('monthly-year-select').value);
-      
+
       if (isNaN(month) || isNaN(year)) {
         console.error('Invalid month or year');
         return;
       }
-      
+
       const container = document.getElementById('monthly-content');
+
+      // Per-session cache: swap the rendered HTML in if we've already built
+      // this exact (year, month) report, skipping the 4-fetch round-trip.
+      const cacheKey = `monthly-sheets|${year}|${month}`;
+      const cached = window._overviewReportCache.get(cacheKey);
+      if (cached) {
+        container.innerHTML = cached;
+        return;
+      }
+
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
-      
+
       try {
         // Current month
         const currentStart = new Date(year, month, 1);
@@ -288,10 +331,12 @@
         
         // Calculate comparisons
         const comparisons = calculateComparisons(currentData, prevData, yoyData);
-        
+
         // Now load current month data again but this time render it with comparisons
         await loadOverviewData(currentStartStr, currentEndStr, 'monthly-content', false, comparisons);
-        
+
+        window._overviewReportCache.set(cacheKey, container.innerHTML);
+
       } catch (error) {
         console.error('Error generating monthly report:', error);
         container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
