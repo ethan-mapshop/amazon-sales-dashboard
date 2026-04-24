@@ -67,6 +67,15 @@
     // ship separately.
 
     // ─── VIEW SWITCHING ─────────────────────────────────────────────────
+    //
+    // First-view auto-load flags: when the user clicks into either Upstash
+    // tab the very first time in a page session, we default the dropdowns
+    // to Last Month / This Year and run a report so they're not staring at
+    // an empty placeholder. On subsequent visits in the same session we
+    // leave the dropdowns (and the already-rendered content) alone so the
+    // user's recent selection sticks.
+    let _monthlyUpstashAutoLoaded = false;
+    let _ytdUpstashAutoLoaded = false;
 
     function _hideAllOverviewViews() {
       ['ytd-view', 'monthly-view', 'ytd-upstash-view', 'monthly-upstash-view']
@@ -83,6 +92,10 @@
       document.getElementById('monthly-upstash-view').style.display = 'block';
       document.getElementById('monthly-upstash-tab').classList.add('active');
       _initMonthlyUpstashDropdowns();
+      if (!_monthlyUpstashAutoLoaded) {
+        _monthlyUpstashAutoLoaded = true;
+        setMonthlyUpstashDate('lastMonth');
+      }
     }
 
     function showYTDUpstash() {
@@ -90,6 +103,10 @@
       document.getElementById('ytd-upstash-view').style.display = 'block';
       document.getElementById('ytd-upstash-tab').classList.add('active');
       _initYTDUpstashDropdown();
+      if (!_ytdUpstashAutoLoaded) {
+        _ytdUpstashAutoLoaded = true;
+        setYTDUpstashYear('thisYear');
+      }
     }
 
     function _initMonthlyUpstashDropdowns() {
@@ -124,27 +141,84 @@
       }
     }
 
-    function setMonthlyUpstashLastMonth() {
-      const now = new Date();
-      let month = now.getMonth() - 1;
-      let year = now.getFullYear();
-      if (month < 0) { month = 11; year--; }
-      document.getElementById('monthly-upstash-month-select').value = month;
-      const yearSel = document.getElementById('monthly-upstash-year-select');
-      if (yearSel && [...yearSel.options].some(o => parseInt(o.value, 10) === year)) {
-        yearSel.value = year;
+    // Monthly Upstash preset buttons. Mirrors setMonthlyDate's semantics:
+    //   thisMonth → current calendar month (absolute)
+    //   lastMonth → previous calendar month (absolute)
+    //   prevMonth → currently-selected month − 1, rolling year backward
+    //   nextMonth → currently-selected month + 1, rolling year forward
+    function setMonthlyUpstashDate(preset) {
+      const today = new Date();
+      const monthSel = document.getElementById('monthly-upstash-month-select');
+      const yearSel  = document.getElementById('monthly-upstash-year-select');
+      const curMonth = parseInt(monthSel.value, 10);
+      const curYear  = parseInt(yearSel.value, 10);
+
+      if (preset === 'lastMonth') {
+        const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        monthSel.value = d.getMonth();
+        _setSelectByValueUpstash(yearSel, d.getFullYear());
+      } else if (preset === 'thisMonth') {
+        monthSel.value = today.getMonth();
+        _setSelectByValueUpstash(yearSel, today.getFullYear());
+      } else if (preset === 'prevMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
+        const d = new Date(curYear, curMonth - 1, 1);
+        monthSel.value = d.getMonth();
+        _setSelectByValueUpstash(yearSel, d.getFullYear());
+      } else if (preset === 'nextMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
+        const d = new Date(curYear, curMonth + 1, 1);
+        monthSel.value = d.getMonth();
+        _setSelectByValueUpstash(yearSel, d.getFullYear());
       }
+
       generateMonthlyUpstashReport();
     }
 
-    function setYTDUpstashYear(which) {
-      const now = new Date();
-      const year = which === 'thisYear' ? now.getFullYear() : now.getFullYear() - 1;
-      const yearSel = document.getElementById('ytd-upstash-year-select');
-      if (yearSel && [...yearSel.options].some(o => parseInt(o.value, 10) === year)) {
-        yearSel.value = year;
+    // YTD Upstash preset buttons.
+    //   thisYear → current calendar year (absolute)
+    //   lastYear → previous calendar year (absolute)
+    //   prevYear → selected year − 1 (relative)
+    //   nextYear → selected year + 1 (relative)
+    function setYTDUpstashYear(preset) {
+      const today = new Date();
+      const sel = document.getElementById('ytd-upstash-year-select');
+      const cur = parseInt(sel.value, 10);
+
+      if (preset === 'thisYear') {
+        _setSelectByValueUpstash(sel, today.getFullYear());
+      } else if (preset === 'lastYear') {
+        _setSelectByValueUpstash(sel, today.getFullYear() - 1);
+      } else if (preset === 'prevYear' && Number.isFinite(cur)) {
+        _setSelectByValueUpstash(sel, cur - 1);
+      } else if (preset === 'nextYear' && Number.isFinite(cur)) {
+        _setSelectByValueUpstash(sel, cur + 1);
       }
+
       generateYTDUpstashReport();
+    }
+
+    // Same "insert option if missing" helper as the Sheets-side version.
+    // Prev/Next let the user scroll past the pre-seeded 5-year window
+    // without the dropdown silently failing to update.
+    function _setSelectByValueUpstash(select, v) {
+      if (!select) return;
+      const str = String(v);
+      if ([...select.options].some(o => o.value === str)) {
+        select.value = str;
+        return;
+      }
+      const opt = document.createElement('option');
+      opt.value = str;
+      opt.textContent = str;
+      let inserted = false;
+      for (let i = 0; i < select.options.length; i++) {
+        if (parseInt(select.options[i].value, 10) < v) {
+          select.insertBefore(opt, select.options[i]);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) select.appendChild(opt);
+      select.value = str;
     }
 
     // ─── REPORT GENERATION ──────────────────────────────────────────────
@@ -154,77 +228,152 @@
       const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
       if (isNaN(month) || isNaN(year)) return;
 
-      const startDate = _ymd(new Date(year, month, 1));
-      const endDate   = _ymd(new Date(year, month + 1, 0));
-      await _runUpstashOverview(startDate, endDate, 'monthly-upstash-content');
+      const container = document.getElementById('monthly-upstash-content');
+      if (!container) return;
+      if (!accessToken) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
+        return;
+      }
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+
+      try {
+        // Mirrors the Sheets-side Monthly pipeline: current month + previous
+        // month (MoM) + same month last year (YoY) fetched in parallel, then
+        // comparisons computed on the metrics and passed to the renderer.
+        const startDate = _ymd(new Date(year, month, 1));
+        const endDate   = _ymd(new Date(year, month + 1, 0));
+        const prevStart = _ymd(new Date(year, month - 1, 1));
+        const prevEnd   = _ymd(new Date(year, month, 0));
+        const yoyStart  = _ymd(new Date(year - 1, month, 1));
+        const yoyEnd    = _ymd(new Date(year - 1, month + 1, 0));
+
+        const [current, prev, yoy] = await Promise.all([
+          _computeUpstashPeriod(startDate, endDate),
+          _computeUpstashPeriod(prevStart, prevEnd),
+          _computeUpstashPeriod(yoyStart, yoyEnd)
+        ]);
+
+        const comparisons = calculateComparisons(current.metrics, prev.metrics, yoy.metrics);
+        _renderUpstashStatement(container, {
+          statement: current.statement,
+          missingSkus: current.missingSkus,
+          unmappedFees: current.unmappedFees,
+          rows: current.rows,
+          lastSynced: current.lastSynced,
+          startDate, endDate,
+          adSpend: current.adSpend,
+          shippingCosts: current.shippingCosts,
+          comparisons
+        });
+      } catch (err) {
+        console.error('Upstash monthly overview failed:', err);
+        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+      }
     }
 
     async function generateYTDUpstashReport() {
       const year = document.getElementById('ytd-upstash-year-select').value;
       if (!year) return;
 
-      const today = new Date();
-      const selectedYear = parseInt(year, 10);
-      const isCurrentYear = selectedYear === today.getFullYear();
-
-      const startDate = `${year}-01-01`;
-      let endDate;
-      if (isCurrentYear) {
-        const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-        const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-        endDate = _ymd(new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0));
-      } else {
-        endDate = `${year}-12-31`;
-      }
-      await _runUpstashOverview(startDate, endDate, 'ytd-upstash-content');
-    }
-
-    async function _runUpstashOverview(startDate, endDate, containerId) {
-      const container = document.getElementById(containerId);
+      const container = document.getElementById('ytd-upstash-content');
       if (!container) return;
       if (!accessToken) {
         container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
         return;
       }
-
       container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
 
       try {
-        const inputs = await _fetchUpstashInputs(startDate, endDate);
-        const rows = _deriveTransactionRows(inputs.pages, startDate, endDate);
+        const today = new Date();
+        const selectedYear = parseInt(year, 10);
+        const isCurrentYear = selectedYear === today.getFullYear();
 
-        // Compute per-SKU sales-by-channel from derived Order rows. Used
-        // by the ad allocator for historical SP rows and SB rows where we
-        // need a proportional split across a campaign's / brand's SKUs.
-        const skuSales = _buildSkuSales(rows, inputs.products);
+        // Current year range: Jan 1 → end of last complete month (if current
+        // year) or Dec 31 (past year).
+        const startDate = `${year}-01-01`;
+        let endDate;
+        if (isCurrentYear) {
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+          endDate = _ymd(new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0));
+        } else {
+          endDate = `${year}-12-31`;
+        }
 
-        const adSpend = _allocateAdSpend({
-          spAdRows: inputs.spAdRows,
-          sbAdRows: inputs.sbAdRows,
-          products: inputs.products,
-          brandToSkus: inputs.brandToSkus,
-          productCampaignToSkus: inputs.productCampaignToSkus,
-          brandCampaignToBrand: inputs.brandCampaignToBrand,
-          skuSales,
-          startDate,
-          endDate
-        });
+        // Previous year range — apples-to-apples with the current range
+        // (same last-complete-month cutoff so the YoY % is meaningful).
+        const prevYear = selectedYear - 1;
+        const prevStart = `${prevYear}-01-01`;
+        let prevEnd;
+        if (isCurrentYear) {
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const prevLastCompleteMonthYear = today.getMonth() === 0 ? prevYear - 1 : prevYear;
+          prevEnd = _ymd(new Date(prevLastCompleteMonthYear, lastCompleteMonth + 1, 0));
+        } else {
+          prevEnd = `${prevYear}-12-31`;
+        }
 
-        // Shipping costs are 100% FBM (seller fulfills), so no allocation
-        // needed — just sum the rows in the date window and hand the total
-        // to the statement builder. Per-SKU detail is preserved in KV for
-        // the future Brand & Product page migration.
-        const shippingCosts = _sumShippingInRange(inputs.shippingRows, startDate, endDate);
+        const [current, prev] = await Promise.all([
+          _computeUpstashPeriod(startDate, endDate),
+          _computeUpstashPeriod(prevStart, prevEnd)
+        ]);
 
-        const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts);
+        const comparisons = calculateYTDComparisons(current.metrics, prev.metrics);
         _renderUpstashStatement(container, {
-          statement, missingSkus, unmappedFees, rows,
-          lastSynced: inputs.lastSynced, startDate, endDate, adSpend, shippingCosts
+          statement: current.statement,
+          missingSkus: current.missingSkus,
+          unmappedFees: current.unmappedFees,
+          rows: current.rows,
+          lastSynced: current.lastSynced,
+          startDate, endDate,
+          adSpend: current.adSpend,
+          shippingCosts: current.shippingCosts,
+          comparisons
         });
       } catch (err) {
-        console.error('Upstash overview failed:', err);
+        console.error('Upstash YTD overview failed:', err);
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
       }
+    }
+
+    // Fetch + derive + build statement for a single period. Returns both the
+    // rendered-ready bundle AND the extracted profitability metrics so the
+    // caller can fan out several periods in parallel and compute MoM / YoY
+    // comparisons before rendering the current period.
+    async function _computeUpstashPeriod(startDate, endDate) {
+      const inputs = await _fetchUpstashInputs(startDate, endDate);
+      const rows = _deriveTransactionRows(inputs.pages, startDate, endDate);
+
+      // Per-SKU sales-by-channel from derived Order rows. Used by the ad
+      // allocator for historical SP rows and SB rows where we need a
+      // proportional split across a campaign's / brand's SKUs.
+      const skuSales = _buildSkuSales(rows, inputs.products);
+
+      const adSpend = _allocateAdSpend({
+        spAdRows: inputs.spAdRows,
+        sbAdRows: inputs.sbAdRows,
+        products: inputs.products,
+        brandToSkus: inputs.brandToSkus,
+        productCampaignToSkus: inputs.productCampaignToSkus,
+        brandCampaignToBrand: inputs.brandCampaignToBrand,
+        skuSales,
+        startDate,
+        endDate
+      });
+
+      // Shipping costs are 100% FBM (seller fulfills), so no allocation
+      // needed — just sum the rows in the date window and hand the total
+      // to the statement builder.
+      const shippingCosts = _sumShippingInRange(inputs.shippingRows, startDate, endDate);
+
+      const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts);
+      const metrics = extractProfitabilityMetrics(statement);
+
+      return {
+        statement, missingSkus, unmappedFees, rows,
+        lastSynced: inputs.lastSynced,
+        adSpend, shippingCosts, metrics
+      };
     }
 
     // ─── INPUT FETCHING ─────────────────────────────────────────────────
@@ -875,12 +1024,12 @@
 
     // ─── RENDER ─────────────────────────────────────────────────────────
 
-    function _renderUpstashStatement(container, { statement, missingSkus, unmappedFees, rows, lastSynced, startDate, endDate }) {
+    function _renderUpstashStatement(container, { statement, missingSkus, unmappedFees, rows, lastSynced, startDate, endDate, comparisons }) {
       // Delegate to the existing full renderer — it draws both the
       // traditional Income/Expenses tables AND the FBM/FBA/Total
-      // Profitability Breakdown panels on the right. Keeping that behavior
-      // intact is the whole point of the drop-in replacement.
-      renderFinancialStatement(statement, startDate, endDate, container, null);
+      // Profitability Breakdown panels on the right. Passing `comparisons`
+      // unlocks the MoM / YoY arrows in the breakdown panels.
+      renderFinancialStatement(statement, startDate, endDate, container, comparisons || null);
 
       // Prepend Upstash-specific context: row count, last-synced, and any
       // warnings (missing SKUs, unmapped ServiceFee FeeTypes) above the

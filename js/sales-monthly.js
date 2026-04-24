@@ -64,35 +64,84 @@
     }
     
     // YTD preset buttons
+    // YTD preset buttons.
+    //   thisYear  → current calendar year (absolute)
+    //   lastYear  → previous calendar year (absolute)
+    //   prevYear  → currently-selected year minus one (relative)
+    //   nextYear  → currently-selected year plus one  (relative)
     function setYTDYear(preset) {
       const today = new Date();
       const select = document.getElementById('ytd-year-select');
-      
+      const current = parseInt(select.value, 10);
+
       if (preset === 'lastYear') {
         select.value = today.getFullYear() - 1;
       } else if (preset === 'thisYear') {
         select.value = today.getFullYear();
+      } else if (preset === 'prevYear' && Number.isFinite(current)) {
+        _setSelectByValue(select, current - 1);
+      } else if (preset === 'nextYear' && Number.isFinite(current)) {
+        _setSelectByValue(select, current + 1);
       }
-      
+
       generateYTDReport();
     }
-    
-    // Monthly preset buttons
+
+    // Monthly preset buttons.
+    //   thisMonth → current calendar month (absolute)
+    //   lastMonth → previous calendar month (absolute)
+    //   prevMonth → selected month − 1, rolling the year back across Jan
+    //   nextMonth → selected month + 1, rolling the year forward across Dec
     function setMonthlyDate(preset) {
       const today = new Date();
       const monthSelect = document.getElementById('monthly-month-select');
-      const yearSelect = document.getElementById('monthly-year-select');
-      
+      const yearSelect  = document.getElementById('monthly-year-select');
+      const curMonth = parseInt(monthSelect.value, 10);
+      const curYear  = parseInt(yearSelect.value, 10);
+
       if (preset === 'lastMonth') {
-        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        monthSelect.value = lastMonth.getMonth();
-        yearSelect.value = lastMonth.getFullYear();
+        const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        monthSelect.value = d.getMonth();
+        yearSelect.value  = d.getFullYear();
       } else if (preset === 'thisMonth') {
         monthSelect.value = today.getMonth();
-        yearSelect.value = today.getFullYear();
+        yearSelect.value  = today.getFullYear();
+      } else if (preset === 'prevMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
+        const d = new Date(curYear, curMonth - 1, 1);
+        monthSelect.value = d.getMonth();
+        _setSelectByValue(yearSelect, d.getFullYear());
+      } else if (preset === 'nextMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
+        const d = new Date(curYear, curMonth + 1, 1);
+        monthSelect.value = d.getMonth();
+        _setSelectByValue(yearSelect, d.getFullYear());
       }
-      
+
       generateMonthlyReport();
+    }
+
+    // Set a <select>'s value to `v`, adding a matching option at the right
+    // position if the dropdown doesn't already contain it. Lets prev/next
+    // scroll past the pre-seeded year range without silently stalling.
+    function _setSelectByValue(select, v) {
+      const str = String(v);
+      if ([...select.options].some(o => o.value === str)) {
+        select.value = str;
+        return;
+      }
+      const opt = document.createElement('option');
+      opt.value = str;
+      opt.textContent = str;
+      // Insert in sorted order (years descending is the existing convention).
+      let inserted = false;
+      for (let i = 0; i < select.options.length; i++) {
+        if (parseInt(select.options[i].value, 10) < v) {
+          select.insertBefore(opt, select.options[i]);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) select.appendChild(opt);
+      select.value = str;
     }
     
     // Generate YTD report

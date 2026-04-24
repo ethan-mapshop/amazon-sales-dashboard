@@ -615,8 +615,9 @@
               <label style="font-weight: 600;">Year:</label>
               <select id="ytd-year-select" onchange="generateYTDReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
+              <button class="btn" onclick="setYTDYear('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
+              <button class="btn" onclick="setYTDYear('nextYear')" style="padding: 0.5rem 1rem;">Next ▶</button>
               <button class="btn" onclick="setYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-              <button class="btn" onclick="setYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
             </div>
           </div>
 
@@ -650,6 +651,8 @@
               <label style="font-weight: 600;">Year:</label>
               <select id="monthly-year-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
+              <button class="btn" onclick="setMonthlyDate('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
+              <button class="btn" onclick="setMonthlyDate('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
               <button class="btn" onclick="setMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
             </div>
           </div>
@@ -684,7 +687,9 @@
               <label style="font-weight: 600;">Year:</label>
               <select id="monthly-upstash-year-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
-              <button class="btn" onclick="setMonthlyUpstashLastMonth()" style="padding: 0.5rem 1rem;">Last Month</button>
+              <button class="btn" onclick="setMonthlyUpstashDate('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
+              <button class="btn" onclick="setMonthlyUpstashDate('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
+              <button class="btn" onclick="setMonthlyUpstashDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
               <button class="btn btn-secondary" onclick="exportMonthlyUpstashCSV()" style="padding: 0.5rem 1rem; margin-left: auto;">Export CSV</button>
               <button class="btn btn-secondary" onclick="exportMonthlyUpstashDetailCSV()" style="padding: 0.5rem 1rem;">Export Detail CSV</button>
             </div>
@@ -705,8 +710,9 @@
               <label style="font-weight: 600;">Year:</label>
               <select id="ytd-upstash-year-select" onchange="generateYTDUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
+              <button class="btn" onclick="setYTDUpstashYear('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
+              <button class="btn" onclick="setYTDUpstashYear('nextYear')" style="padding: 0.5rem 1rem;">Next ▶</button>
               <button class="btn" onclick="setYTDUpstashYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-              <button class="btn" onclick="setYTDUpstashYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
               <button class="btn btn-secondary" onclick="exportYTDUpstashCSV()" style="padding: 0.5rem 1rem; margin-left: auto;">Export CSV</button>
             </div>
           </div>

@@ -1147,7 +1147,9 @@
 
     /* Page header: matches the sidebar brand block height so their
        bottom borders align; breaks out of .main-content padding so
-       the bottom divider spans the full page width. */
+       the bottom divider spans the full page width. Sticks to the top
+       of the viewport as the content scrolls so the title + tabs stay
+       visible. */
     .page-header {
       height: 5rem;
       margin: -2rem -2rem 2rem -2rem;
@@ -1156,6 +1158,10 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: var(--bg-primary);
     }
 
     /* Top row inside the page header: title with the data-freshness
