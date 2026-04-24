@@ -44,6 +44,7 @@ export default async function handler(req, res) {
     if (action === 'get-range')           return handleGetRange(req, res);
     if (action === 'get-months')          return handleGetMonths(req, res);
     if (action === 'sample-raw')          return handleSampleRaw(req, res);
+    if (action === 'list-stores')         return handleListStores(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets') return handleMigrateFromSheets(req, res);
@@ -64,9 +65,20 @@ async function handleSync(req, res) {
       return res.status(500).json({ error: 'SHIPSTATION_API_KEY / SHIPSTATION_API_SECRET not set' });
     }
 
-    console.log(`[SHIPPING SYNC] Starting sync for ${month}`);
+    // Scope to one ShipStation store (= one sales channel). Default comes
+    // from the SHIPSTATION_STORE_ID env var, override via &storeId=...
+    // Without this filter we'd pull every channel — Amazon, Shopify, direct,
+    // etc. — and the totals are meaningless for an Amazon-only P&L.
+    const storeId = req.query.storeId || process.env.SHIPSTATION_STORE_ID || '';
+    if (!storeId) {
+      return res.status(400).json({
+        error: 'storeId required. Call /api/shipping?action=list-stores to find the Amazon store\'s ID, then set SHIPSTATION_STORE_ID or pass &storeId=... on sync.'
+      });
+    }
+
+    console.log(`[SHIPPING SYNC] Starting sync for ${month} (storeId=${storeId})`);
     const { start, end } = monthBoundDates(month);
-    const shipments = await fetchAllShipments(start, end);
+    const shipments = await fetchAllShipments(start, end, storeId);
     const rows = normalizeShipments(shipments);
 
     await kv.set(`shipping:raw:${month}`, { rows });
@@ -272,6 +284,32 @@ async function handleSampleRaw(req, res) {
   }
 }
 
+// ─── DIAGNOSTIC: list-stores ─────────────────────────────────────────────────
+// Pull all connected sales channels from ShipStation so you can find the
+// Amazon store's ID. Set that as SHIPSTATION_STORE_ID (or pass &storeId=...
+// to sync) to scope shipments to Amazon only.
+async function handleListStores(req, res) {
+  try {
+    if (!process.env.SHIPSTATION_API_KEY || !process.env.SHIPSTATION_API_SECRET) {
+      return res.status(500).json({ error: 'ShipStation credentials not set' });
+    }
+    const r = await fetch('https://ssapi.shipstation.com/stores', { headers: ssAuthHeader() });
+    const body = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: 'list-stores failed', body });
+    // Trim down to just the fields that actually help identify the store.
+    const trimmed = (Array.isArray(body) ? body : []).map(s => ({
+      storeId: s.storeId,
+      storeName: s.storeName,
+      marketplaceId: s.marketplaceId,
+      marketplaceName: s.marketplaceName,
+      active: s.active
+    }));
+    return res.status(200).json({ success: true, stores: trimmed });
+  } catch (error) {
+    return res.status(500).json({ error: 'List stores failed: ' + error.message });
+  }
+}
+
 // ─── SHIPSTATION API CLIENT ──────────────────────────────────────────────────
 
 function ssAuthHeader() {
@@ -284,7 +322,7 @@ function ssAuthHeader() {
 // Walks ShipStation's /shipments endpoint with pagination and returns every
 // shipment in [start, end]. includeShipmentItems=true attaches the items
 // array so we can do per-SKU cost allocation.
-async function fetchAllShipments(shipDateStart, shipDateEnd) {
+async function fetchAllShipments(shipDateStart, shipDateEnd, storeId) {
   const all = [];
   let page = 1;
   let totalPages = 1;
@@ -292,6 +330,7 @@ async function fetchAllShipments(shipDateStart, shipDateEnd) {
   do {
     const url = `https://ssapi.shipstation.com/shipments?` +
                 `shipDateStart=${shipDateStart}&shipDateEnd=${shipDateEnd}` +
+                `&storeId=${encodeURIComponent(storeId)}` +
                 `&pageSize=500&page=${page}&includeShipmentItems=true`;
     const res = await fetch(url, { headers: ssAuthHeader() });
     if (!res.ok) {
