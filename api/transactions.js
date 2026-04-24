@@ -204,10 +204,10 @@ async function handleProbeV2024(req, res) {
     // live in env vars, the endpoint is bounded (pagination cap), and
     // there are no KV writes. Paste the URL straight into a browser.
     const { orderId, month } = req.query;
-    // &summary=1 drops allTransactions from the response so a month-wide
-    // probe doesn't dump 1000+ records. Summary fields + sampleFirst /
-    // sampleDeferred still come through (enough to map breakdowns).
-    const summaryOnly = req.query.summary === '1' || req.query.summary === 'true';
+    // Response is always a compact distilled summary (counts, shape per
+    // type/status, dedup rule validation, every breakdownType seen). Add
+    // &raw=1 to additionally include the full untransformed transactions
+    // array — only useful for one-off deep inspection, not for decisions.
     let query;
     let maxCalls;
     if (orderId) {
@@ -262,22 +262,75 @@ async function handleProbeV2024(req, res) {
       if (nextToken && calls < maxCalls) await sleep(2200);
     } while (nextToken && calls < maxCalls);
 
-    // Summary: what types/statuses came back, what breakdownType strings
-    // appear (so we know how to map to FBA Fees / Selling Fees / etc.), and
-    // what deferralReasons we see (so we know what to look for in production
-    // sync). All transactions included in the response for manual inspection.
+    // Distill each transaction into a compact shape descriptor so a single
+    // response tells us everything the derivation needs to know: counts per
+    // (type, status), which related-identifier names appear per partition
+    // (that's the dedup-rule check), every breakdownType string ever seen,
+    // and one distilled example per (type, status) combo. Full raw
+    // transactions only included when &raw=1 is set.
     const byType = {};
     const byStatus = {};
     const breakdownTypes = new Set();
     const deferralReasons = new Set();
     const relatedIdentifierNames = new Set();
-    let sampleDeferred = null;
+    const typeStatusShapes = {}; // key: "type|status" → { count, sample: {...} }
+    let releasedWithDeferredAncestor = 0;
+    let releasedPure = 0;
+    const pureReleasedRidNames = new Set();
+    const ancestorReleasedRidNames = new Set();
 
-    const walkBreakdowns = (bs) => {
+    const walkBreakdowns = (bs, out) => {
       for (const b of (bs || [])) {
-        if (b?.breakdownType) breakdownTypes.add(b.breakdownType);
-        if (Array.isArray(b?.breakdowns)) walkBreakdowns(b.breakdowns);
+        if (b?.breakdownType) {
+          breakdownTypes.add(b.breakdownType);
+          if (out) out.add(b.breakdownType);
+        }
+        if (Array.isArray(b?.breakdowns)) walkBreakdowns(b.breakdowns, out);
       }
+    };
+
+    const hasDeferredAncestor = (t) =>
+      (t.relatedIdentifiers || []).some(r => r?.relatedIdentifierName === 'DEFERRED_TRANSACTION_ID');
+
+    const distill = (t) => {
+      const ridNames = [...new Set((t.relatedIdentifiers || [])
+        .map(r => r?.relatedIdentifierName).filter(Boolean))].sort();
+      const ctxTypes = [...new Set((t.contexts || [])
+        .map(c => c?.contextType).filter(Boolean))].sort();
+      const topBreakdowns = new Set();
+      walkBreakdowns(t.breakdowns, topBreakdowns);
+      const itemCount = Array.isArray(t.items) ? t.items.length : 0;
+      const itemBreakdowns = new Set();
+      let itemFulfillmentNetwork = null;
+      let itemHasSku = false;
+      if (itemCount > 0) {
+        for (const item of t.items) {
+          walkBreakdowns(item.breakdowns, itemBreakdowns);
+          for (const c of (item.contexts || [])) {
+            if (c?.contextType === 'ProductContext') {
+              if (c.fulfillmentNetwork) itemFulfillmentNetwork = c.fulfillmentNetwork;
+              if (c.sku) itemHasSku = true;
+            }
+          }
+        }
+      }
+      const deferralReason = (t.contexts || [])
+        .find(c => c?.contextType === 'DeferredContext')?.deferralReason || null;
+      return {
+        transactionId: t.transactionId || null,
+        description: t.description || null,
+        totalAmount: t.totalAmount?.currencyAmount ?? null,
+        postedDate: t.postedDate || null,
+        accountType: t.sellingPartnerMetadata?.accountType || null,
+        relatedIdentifierNames: ridNames,
+        contextTypes: ctxTypes,
+        deferralReason,
+        topLevelBreakdownTypes: [...topBreakdowns].sort(),
+        itemCount,
+        itemBreakdownTypes: [...itemBreakdowns].sort(),
+        itemFulfillmentNetwork,
+        itemHasSku
+      };
     };
 
     for (const t of transactions) {
@@ -285,16 +338,26 @@ async function handleProbeV2024(req, res) {
       const tStatus = t.transactionStatus || '(null)';
       byType[tType] = (byType[tType] || 0) + 1;
       byStatus[tStatus] = (byStatus[tStatus] || 0) + 1;
-      walkBreakdowns(t.breakdowns);
-      for (const item of (t.items || [])) walkBreakdowns(item.breakdowns);
+      const key = `${tType}|${tStatus}`;
+      if (!typeStatusShapes[key]) typeStatusShapes[key] = { count: 0, sample: distill(t) };
+      typeStatusShapes[key].count++;
+      walkBreakdowns(t.breakdowns, null);
+      for (const item of (t.items || [])) walkBreakdowns(item.breakdowns, null);
       for (const ctx of (t.contexts || [])) {
         if (ctx?.deferralReason) deferralReasons.add(ctx.deferralReason);
       }
       for (const rid of (t.relatedIdentifiers || [])) {
         if (rid?.relatedIdentifierName) relatedIdentifierNames.add(rid.relatedIdentifierName);
       }
-      if (!sampleDeferred && (tStatus === 'DEFERRED' || tStatus === 'DEFERRED_RELEASED')) {
-        sampleDeferred = t;
+      if (tStatus === 'RELEASED') {
+        const names = (t.relatedIdentifiers || []).map(r => r?.relatedIdentifierName).filter(Boolean);
+        if (hasDeferredAncestor(t)) {
+          releasedWithDeferredAncestor++;
+          for (const n of names) ancestorReleasedRidNames.add(n);
+        } else {
+          releasedPure++;
+          for (const n of names) pureReleasedRidNames.add(n);
+        }
       }
     }
 
@@ -306,13 +369,20 @@ async function handleProbeV2024(req, res) {
       totalTransactions: transactions.length,
       byType,
       byStatus,
+      dedup: {
+        releasedWithDeferredAncestor,
+        releasedPure,
+        pureReleasedIdentifierNames: [...pureReleasedRidNames].sort(),
+        ancestorReleasedIdentifierNames: [...ancestorReleasedRidNames].sort(),
+        ruleValidated: !pureReleasedRidNames.has('DEFERRED_TRANSACTION_ID') &&
+                        ancestorReleasedRidNames.has('DEFERRED_TRANSACTION_ID')
+      },
       breakdownTypesSeen: [...breakdownTypes].sort(),
       deferralReasonsSeen: [...deferralReasons].sort(),
       relatedIdentifierNamesSeen: [...relatedIdentifierNames].sort(),
-      sampleFirst: transactions[0] || null,
-      sampleDeferred
+      typeStatusShapes
     };
-    if (!summaryOnly) response.allTransactions = transactions;
+    if (req.query.raw === '1') response.allTransactions = transactions;
     return res.status(200).json(response);
   } catch (error) {
     console.error('[PROBE V2024] Error:', error);
