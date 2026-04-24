@@ -50,7 +50,8 @@ export default async function handler(req, res) {
     if (action === 'get-months')          return handleGetMonths(req, res);
   }
   if (req.method === 'POST') {
-    if (action === 'migrate-from-sheets') return handleMigrateFromSheets(req, res);
+    if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
+    if (action === 'dedupe-sheets-vs-api')    return handleDedupeSheetsVsApi(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -329,27 +330,83 @@ async function handleMigrateFromSheets(req, res) {
         byMonth[month].push({ date, campaign, cost });
       }
 
-      // Write each month as its own raw bucket. Append-merge with any
-      // existing rows so running this twice doesn't wipe good data.
+      // Write each month as its own raw bucket, but skip any month where
+      // API data already exists (detected by the presence of at least one
+      // sku-bearing row). API data is richer and authoritative; we only
+      // want Sheets migration to fill in months the API hasn't touched.
       const index = (await kv.get(`adspend:${type}:index`)) || [];
-      let total = 0;
+      let writtenRows = 0;
+      const skippedMonths = [];
       for (const [month, rows] of Object.entries(byMonth)) {
         const existing = await kv.get(`adspend:${type}:raw:${month}`);
         const existingRows = (existing && Array.isArray(existing.rows)) ? existing.rows : [];
-        const merged = dedupeRows([...existingRows, ...rows]);
-        await kv.set(`adspend:${type}:raw:${month}`, { rows: merged });
-        total += rows.length;
+        const apiRowsPresent = existingRows.some(r => r && r.sku);
+        if (apiRowsPresent) {
+          skippedMonths.push(month);
+          continue;
+        }
+        await kv.set(`adspend:${type}:raw:${month}`, { rows: dedupeRows(rows) });
+        writtenRows += rows.length;
         if (!index.includes(month)) index.push(month);
       }
       index.sort();
       await kv.set(`adspend:${type}:index`, index);
-      counts[type] = total;
+      counts[type] = { rows: writtenRows, skippedMonths };
     }
 
-    return res.status(200).json({ success: true, counts, message: `Migrated from Sheets: SP=${counts.sp} rows, SB=${counts.sb} rows.` });
+    return res.status(200).json({
+      success: true,
+      counts,
+      message: `Migrated from Sheets: SP=${counts.sp.rows} rows (skipped ${counts.sp.skippedMonths.length} months that already have API data), SB=${counts.sb.rows} rows (skipped ${counts.sb.skippedMonths.length}).`
+    });
   } catch (error) {
     console.error('[ADSPEND MIGRATE] Error:', error);
     return res.status(500).json({ error: 'Migrate failed: ' + error.message });
+  }
+}
+
+// ─── DEDUPE SHEETS VS API ────────────────────────────────────────────────────
+// One-shot fixup for months that were written both by migrate-from-sheets
+// (campaign-level, no SKU) and by sync-collect (SKU-level from the API),
+// producing doubled totals. Rule: within any month whose stored rows
+// include at least one sku-bearing row, drop every sku-less row. Months
+// that are still purely Sheets-sourced (no sku on any row) are untouched
+// so historical data isn't wiped.
+//
+// POST body: { type: 'sp' | 'sb', month?: 'YYYY-MM' }
+//   month omitted ⇒ walk every month in the type's index.
+async function handleDedupeSheetsVsApi(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const { type, month } = req.body || {};
+    if (!['sp', 'sb'].includes(type)) return res.status(400).json({ error: 'type must be sp or sb' });
+
+    const monthsToCheck = month
+      ? [month]
+      : ((await kv.get(`adspend:${type}:index`)) || []);
+
+    const results = [];
+    for (const m of monthsToCheck) {
+      const stored = await kv.get(`adspend:${type}:raw:${m}`);
+      const rows = (stored && Array.isArray(stored.rows)) ? stored.rows : [];
+      if (rows.length === 0) { results.push({ month: m, action: 'no-data' }); continue; }
+
+      const hasApi = rows.some(r => r && r.sku);
+      if (!hasApi) { results.push({ month: m, action: 'kept-as-sheets-only', rows: rows.length }); continue; }
+
+      const kept = rows.filter(r => r && r.sku);
+      const dropped = rows.length - kept.length;
+      if (dropped === 0) { results.push({ month: m, action: 'already-clean', rows: rows.length }); continue; }
+
+      await kv.set(`adspend:${type}:raw:${m}`, { rows: kept });
+      results.push({ month: m, action: 'deduped', kept: kept.length, dropped });
+    }
+
+    return res.status(200).json({ success: true, type, results });
+  } catch (error) {
+    return res.status(500).json({ error: 'Dedupe failed: ' + error.message });
   }
 }
 
@@ -465,11 +522,11 @@ function normalizeRows(rawRows, type) {
 }
 
 async function storeMonthly(type, month, rows) {
-  // Append-merge so a re-pull (or partial result) doesn't wipe prior data.
-  const existing = await kv.get(`adspend:${type}:raw:${month}`);
-  const existingRows = (existing && Array.isArray(existing.rows)) ? existing.rows : [];
-  const merged = dedupeRows([...existingRows, ...rows]);
-  await kv.set(`adspend:${type}:raw:${month}`, { rows: merged });
+  // Replace rather than merge: API-sourced data is authoritative for the
+  // month. Merging would stack Sheets-migrated campaign-level rows on top
+  // of API-delivered SKU-level rows and double-count totals. Re-pulling
+  // the same month is expected to overwrite cleanly.
+  await kv.set(`adspend:${type}:raw:${month}`, { rows });
 
   const index = (await kv.get(`adspend:${type}:index`)) || [];
   if (!index.includes(month)) {
