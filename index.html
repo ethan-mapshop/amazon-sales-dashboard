@@ -611,8 +611,8 @@
         <!-- Year-to-Date View -->
         <div id="ytd-view">
           <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-              <label style="display: inline-flex; align-items: center; padding: 0.5rem 0; border: 1px solid transparent; font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); line-height: 1;">Year:</label>
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
               <select id="ytd-year-select" onchange="generateYTDReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
               <button class="btn" onclick="setYTDYear('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
@@ -632,8 +632,8 @@
         <!-- Monthly View -->
         <div id="monthly-view" style="display: none;">
           <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-              <label style="display: inline-flex; align-items: center; padding: 0.5rem 0; border: 1px solid transparent; font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); line-height: 1;">Month:</label>
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Month:</label>
               <select id="monthly-month-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 140px;">
                 <option value="0">January</option>
                 <option value="1">February</option>
@@ -648,7 +648,7 @@
                 <option value="10">November</option>
                 <option value="11">December</option>
               </select>
-              <label style="display: inline-flex; align-items: center; padding: 0.5rem 0; border: 1px solid transparent; font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); line-height: 1;">Year:</label>
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
               <select id="monthly-year-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
               <button class="btn" onclick="setMonthlyDate('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
@@ -668,8 +668,8 @@
         <!-- Monthly View — Upstash -->
         <div id="monthly-upstash-view" style="display: none;">
           <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-              <label style="display: inline-flex; align-items: center; padding: 0.5rem 0; border: 1px solid transparent; font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); line-height: 1;">Month:</label>
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Month:</label>
               <select id="monthly-upstash-month-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 140px;">
                 <option value="0">January</option>
                 <option value="1">February</option>
@@ -684,7 +684,7 @@
                 <option value="10">November</option>
                 <option value="11">December</option>
               </select>
-              <label style="display: inline-flex; align-items: center; padding: 0.5rem 0; border: 1px solid transparent; font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); line-height: 1;">Year:</label>
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
               <select id="monthly-upstash-year-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
               <button class="btn" onclick="setMonthlyUpstashDate('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
@@ -706,8 +706,8 @@
         <!-- YTD View — Upstash -->
         <div id="ytd-upstash-view" style="display: none;">
           <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-              <label style="display: inline-flex; align-items: center; padding: 0.5rem 0; border: 1px solid transparent; font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); line-height: 1;">Year:</label>
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
               <select id="ytd-upstash-year-select" onchange="generateYTDUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
               </select>
               <button class="btn" onclick="setYTDUpstashYear('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>

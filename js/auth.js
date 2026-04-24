@@ -31,6 +31,10 @@
               // Show signed in state
               displayUserInfo(null);
               enableUpload();
+              // Kick off the data fetch for whichever overview tab is active
+              // so the user lands on a populated report instead of having to
+              // click a tab/button to trigger the first load.
+              triggerCurrentOverviewLoad();
             } else {
               showAuthError('Failed to get access token');
             }
@@ -83,6 +87,23 @@
     
     function updateAuthUI() {
       if (config.clientId && !tokenClient) initializeGoogleAuth();
+    }
+
+    // Called from the OAuth callback after a successful sign-in. Only fires
+    // a load if the user is currently looking at the Overview page — we don't
+    // want to yank them to a different page or kick off fetches for pages
+    // they aren't viewing. Which generate function runs depends on the
+    // currently-active Overview tab.
+    function triggerCurrentOverviewLoad() {
+      const overviewPage = document.getElementById('overview-page');
+      if (!overviewPage || !overviewPage.classList.contains('active')) return;
+      const activeTab = document.querySelector('#overview-page .page-header .tabs .tab.active');
+      if (!activeTab) return;
+      const tabId = activeTab.id;
+      if (tabId === 'monthly-tab' && typeof showMonthly === 'function') showMonthly();
+      else if (tabId === 'ytd-tab' && typeof showYTD === 'function') showYTD();
+      else if (tabId === 'monthly-upstash-tab' && typeof showMonthlyUpstash === 'function') showMonthlyUpstash();
+      else if (tabId === 'ytd-upstash-tab' && typeof showYTDUpstash === 'function') showYTDUpstash();
     }
     
     document.addEventListener('DOMContentLoaded', () => {
