@@ -70,11 +70,15 @@ async function handleSyncRequest(req, res) {
     }
     const { start, end } = monthBoundDates(month);
 
+    // types=sp, types=sb, or types=sp,sb (default = both).
+    const typesParam = (req.query.types || 'sp,sb').toLowerCase();
+    const wanted = new Set(typesParam.split(',').map(s => s.trim()).filter(Boolean));
+
     const accessToken = await getAdsAccessToken();
     const requested = [];
 
     // Sponsored Products — SKU-level spend attribution via "advertised product".
-    try {
+    if (wanted.has('sp')) try {
       const spReportId = await requestReport(accessToken, {
         name: `SP Advertised Product ${month}`,
         startDate: start,
@@ -100,7 +104,7 @@ async function handleSyncRequest(req, res) {
     }
 
     // Sponsored Brands — campaign-level (SB doesn't expose per-SKU spend).
-    try {
+    if (wanted.has('sb')) try {
       const sbReportId = await requestReport(accessToken, {
         name: `SB Campaigns ${month}`,
         startDate: start,
