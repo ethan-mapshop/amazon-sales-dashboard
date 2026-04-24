@@ -1238,6 +1238,180 @@
       `;
     }
 
+    // ─── SHEETS-VS-UPSTASH SKU DIFF (DIAGNOSTIC) ────────────────────────
+    // Fetches the Sheets Transactions tab + the Upstash derived rows for the
+    // currently-selected Monthly Upstash period, aggregates per-SKU Order /
+    // Refund product-sales on both sides, and renders a comparison table
+    // sorted by |diff| descending. Also includes each SKU's recorded-at-
+    // order-time fulfillment (from Sheets) vs current-catalog fulfillment so
+    // classification shifts surface immediately.
+    async function showMonthlyUpstashSkuDiff() {
+      const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
+      const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
+      if (isNaN(month) || isNaN(year)) return;
+
+      const container = document.getElementById('monthly-upstash-content');
+      if (!container) return;
+      if (!accessToken) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to run the Sheets-vs-Upstash comparison</div>';
+        return;
+      }
+
+      const startDate = _ymd(new Date(year, month, 1));
+      const endDate   = _ymd(new Date(year, month + 1, 0));
+      container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Comparing Sheets vs Upstash for ${startDate} → ${endDate}…</div>`;
+
+      try {
+        const [sheetsInputs, upstashInputs] = await Promise.all([
+          _fetchOverviewInputsFromSheets(),
+          _fetchUpstashInputs(startDate, endDate)
+        ]);
+
+        // ── Aggregate Sheets side: sku → { order, refund, fulfillment } ──
+        const sheetsRows = sheetsInputs.transactionsData.values || [];
+        const headers = sheetsRows[0] || [];
+        const idx = (needle) => headers.findIndex(h => String(h || '').toLowerCase() === needle);
+        const dateIdx        = headers.findIndex(h => String(h || '').toLowerCase().includes('date'));
+        const typeIdx        = idx('type');
+        const skuIdx         = idx('sku');
+        const fulfillmentIdx = idx('fulfillment');
+        const salesIdx       = idx('product sales');
+
+        const sheetsPerSku = Object.create(null);
+        for (let i = 1; i < sheetsRows.length; i++) {
+          const row = sheetsRows[i] || [];
+          const dateStr = String(row[dateIdx] || '').substring(0, 10);
+          if (!dateStr || dateStr < startDate || dateStr > endDate) continue;
+          const type = String(row[typeIdx] || '').trim();
+          const sku = _normalizeSku(row[skuIdx]);
+          if (!sku) continue;
+          const fulfillment = String(row[fulfillmentIdx] || '').trim();
+          const amount = parseFloat(row[salesIdx]) || 0;
+          let bucket = sheetsPerSku[sku];
+          if (!bucket) bucket = sheetsPerSku[sku] = { order: 0, refund: 0, fulfillment: '' };
+          if (type === 'Order')       bucket.order  += amount;
+          else if (type === 'Refund') bucket.refund += amount;
+          if (fulfillment && !bucket.fulfillment) bucket.fulfillment = fulfillment;
+        }
+
+        // ── Aggregate Upstash side: sku → { order, refund, fulfillment } ──
+        const rows = _deriveTransactionRows(upstashInputs.pages, startDate, endDate);
+        const upstashPerSku = Object.create(null);
+        for (const r of rows) {
+          if (!r.sku || (r.type !== 'Order' && r.type !== 'Refund')) continue;
+          let bucket = upstashPerSku[r.sku];
+          if (!bucket) {
+            const prod = upstashInputs.products[r.sku];
+            bucket = upstashPerSku[r.sku] = {
+              order: 0, refund: 0,
+              fulfillment: prod ? String(prod.fulfillment || '').trim() : ''
+            };
+          }
+          if (r.type === 'Order')  bucket.order  += r.sale;
+          else                      bucket.refund += r.sale;
+        }
+
+        // ── Merge + sort by |order diff| desc ─────────────────────────────
+        const skus = new Set([...Object.keys(sheetsPerSku), ...Object.keys(upstashPerSku)]);
+        const diffs = [];
+        let sheetsTotal = 0, upstashTotal = 0;
+        for (const sku of skus) {
+          const s = sheetsPerSku[sku]  || { order: 0, refund: 0, fulfillment: '' };
+          const u = upstashPerSku[sku] || { order: 0, refund: 0, fulfillment: '' };
+          sheetsTotal  += s.order;
+          upstashTotal += u.order;
+          diffs.push({
+            sku,
+            sheetsOrder:  s.order,
+            upstashOrder: u.order,
+            orderDiff:    u.order - s.order,
+            sheetsRefund:  s.refund,
+            upstashRefund: u.refund,
+            sheetsFulfillment: s.fulfillment,
+            catalogFulfillment: u.fulfillment
+          });
+        }
+        diffs.sort((a, b) => Math.abs(b.orderDiff) - Math.abs(a.orderDiff));
+
+        _renderSkuDiff(container, {
+          startDate, endDate,
+          sheetsTotal, upstashTotal,
+          totalDiff: upstashTotal - sheetsTotal,
+          diffs
+        });
+      } catch (err) {
+        console.error('SKU diff failed:', err);
+        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+      }
+    }
+
+    function _renderSkuDiff(container, { startDate, endDate, sheetsTotal, upstashTotal, totalDiff, diffs }) {
+      const fmt = (n) => {
+        const abs = Math.abs(n);
+        const s = '$' + abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return n < 0 ? `(${s})` : s;
+      };
+      const diffColor = (n) => n > 0.005 ? 'var(--success, #1f9d55)' : (n < -0.005 ? 'var(--error)' : 'var(--text-secondary)');
+
+      // Only list SKUs with a meaningful order diff (≥ $0.01) OR with a
+      // fulfillment-classification mismatch. Everything else is noise.
+      const filtered = diffs.filter(d =>
+        Math.abs(d.orderDiff) >= 0.01 ||
+        (d.sheetsFulfillment && d.catalogFulfillment && d.sheetsFulfillment.toLowerCase() !== d.catalogFulfillment.toLowerCase())
+      );
+
+      const rowsHtml = filtered.map(d => {
+        const shifted = d.sheetsFulfillment && d.catalogFulfillment && d.sheetsFulfillment.toLowerCase() !== d.catalogFulfillment.toLowerCase();
+        return `
+          <tr>
+            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(d.sku || '(empty)')}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.sheetsOrder)}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.upstashOrder)}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem; color: ${diffColor(d.orderDiff)};">${fmt(d.orderDiff)}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.sheetsRefund)}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.upstashRefund)}</td>
+            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;${shifted ? ' color: var(--warning);' : ''}">${_escape(d.sheetsFulfillment || '—')}</td>
+            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;${shifted ? ' color: var(--warning);' : ''}">${_escape(d.catalogFulfillment || '—')}</td>
+          </tr>
+        `;
+      }).join('');
+
+      const thStyle = 'text-align: left; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;';
+      const thRight = thStyle.replace('text-align: left', 'text-align: right');
+
+      container.innerHTML = `
+        <div style="margin-bottom: 1rem;">
+          <button class="btn btn-secondary" onclick="generateMonthlyUpstashReport()" style="padding: 0.5rem 1rem;">← Back to report</button>
+        </div>
+        <div style="margin-bottom: 1rem; font-weight: 600;">
+          Per-SKU Sheets vs Upstash comparison · ${startDate} → ${endDate}
+        </div>
+        <div style="display: flex; gap: 2rem; margin-bottom: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.9rem;">
+          <div><span style="color: var(--text-secondary);">Sheets Orders total:</span> ${fmt(sheetsTotal)}</div>
+          <div><span style="color: var(--text-secondary);">Upstash Orders total:</span> ${fmt(upstashTotal)}</div>
+          <div><span style="color: var(--text-secondary);">Diff (Upstash − Sheets):</span> <span style="color: ${diffColor(totalDiff)};">${fmt(totalDiff)}</span></div>
+        </div>
+        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">
+          Showing ${filtered.length} of ${diffs.length} SKUs that have a non-zero order diff (≥ $0.01) or a fulfillment mismatch. Rows with amber fulfillment cells had a different fulfillment recorded on March orders than the current Products catalog.
+        </div>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th style="${thStyle}">SKU</th>
+              <th style="${thRight}">Sheets Orders</th>
+              <th style="${thRight}">Upstash Orders</th>
+              <th style="${thRight}">Diff</th>
+              <th style="${thRight}">Sheets Refunds</th>
+              <th style="${thRight}">Upstash Refunds</th>
+              <th style="${thStyle}">Sheets Fulfillment</th>
+              <th style="${thStyle}">Catalog Fulfillment</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml || '<tr><td colspan="8" style="padding: 1rem; text-align: center; color: var(--text-secondary);">No meaningful diffs found.</td></tr>'}</tbody>
+        </table>
+      `;
+    }
+
     // ─── CSV EXPORT ─────────────────────────────────────────────────────
     // Exports the derived transaction rows (Orders + Refunds, 10 columns) —
     // what ends up fed into the statement builder. Lets the user spot-check
