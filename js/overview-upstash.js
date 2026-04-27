@@ -692,6 +692,98 @@
       return '';
     }
 
+    // Maps each breakdownType string Amazon emits in listTransactions to the
+    // statement-line bucket it should land in. Built empirically from the
+    // probe-v2024 month dump and validated against Sheets monthly totals.
+    //
+    // Handler kinds:
+    //   item       — Order/Refund per-item bucket. Adds amount to one of
+    //                {sale, otherCharges, fbaFees, transactionFees, promotions}
+    //                on the Order/Refund row being built.
+    //   serviceFee — emit a ServiceFee row with feeType = breakdownType,
+    //                feeAmount = the leaf's currencyAmount. _buildStatement
+    //                routes through SERVICE_FEE_LINE_MAP.
+    //   adjustment — emit an Adjustment row with adjustmentType =
+    //                breakdownType, adjustmentAmount = the leaf's amount.
+    //                _buildStatement routes through _adjustmentLine.
+    //   skip       — recognized but intentionally not added (taxes net to
+    //                zero for the seller; aggregator nodes like 'Sales' /
+    //                'Expenses' / 'AmazonFees' / 'Base' are handled by
+    //                recursing through them when they have no handler).
+    //
+    // Anything not in this map AND not an aggregator we recurse through is
+    // surfaced in unmappedBreakdowns so we don't silently lose money on a
+    // future Amazon schema change.
+    const V2024_LEAF_HANDLER = {
+      // Item-level Order/Refund leaves
+      'OurPricePrincipal':         { kind: 'item', bucket: 'sale' },
+      'Shipping':                  { kind: 'item', bucket: 'otherCharges' },
+      'ShippingPrincipal':         { kind: 'item', bucket: 'otherCharges' },
+      'Promo':                     { kind: 'item', bucket: 'promotions' },
+      'PromoRebates':              { kind: 'item', bucket: 'promotions' },
+      'ShippingDiscount':          { kind: 'item', bucket: 'promotions' },
+      'Commission':                { kind: 'item', bucket: 'transactionFees' },
+      'VariableClosingFee':        { kind: 'item', bucket: 'transactionFees' },
+      'FixedClosingFee':           { kind: 'item', bucket: 'transactionFees' },
+      'RefundCommission':          { kind: 'item', bucket: 'transactionFees' },
+      'FBAPerUnitFulfillmentFee':  { kind: 'item', bucket: 'fbaFees' },
+      'FBAPerOrderFulfillmentFee': { kind: 'item', bucket: 'fbaFees' },
+      'FBAWeightBasedFee':         { kind: 'item', bucket: 'fbaFees' },
+
+      // ServiceFee leaves (names match SERVICE_FEE_LINE_MAP keys so emitted
+      // rows route through the existing _buildStatement logic)
+      'FBADisposalFee':              { kind: 'serviceFee' },
+      'CustomerReturnHRRUnitFee':    { kind: 'serviceFee' },
+      'HRRNonApparelRollup':         { kind: 'serviceFee' },
+      'FBAStorageFee':               { kind: 'serviceFee' },
+      'FBALongTermStorageFee':       { kind: 'serviceFee' },
+      'LongTermStorageFee':          { kind: 'serviceFee' },
+      'StorageBillingFee':           { kind: 'serviceFee' },
+      'FBAInboundTransportationFee': { kind: 'serviceFee' },
+      'InboundTransportationFee':    { kind: 'serviceFee' },
+
+      // Adjustment / Reimbursement leaves — names match the adjustment maps
+      // _adjustmentLine uses.
+      'COMPENSATED_CLAWBACK':                   { kind: 'adjustment' },
+      'FBAInventoryReimbursement':              { kind: 'adjustment' },
+      'FBAReversedReimbursement':               { kind: 'adjustment' },
+      'WAREHOUSE_LOST':                         { kind: 'adjustment' },
+      'MISSING_FROM_INBOUND':                   { kind: 'adjustment' },
+      'MISSING_FROM_INBOUND_CLAWBACK':          { kind: 'adjustment' },
+      'PostageBilling_Postage':                 { kind: 'adjustment' },
+      'PostageBilling_FuelSurcharge':           { kind: 'adjustment' },
+      'PostageBilling_Other':                   { kind: 'adjustment' },
+      'PostageBilling_PostageAdjustment':       { kind: 'adjustment' },
+      'CarrierPackagingCharge':                 { kind: 'adjustment' },
+      'CustomerPackagingCharge':                { kind: 'adjustment' },
+      'ReturnPostageBilling_Tracking':          { kind: 'adjustment' },
+      'ReturnPostageBilling_Postage':           { kind: 'adjustment' },
+      'ReturnPostageBilling_TransactionFee':    { kind: 'adjustment' },
+      'ReturnPostageBilling_FuelSurcharge':     { kind: 'adjustment' },
+      'ReturnPostageBilling_OversizeSurcharge': { kind: 'adjustment' },
+      'ReturnPostageBilling_DeliveryAreaSurcharge': { kind: 'adjustment' },
+      'ShippingChargeback':                     { kind: 'adjustment' },
+      'ShippingHB':                             { kind: 'adjustment' },
+      'ShippingServiceChargebacks':             { kind: 'adjustment' },
+      'RestockingDeductionPrincipal':           { kind: 'adjustment' },
+      'ReturnShippingDeductionPrincipal':       { kind: 'adjustment' },
+
+      // Tax types — net-zero for the seller, explicitly skipped (don't
+      // recurse, don't track as unmapped).
+      'OurPriceTax':                          { kind: 'skip' },
+      'ShippingTax':                          { kind: 'skip' },
+      'MarketplaceFacilitatorTax-Principal':  { kind: 'skip' },
+      'MarketplaceFacilitatorTax-Shipping':   { kind: 'skip' },
+      'MarketplaceFacilitatorTax-Other':      { kind: 'skip' },
+      'MarketplaceFacilitatorVAT-Principal':  { kind: 'skip' },
+      'MarketplaceFacilitatorVAT-Shipping':   { kind: 'skip' },
+      'MarketplaceFacilitatorVAT-Other':      { kind: 'skip' },
+
+      // Fallback — Amazon's catch-all "Other" bucket maps to Other Expenses
+      // (via _adjustmentLine).
+      'Other': { kind: 'adjustment' }
+    };
+
     // Walk a breakdown tree, calling `handle` for each node whose
     // breakdownType is in V2024_LEAF_HANDLER. Recurses through unrecognized
     // aggregator nodes to reach handlers underneath. Tracks unmapped leaves
