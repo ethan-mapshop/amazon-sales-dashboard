@@ -771,32 +771,34 @@
       white-space: nowrap;
     }
     
-    /* Vertical divider before FBM section (2nd column in body rows) */
+    /* Vertical divider before Total section (2nd column in body rows) */
     .bp-table tbody tr th:nth-child(2),
     .bp-table tbody tr td:nth-child(2) {
       border-left: 2px solid var(--border);
     }
-    
-    /* Vertical divider before FBA section (8th column in body rows) */
+
+    /* Vertical divider before FBM section (8th column in body rows) */
     .bp-table tbody tr th:nth-child(8),
     .bp-table tbody tr td:nth-child(8) {
       border-left: 2px solid var(--border);
     }
-    
-    /* Vertical divider before Total section (14th column in body rows) */
+
+    /* Vertical divider before FBA section (14th column in body rows) */
     .bp-table tbody tr th:nth-child(14),
     .bp-table tbody tr td:nth-child(14) {
       border-left: 2px solid var(--border);
     }
-    
-    /* First header row - same as body (has Brand/Product column) */
+
+    /* First header row - same as body (has Brand/Product column).
+       Columns 2/8/14 = start of Total / FBM / FBA group banner. */
     .bp-table thead tr:first-child th:nth-child(2),
     .bp-table thead tr:first-child th:nth-child(8),
     .bp-table thead tr:first-child th:nth-child(14) {
       border-left: 2px solid var(--border);
     }
-    
-    /* Second header row - shifted by 1 (no Brand/Product column due to rowspan) */
+
+    /* Second header row - shifted by 1 (no Brand/Product column due to
+       rowspan). Cols 1/7/13 = first metric of Total / FBM / FBA. */
     .bp-table thead tr:nth-child(2) th:nth-child(1),
     .bp-table thead tr:nth-child(2) th:nth-child(7),
     .bp-table thead tr:nth-child(2) th:nth-child(13) {
@@ -857,9 +859,43 @@
       background: var(--bg-card);
       cursor: pointer;
     }
-    
+
     .bp-table tbody tr.brand-row:hover {
       background: var(--bg-secondary);
+    }
+
+    /* Sticky brand row — pin the brand summary just below the column
+       headers as you scroll through that brand's product list, so you
+       always know which brand the rows below belong to.
+
+       Each brand+products group sits in its own <tbody> (added in
+       renderBrandProductTable). position: sticky's stickiness is
+       constrained by the nearest scroll container's bounds, but for
+       sibling sticky elements it's also constrained by the next
+       sticky element in DOM flow — meaning when you scroll past one
+       brand's tbody, the next brand's row replaces it cleanly instead
+       of stacking.
+
+       --bp-thead-height is set in JS after render, measured from the
+       actual rendered thead. Falls back to 72px if unset. */
+    .bp-table tbody tr.brand-row td {
+      position: sticky;
+      top: var(--bp-thead-height, 72px);
+      background: var(--bg-card);
+      z-index: 6;
+    }
+
+    .bp-table tbody tr.brand-row:hover td {
+      background: var(--bg-secondary);
+    }
+
+    /* The first cell needs to pin both vertically (under the headers)
+       and horizontally (left edge — the existing first-column freeze).
+       z-index is one higher so it sits above the other cells when both
+       directions intersect at the corner. */
+    .bp-table tbody tr.brand-row td:first-child {
+      left: 0;
+      z-index: 7;
     }
     
     .bp-table tbody tr.product-row {

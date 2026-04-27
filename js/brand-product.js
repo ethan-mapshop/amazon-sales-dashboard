@@ -1373,15 +1373,24 @@
         return;
       }
       
+      // Column order: Total | FBM | FBA. Total is left-most so the
+      // most-important grouping is read first when scanning the table
+      // and (combined with the sticky first-column "Brand / Product"
+      // name) it sits right next to the row label.
+      //
+      // Each brand + its products go into their own <tbody> element so
+      // sticky positioning on the brand row can pin within that group.
+      // When you scroll past a brand's last product, its <tbody> ends
+      // and the next brand's row takes over the pinned slot.
       let html = `
         <div class="bp-table-wrapper">
           <table class="bp-table">
             <thead>
               <tr>
                 <th rowspan="2">Brand / Product</th>
+                <th colspan="6" class="header-group total">Total</th>
                 <th colspan="6" class="header-group fbm">FBM</th>
                 <th colspan="6" class="header-group fba">FBA</th>
-                <th colspan="6" class="header-group total">Total</th>
               </tr>
               <tr>
                 <th>Income</th>
@@ -1404,12 +1413,11 @@
                 <th>Margin</th>
               </tr>
             </thead>
-            <tbody>
       `;
-      
+
       brandData.forEach(brand => {
         const brandId = brand.brandName.replace(/\s+/g, '-');
-        
+        html += `<tbody class="brand-group" data-brand="${brandId}">`;
         // Brand row
         html += `
           <tr class="brand-row" onclick="toggleBrand('${brandId}')">
@@ -1419,32 +1427,45 @@
                 <strong>${brand.brandName}</strong>
               </div>
             </td>
+            ${renderMetricsCells(brand.total)}
             ${renderMetricsCells(brand.fbm)}
             ${renderMetricsCells(brand.fba)}
-            ${renderMetricsCells(brand.total)}
           </tr>
         `;
-        
+
         // Product rows (initially hidden)
         brand.products.forEach(product => {
           html += `
             <tr class="product-row" data-brand="${brandId}" style="display: none;">
               <td>${product.productName}</td>
+              ${renderMetricsCells(product.total)}
               ${renderMetricsCells(product.fbm, product.skus.some(s => s.fulfillmentType === 'FBM'))}
               ${renderMetricsCells(product.fba, product.skus.some(s => s.fulfillmentType === 'FBA'))}
-              ${renderMetricsCells(product.total)}
             </tr>
           `;
         });
+        html += `</tbody>`;
       });
-      
+
       html += `
-            </tbody>
           </table>
         </div>
       `;
-      
+
       container.innerHTML = html;
+
+      // Measure the actual rendered thead height and expose it as a CSS
+      // variable so sticky brand rows pin exactly below the headers
+      // regardless of font / padding tweaks. requestAnimationFrame waits
+      // one frame so layout is settled before we read measurements.
+      requestAnimationFrame(() => {
+        const table = container.querySelector('.bp-table');
+        const thead = table?.querySelector('thead');
+        if (table && thead) {
+          const h = Math.ceil(thead.getBoundingClientRect().height);
+          if (h > 0) table.style.setProperty('--bp-thead-height', `${h}px`);
+        }
+      });
     }
     
     // Helper to render metrics cells
