@@ -1,82 +1,119 @@
-    // Profitability Overview — Upstash-backed variant.
+    // Profitability Overview — backed by SP-API Finances v2024-06-19
+    // listTransactions.
     //
-    // Storage model: /api/transactions stores the RAW SP-API FinancialEvents
-    // pages only. All mapping/categorization happens here on the client, so
-    // iterating on the schema requires no re-sync — just a reload.
+    // Storage model: /api/transactions?action=sync-v2024 stores the raw
+    // listTransactions response under transactions:v2024:raw:YYYY-MM. The
+    // dedup rule (skip RELEASED transactions that carry a
+    // DEFERRED_TRANSACTION_ID), the breakdown-leaf → statement-line routing
+    // (V2024_LEAF_HANDLER), and the FBA/FBM split (from each item's
+    // ProductContext.fulfillmentNetwork: AFN→FBA, MFN→FBM) all happen on
+    // the client in _deriveV2024Rows. Iterating on the routing table
+    // requires no re-sync — just reload the page.
     //
-    // Scope of what's wired right now:
-    //   ShipmentEventList (type='Order') and RefundEventList (type='Refund')
-    //   — both mapped per the same schema:
-    //     sale             ← ChargeType: Principal
-    //                          Orders  → FBM/FBA Sales
-    //                          Refunds → FBM/FBA Returns
-    //     other charges    ← ChargeType: GiftWrap, Shipping, ShippingCharge,
-    //                                    ReturnShipping (Refunds), and any
-    //                                    non-tax ChargeType as fallback
-    //     fba fees         ← FeeType: FBAPerOrderFulfillmentFee,
-    //                                 FBAPerUnitFulfillmentFee,
-    //                                 FBAWeightBasedFee, or anything
-    //                                 starting with "FBA"
-    //     transaction fees ← FeeType: Commission, FixedClosingFee,
-    //                                 VariableClosingFee, GiftwrapChargeback,
-    //                                 ShippingChargeback, DigitalServicesFee,
-    //                                 RefundCommission, and any unknown
-    //                                 non-FBA FeeType
-    //     promotions       ← PromotionList / PromotionAdjustmentList
-    //                        PromotionAmount entries
-    //   Refund items live under ShipmentItemAdjustmentList with
-    //   ItemChargeAdjustmentList / ItemFeeAdjustmentList /
-    //   PromotionAdjustmentList — same shapes as their Order equivalents.
-    //   Refund quantity is negated so negative qty = unit returning.
-    //   Fulfillment (Amazon/Seller) comes from the Products catalog lookup.
+    // Two tabs in the UI:
+    //   showMonthlyV2024() — Monthly Profitability for a single (year, month)
+    //                        with current + prev-month + YoY comparisons
+    //   showYTDV2024()     — Year-to-Date Profitability for a single year
+    //                        with YoY comparisons
     //
-    //   ServiceFeeEventList — one derived row per FeeList entry with
-    //   type='ServiceFee' and {feeType, feeAmount}. FeeType routes via
-    //   SERVICE_FEE_LINE_MAP:
-    //     FBADisposalFee, CustomerReturnHRRUnitFee     → FBA Returns Fees
-    //     FBAInboundConvenienceFee                     → FBA Inbound Placement Fees
-    //     FBAInboundTransportationFee                  → FBA Inbound Shipping Costs
-    //     FBAStorageFee, FBALongTermStorageFee         → FBA Inventory Storage Fees
-    //     Subscription                                 → Other Expenses
-    //   Unknown FeeTypes fall back to Other Expenses and get listed in a
-    //   yellow warning block above the report for the user to triage.
+    // Statement assembly path is shared: _computeV2024Period →
+    // _fetchV2024Inputs (transactions + products + ad spend + shipping +
+    // mappings) → _deriveV2024Rows → _allocateAdSpend → _buildStatement →
+    // extractProfitabilityMetrics → renderFinancialStatement (in
+    // brand-product.js). The Sheets-backed and v0-Upstash variants were
+    // retired after v2024 validated against Sheets monthly totals; ad
+    // spend and shipping costs still read from their separate KV stores.
+
+    // ─── SHARED OVERVIEW STATE ──────────────────────────────────────────
     //
-    //   AdjustmentEventList — one derived row per AdjustmentItemList entry
-    //   with type='Adjustment' and {adjustmentType, adjustmentAmount}.
-    //   AdjustmentType routes via _adjustmentLine:
-    //     WAREHOUSE_LOST, COMPENSATED_CLAWBACK,
-    //     MISSING_FROM_INBOUND, MISSING_FROM_INBOUND_CLAWBACK  → FBA Inventory Adjustment
-    //     ReturnPostageBilling_* (Tracking/Postage/
-    //     TransactionFee/FuelSurcharge/OversizeSurcharge/
-    //     DeliveryAreaSurcharge), PostageBilling_PostageAdjustment
-    //                                                         → FBA Returns Fees
-    //     Other                                               → Other Expenses
-    //     anything else with a SKU                            → FBA Inventory Adjustment
-    //     anything else without a SKU                         → Other Expenses
-    //
-    //   ChargebackEventList, GuaranteeClaimEventList, RetrochargeEventList
-    //   — these are rare enough that per user direction, we emit per-item
-    //   rows (so the derived CSV stays granular) but the statement
-    //   categorizer collapses each row's entire net amount into
-    //   Other Expenses. type is 'Chargeback' / 'GuaranteeClaim' /
-    //   'Retrocharge' so they filter out cleanly in CSV review.
-    //
-    // Every SP-API FinancialEvent list we've seen populated in real data
-    // is now wired. Ad spend + shipping still read from the Sheets tabs
-    // until the Advertising API migration and ShippingCosts migration
-    // ship separately.
+    // Per-page-session report cache shared across the Overview tabs. Keyed
+    // by "{view}|{year}|{month?}". Stores final rendered innerHTML so
+    // switching among tabs / back to a previously-viewed range is instant.
+    // Cleared on page refresh. Attached to window so it survives module
+    // boundaries; the `||` keeps it idempotent if anything else also
+    // initializes it.
+    window._overviewReportCache = window._overviewReportCache || new Map();
+
+    // YoY comparison helper. Both paths (Monthly and YTD) feed metrics into
+    // this; renderFinancialStatement reads `comparisons.<chan>.<line>.yoy|mom`
+    // to draw the small percentage arrows next to each profitability line.
+    function calculateComparisons(current, previous, yoy) {
+      const calcChange = (curr, prev) => {
+        if (!prev || prev === 0) return null;
+        return ((curr - prev) / Math.abs(prev)) * 100;
+      };
+      return {
+        fbm: {
+          income: { yoy: calcChange(current.fbm.income, yoy.fbm.income), mom: calcChange(current.fbm.income, previous.fbm.income) },
+          opex: { yoy: calcChange(current.fbm.opex, yoy.fbm.opex), mom: calcChange(current.fbm.opex, previous.fbm.opex) },
+          productCosts: { yoy: calcChange(current.fbm.productCosts, yoy.fbm.productCosts), mom: calcChange(current.fbm.productCosts, previous.fbm.productCosts) },
+          adSpend: { yoy: calcChange(current.fbm.adSpend, yoy.fbm.adSpend), mom: calcChange(current.fbm.adSpend, previous.fbm.adSpend) },
+          profit: { yoy: calcChange(current.fbm.profit, yoy.fbm.profit), mom: calcChange(current.fbm.profit, previous.fbm.profit) },
+          margin: { yoy: calcChange(current.fbm.margin, yoy.fbm.margin), mom: calcChange(current.fbm.margin, previous.fbm.margin) }
+        },
+        fba: {
+          income: { yoy: calcChange(current.fba.income, yoy.fba.income), mom: calcChange(current.fba.income, yoy.fba.income) },
+          opex: { yoy: calcChange(current.fba.opex, yoy.fba.opex), mom: calcChange(current.fba.opex, previous.fba.opex) },
+          productCosts: { yoy: calcChange(current.fba.productCosts, yoy.fba.productCosts), mom: calcChange(current.fba.productCosts, previous.fba.productCosts) },
+          adSpend: { yoy: calcChange(current.fba.adSpend, yoy.fba.adSpend), mom: calcChange(current.fba.adSpend, previous.fba.adSpend) },
+          profit: { yoy: calcChange(current.fba.profit, yoy.fba.profit), mom: calcChange(current.fba.profit, previous.fba.profit) },
+          margin: { yoy: calcChange(current.fba.margin, yoy.fba.margin), mom: calcChange(current.fba.margin, previous.fba.margin) }
+        },
+        total: {
+          income: { yoy: calcChange(current.total.income, yoy.total.income), mom: calcChange(current.total.income, previous.total.income) },
+          opex: { yoy: calcChange(current.total.opex, yoy.total.opex), mom: calcChange(current.total.opex, previous.total.opex) },
+          productCosts: { yoy: calcChange(current.total.productCosts, yoy.total.productCosts), mom: calcChange(current.total.productCosts, previous.total.productCosts) },
+          adSpend: { yoy: calcChange(current.total.adSpend, yoy.total.adSpend), mom: calcChange(current.total.adSpend, previous.total.adSpend) },
+          profit: { yoy: calcChange(current.total.profit, yoy.total.profit), mom: calcChange(current.total.profit, previous.total.profit) },
+          margin: { yoy: calcChange(current.total.margin, yoy.total.margin), mom: calcChange(current.total.margin, previous.total.margin) }
+        }
+      };
+    }
+
+    // YTD only computes YoY (no MoM). Same structure as calculateComparisons
+    // but each line just has the .yoy field.
+    function calculateYTDComparisons(current, previous) {
+      const calcChange = (curr, prev) => {
+        if (!prev || prev === 0) return null;
+        return ((curr - prev) / Math.abs(prev)) * 100;
+      };
+      return {
+        fbm: {
+          income: { yoy: calcChange(current.fbm.income, previous.fbm.income) },
+          opex: { yoy: calcChange(current.fbm.opex, previous.fbm.opex) },
+          productCosts: { yoy: calcChange(current.fbm.productCosts, previous.fbm.productCosts) },
+          adSpend: { yoy: calcChange(current.fbm.adSpend, previous.fbm.adSpend) },
+          profit: { yoy: calcChange(current.fbm.profit, previous.fbm.profit) },
+          margin: { yoy: calcChange(current.fbm.margin, previous.fbm.margin) }
+        },
+        fba: {
+          income: { yoy: calcChange(current.fba.income, previous.fba.income) },
+          opex: { yoy: calcChange(current.fba.opex, previous.fba.opex) },
+          productCosts: { yoy: calcChange(current.fba.productCosts, previous.fba.productCosts) },
+          adSpend: { yoy: calcChange(current.fba.adSpend, previous.fba.adSpend) },
+          profit: { yoy: calcChange(current.fba.profit, previous.fba.profit) },
+          margin: { yoy: calcChange(current.fba.margin, previous.fba.margin) }
+        },
+        total: {
+          income: { yoy: calcChange(current.total.income, previous.total.income) },
+          opex: { yoy: calcChange(current.total.opex, previous.total.opex) },
+          productCosts: { yoy: calcChange(current.total.productCosts, previous.total.productCosts) },
+          adSpend: { yoy: calcChange(current.total.adSpend, previous.total.adSpend) },
+          profit: { yoy: calcChange(current.total.profit, previous.total.profit) },
+          margin: { yoy: calcChange(current.total.margin, previous.total.margin) }
+        }
+      };
+    }
 
     // ─── VIEW SWITCHING ─────────────────────────────────────────────────
     //
-    // First-view auto-load flags: when the user clicks into either Upstash
-    // tab the very first time in a page session, we default the dropdowns
-    // to Last Month / This Year and run a report so they're not staring at
-    // an empty placeholder. On subsequent visits in the same session we
-    // leave the dropdowns (and the already-rendered content) alone so the
-    // user's recent selection sticks.
-    let _monthlyUpstashAutoLoaded = false;
-    let _ytdUpstashAutoLoaded = false;
+    // First-view auto-load flags: when the user clicks into a tab for the
+    // first time in a page session, we default the dropdowns and run a
+    // report so they're not staring at an empty placeholder. On subsequent
+    // visits the dropdowns (and rendered content) stay as the user left
+    // them.
     let _monthlyV2024AutoLoaded = false;
+    let _ytdV2024AutoLoaded = false;
 
     // Same months-with-data pattern as _upstashMonthsSet but populated from
     // the v2024 sync's separate index (transactions:v2024:index). Used by
@@ -85,94 +122,9 @@
     let _v2024MonthsSet = null;
     let _v2024MonthsPromise = null;
 
-    // Months-with-data set, populated lazily from /api/transactions?action=
-    // get-months. Used to disable the Prev/Next buttons when the target
-    // period has no synced data. Null until the first fetch resolves;
-    // callers treat null as "unknown, leave buttons enabled".
-    let _upstashMonthsSet = null;
-    let _upstashMonthsPromise = null;
-
-    async function _ensureUpstashMonths() {
-      if (_upstashMonthsSet) return _upstashMonthsSet;
-      if (_upstashMonthsPromise) return _upstashMonthsPromise;
-      if (!accessToken) return null;
-      _upstashMonthsPromise = (async () => {
-        try {
-          const res = await fetch('/api/transactions?action=get-months', {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          });
-          if (!res.ok) return null;
-          const data = await res.json();
-          _upstashMonthsSet = new Set(Array.isArray(data.months) ? data.months : []);
-          return _upstashMonthsSet;
-        } catch {
-          return null;
-        } finally {
-          _upstashMonthsPromise = null;
-        }
-      })();
-      return _upstashMonthsPromise;
-    }
-
-    function _upstashHasMonth(year, month) {
-      if (!_upstashMonthsSet) return true; // unknown → don't block
-      const ym = `${year}-${String(month + 1).padStart(2, '0')}`;
-      return _upstashMonthsSet.has(ym);
-    }
-
-    function _upstashHasYear(year) {
-      if (!_upstashMonthsSet) return true; // unknown → don't block
-      const prefix = `${year}-`;
-      for (const ym of _upstashMonthsSet) {
-        if (ym.startsWith(prefix)) return true;
-      }
-      return false;
-    }
-
-    // Disable the Prev/Next buttons on both Upstash tabs when the target
-    // period has no synced data. Called after any dropdown change and after
-    // the months set first loads. Safe to call even if the set isn't loaded
-    // yet — buttons stay enabled until we know otherwise.
-    function _refreshUpstashNavButtons() {
-      // Monthly Upstash: target = currently-selected (month, year) ± 1,
-      // rolling year across Jan/Dec.
-      const mSel = document.getElementById('monthly-upstash-month-select');
-      const ySel = document.getElementById('monthly-upstash-year-select');
-      const mPrev = document.getElementById('monthly-upstash-prev-btn');
-      const mNext = document.getElementById('monthly-upstash-next-btn');
-      if (mSel && ySel && mPrev && mNext) {
-        const m = parseInt(mSel.value, 10);
-        const y = parseInt(ySel.value, 10);
-        if (Number.isFinite(m) && Number.isFinite(y)) {
-          const prev = new Date(y, m - 1, 1);
-          const next = new Date(y, m + 1, 1);
-          mPrev.disabled = !_upstashHasMonth(prev.getFullYear(), prev.getMonth());
-          mNext.disabled = !_upstashHasMonth(next.getFullYear(), next.getMonth());
-        } else {
-          mPrev.disabled = false;
-          mNext.disabled = false;
-        }
-      }
-
-      // YTD Upstash: target = selected year ± 1, enabled if ANY month of
-      // that year has data (a year with partial data is still worth viewing).
-      const yySel = document.getElementById('ytd-upstash-year-select');
-      const yPrev = document.getElementById('ytd-upstash-prev-btn');
-      const yNext = document.getElementById('ytd-upstash-next-btn');
-      if (yySel && yPrev && yNext) {
-        const y = parseInt(yySel.value, 10);
-        if (Number.isFinite(y)) {
-          yPrev.disabled = !_upstashHasYear(y - 1);
-          yNext.disabled = !_upstashHasYear(y + 1);
-        } else {
-          yPrev.disabled = false;
-          yNext.disabled = false;
-        }
-      }
-    }
 
     function _hideAllOverviewViews() {
-      ['ytd-view', 'monthly-view', 'ytd-upstash-view', 'monthly-upstash-view', 'monthly-v2024-view']
+      ['monthly-v2024-view', 'ytd-v2024-view']
         .forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -181,36 +133,6 @@
         .forEach(t => t.classList.remove('active'));
     }
 
-    function showMonthlyUpstash() {
-      _hideAllOverviewViews();
-      document.getElementById('monthly-upstash-view').style.display = 'block';
-      document.getElementById('monthly-upstash-tab').classList.add('active');
-      _initMonthlyUpstashDropdowns();
-      // Only claim the auto-load slot if we have a token — a pre-sign-in
-      // attempt would render nothing and burn the flag.
-      if (!_monthlyUpstashAutoLoaded && accessToken) {
-        _monthlyUpstashAutoLoaded = true;
-        setMonthlyUpstashDate('lastMonth');
-      }
-      // Kick off the months-list fetch (if not already cached) and refresh
-      // the Prev/Next disabled state once it resolves. Runs in the background
-      // so the user isn't blocked.
-      _ensureUpstashMonths().then(() => _refreshUpstashNavButtons());
-      _refreshUpstashNavButtons();
-    }
-
-    function showYTDUpstash() {
-      _hideAllOverviewViews();
-      document.getElementById('ytd-upstash-view').style.display = 'block';
-      document.getElementById('ytd-upstash-tab').classList.add('active');
-      _initYTDUpstashDropdown();
-      if (!_ytdUpstashAutoLoaded && accessToken) {
-        _ytdUpstashAutoLoaded = true;
-        setYTDUpstashYear('thisYear');
-      }
-      _ensureUpstashMonths().then(() => _refreshUpstashNavButtons());
-      _refreshUpstashNavButtons();
-    }
 
     function showMonthlyV2024() {
       _hideAllOverviewViews();
@@ -255,18 +177,18 @@
       if (preset === 'lastMonth') {
         const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
         monthSel.value = d.getMonth();
-        _setSelectByValueUpstash(yearSel, d.getFullYear());
+        _setSelectByValue(yearSel, d.getFullYear());
       } else if (preset === 'thisMonth') {
         monthSel.value = today.getMonth();
-        _setSelectByValueUpstash(yearSel, today.getFullYear());
+        _setSelectByValue(yearSel, today.getFullYear());
       } else if (preset === 'prevMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
         const d = new Date(curYear, curMonth - 1, 1);
         monthSel.value = d.getMonth();
-        _setSelectByValueUpstash(yearSel, d.getFullYear());
+        _setSelectByValue(yearSel, d.getFullYear());
       } else if (preset === 'nextMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
         const d = new Date(curYear, curMonth + 1, 1);
         monthSel.value = d.getMonth();
-        _setSelectByValueUpstash(yearSel, d.getFullYear());
+        _setSelectByValue(yearSel, d.getFullYear());
       }
 
       _refreshV2024NavButtons();
@@ -303,118 +225,59 @@
       return _v2024MonthsSet.has(ym);
     }
 
+    function _v2024HasYear(year) {
+      if (!_v2024MonthsSet) return true; // unknown → don't block
+      const prefix = `${year}-`;
+      for (const ym of _v2024MonthsSet) {
+        if (ym.startsWith(prefix)) return true;
+      }
+      return false;
+    }
+
     function _refreshV2024NavButtons() {
+      // Monthly v2024 — Prev/Next disable when target month has no synced
+      // data. Targets are "selected month ± 1," rolling year at Jan/Dec.
       const mSel = document.getElementById('monthly-v2024-month-select');
       const ySel = document.getElementById('monthly-v2024-year-select');
       const mPrev = document.getElementById('monthly-v2024-prev-btn');
       const mNext = document.getElementById('monthly-v2024-next-btn');
-      if (!mSel || !ySel || !mPrev || !mNext) return;
-      const m = parseInt(mSel.value, 10);
-      const y = parseInt(ySel.value, 10);
-      if (Number.isFinite(m) && Number.isFinite(y)) {
-        const prev = new Date(y, m - 1, 1);
-        const next = new Date(y, m + 1, 1);
-        mPrev.disabled = !_v2024HasMonth(prev.getFullYear(), prev.getMonth());
-        mNext.disabled = !_v2024HasMonth(next.getFullYear(), next.getMonth());
-      } else {
-        mPrev.disabled = false;
-        mNext.disabled = false;
-      }
-    }
-
-    function _initMonthlyUpstashDropdowns() {
-      const yearSel = document.getElementById('monthly-upstash-year-select');
-      if (yearSel && yearSel.options.length === 0) {
-        const currentYear = new Date().getFullYear();
-        for (let y = currentYear; y >= currentYear - 5; y--) {
-          const o = document.createElement('option');
-          o.value = y; o.textContent = y;
-          yearSel.appendChild(o);
+      if (mSel && ySel && mPrev && mNext) {
+        const m = parseInt(mSel.value, 10);
+        const y = parseInt(ySel.value, 10);
+        if (Number.isFinite(m) && Number.isFinite(y)) {
+          const prev = new Date(y, m - 1, 1);
+          const next = new Date(y, m + 1, 1);
+          mPrev.disabled = !_v2024HasMonth(prev.getFullYear(), prev.getMonth());
+          mNext.disabled = !_v2024HasMonth(next.getFullYear(), next.getMonth());
+        } else {
+          mPrev.disabled = false;
+          mNext.disabled = false;
         }
-        yearSel.value = currentYear;
       }
-      const monthSel = document.getElementById('monthly-upstash-month-select');
-      if (monthSel && !monthSel.value) {
-        const now = new Date();
-        const lastMonth = now.getMonth() - 1;
-        monthSel.value = lastMonth >= 0 ? lastMonth : 11;
-      }
-    }
 
-    function _initYTDUpstashDropdown() {
-      const yearSel = document.getElementById('ytd-upstash-year-select');
-      if (yearSel && yearSel.options.length === 0) {
-        const currentYear = new Date().getFullYear();
-        for (let y = currentYear; y >= currentYear - 5; y--) {
-          const o = document.createElement('option');
-          o.value = y; o.textContent = y;
-          yearSel.appendChild(o);
+      // YTD v2024 — Prev/Next enabled if any month of the target year has
+      // data (a partial year is still worth viewing).
+      const yySel = document.getElementById('ytd-v2024-year-select');
+      const yPrev = document.getElementById('ytd-v2024-prev-btn');
+      const yNext = document.getElementById('ytd-v2024-next-btn');
+      if (yySel && yPrev && yNext) {
+        const y = parseInt(yySel.value, 10);
+        if (Number.isFinite(y)) {
+          yPrev.disabled = !_v2024HasYear(y - 1);
+          yNext.disabled = !_v2024HasYear(y + 1);
+        } else {
+          yPrev.disabled = false;
+          yNext.disabled = false;
         }
-        yearSel.value = currentYear;
       }
     }
 
-    // Monthly Upstash preset buttons. Mirrors setMonthlyDate's semantics:
-    //   thisMonth → current calendar month (absolute)
-    //   lastMonth → previous calendar month (absolute)
-    //   prevMonth → currently-selected month − 1, rolling year backward
-    //   nextMonth → currently-selected month + 1, rolling year forward
-    function setMonthlyUpstashDate(preset) {
-      const today = new Date();
-      const monthSel = document.getElementById('monthly-upstash-month-select');
-      const yearSel  = document.getElementById('monthly-upstash-year-select');
-      const curMonth = parseInt(monthSel.value, 10);
-      const curYear  = parseInt(yearSel.value, 10);
 
-      if (preset === 'lastMonth') {
-        const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        monthSel.value = d.getMonth();
-        _setSelectByValueUpstash(yearSel, d.getFullYear());
-      } else if (preset === 'thisMonth') {
-        monthSel.value = today.getMonth();
-        _setSelectByValueUpstash(yearSel, today.getFullYear());
-      } else if (preset === 'prevMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
-        const d = new Date(curYear, curMonth - 1, 1);
-        monthSel.value = d.getMonth();
-        _setSelectByValueUpstash(yearSel, d.getFullYear());
-      } else if (preset === 'nextMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
-        const d = new Date(curYear, curMonth + 1, 1);
-        monthSel.value = d.getMonth();
-        _setSelectByValueUpstash(yearSel, d.getFullYear());
-      }
-
-      _refreshUpstashNavButtons();
-      generateMonthlyUpstashReport();
-    }
-
-    // YTD Upstash preset buttons.
-    //   thisYear → current calendar year (absolute)
-    //   lastYear → previous calendar year (absolute)
-    //   prevYear → selected year − 1 (relative)
-    //   nextYear → selected year + 1 (relative)
-    function setYTDUpstashYear(preset) {
-      const today = new Date();
-      const sel = document.getElementById('ytd-upstash-year-select');
-      const cur = parseInt(sel.value, 10);
-
-      if (preset === 'thisYear') {
-        _setSelectByValueUpstash(sel, today.getFullYear());
-      } else if (preset === 'lastYear') {
-        _setSelectByValueUpstash(sel, today.getFullYear() - 1);
-      } else if (preset === 'prevYear' && Number.isFinite(cur)) {
-        _setSelectByValueUpstash(sel, cur - 1);
-      } else if (preset === 'nextYear' && Number.isFinite(cur)) {
-        _setSelectByValueUpstash(sel, cur + 1);
-      }
-
-      _refreshUpstashNavButtons();
-      generateYTDUpstashReport();
-    }
 
     // Same "insert option if missing" helper as the Sheets-side version.
     // Prev/Next let the user scroll past the pre-seeded 5-year window
     // without the dropdown silently failing to update.
-    function _setSelectByValueUpstash(select, v) {
+    function _setSelectByValue(select, v) {
       if (!select) return;
       const str = String(v);
       if ([...select.options].some(o => o.value === str)) {
@@ -436,279 +299,12 @@
       select.value = str;
     }
 
-    // ─── REPORT GENERATION ──────────────────────────────────────────────
-
-    async function generateMonthlyUpstashReport() {
-      const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-
-      // Catches the case where the user picks a new period from the dropdown
-      // directly (not via a preset button) — keep Prev/Next state in sync.
-      _refreshUpstashNavButtons();
-
-      const container = document.getElementById('monthly-upstash-content');
-      if (!container) return;
-      if (!accessToken) {
-        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
-        return;
-      }
-
-      // Per-session cache: swap the rendered HTML in if we've already built
-      // this (year, month) report, skipping the 3-period fetch fan-out.
-      const cacheKey = `monthly-upstash|${year}|${month}`;
-      const cached = window._overviewReportCache && window._overviewReportCache.get(cacheKey);
-      if (cached) {
-        container.innerHTML = cached;
-        return;
-      }
-
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
-
-      try {
-        // Mirrors the Sheets-side Monthly pipeline: current month + previous
-        // month (MoM) + same month last year (YoY) fetched in parallel, then
-        // comparisons computed on the metrics and passed to the renderer.
-        const startDate = _ymd(new Date(year, month, 1));
-        const endDate   = _ymd(new Date(year, month + 1, 0));
-        const prevStart = _ymd(new Date(year, month - 1, 1));
-        const prevEnd   = _ymd(new Date(year, month, 0));
-        const yoyStart  = _ymd(new Date(year - 1, month, 1));
-        const yoyEnd    = _ymd(new Date(year - 1, month + 1, 0));
-
-        const [current, prev, yoy] = await Promise.all([
-          _computeUpstashPeriod(startDate, endDate),
-          _computeUpstashPeriod(prevStart, prevEnd),
-          _computeUpstashPeriod(yoyStart, yoyEnd)
-        ]);
-
-        const comparisons = calculateComparisons(current.metrics, prev.metrics, yoy.metrics);
-        _renderUpstashStatement(container, {
-          statement: current.statement,
-          missingSkus: current.missingSkus,
-          unmappedFees: current.unmappedFees,
-          rows: current.rows,
-          lastSynced: current.lastSynced,
-          startDate, endDate,
-          adSpend: current.adSpend,
-          shippingCosts: current.shippingCosts,
-          comparisons
-        });
-
-        if (window._overviewReportCache) window._overviewReportCache.set(cacheKey, container.innerHTML);
-      } catch (err) {
-        console.error('Upstash monthly overview failed:', err);
-        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
-      }
-    }
-
-    async function generateYTDUpstashReport() {
-      const year = document.getElementById('ytd-upstash-year-select').value;
-      if (!year) return;
-
-      // Catches direct dropdown changes — keep Prev/Next state in sync.
-      _refreshUpstashNavButtons();
-
-      const container = document.getElementById('ytd-upstash-content');
-      if (!container) return;
-      if (!accessToken) {
-        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
-        return;
-      }
-
-      // Per-session cache: swap the rendered HTML in if we've already built
-      // this year's report, skipping the 2-period fetch fan-out.
-      const cacheKey = `ytd-upstash|${year}`;
-      const cached = window._overviewReportCache && window._overviewReportCache.get(cacheKey);
-      if (cached) {
-        container.innerHTML = cached;
-        return;
-      }
-
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
-
-      try {
-        const today = new Date();
-        const selectedYear = parseInt(year, 10);
-        const isCurrentYear = selectedYear === today.getFullYear();
-
-        // Current year range: Jan 1 → end of last complete month (if current
-        // year) or Dec 31 (past year).
-        const startDate = `${year}-01-01`;
-        let endDate;
-        if (isCurrentYear) {
-          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-          const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
-          endDate = _ymd(new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0));
-        } else {
-          endDate = `${year}-12-31`;
-        }
-
-        // Previous year range — apples-to-apples with the current range
-        // (same last-complete-month cutoff so the YoY % is meaningful).
-        const prevYear = selectedYear - 1;
-        const prevStart = `${prevYear}-01-01`;
-        let prevEnd;
-        if (isCurrentYear) {
-          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
-          const prevLastCompleteMonthYear = today.getMonth() === 0 ? prevYear - 1 : prevYear;
-          prevEnd = _ymd(new Date(prevLastCompleteMonthYear, lastCompleteMonth + 1, 0));
-        } else {
-          prevEnd = `${prevYear}-12-31`;
-        }
-
-        const [current, prev] = await Promise.all([
-          _computeUpstashPeriod(startDate, endDate),
-          _computeUpstashPeriod(prevStart, prevEnd)
-        ]);
-
-        const comparisons = calculateYTDComparisons(current.metrics, prev.metrics);
-        _renderUpstashStatement(container, {
-          statement: current.statement,
-          missingSkus: current.missingSkus,
-          unmappedFees: current.unmappedFees,
-          rows: current.rows,
-          lastSynced: current.lastSynced,
-          startDate, endDate,
-          adSpend: current.adSpend,
-          shippingCosts: current.shippingCosts,
-          comparisons
-        });
-
-        if (window._overviewReportCache) window._overviewReportCache.set(cacheKey, container.innerHTML);
-      } catch (err) {
-        console.error('Upstash YTD overview failed:', err);
-        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
-      }
-    }
-
-    // Fetch + derive + build statement for a single period. Returns both the
-    // rendered-ready bundle AND the extracted profitability metrics so the
-    // caller can fan out several periods in parallel and compute MoM / YoY
-    // comparisons before rendering the current period.
-    async function _computeUpstashPeriod(startDate, endDate) {
-      const inputs = await _fetchUpstashInputs(startDate, endDate);
-      const rows = _deriveTransactionRows(inputs.pages, startDate, endDate);
-
-      // Per-SKU sales-by-channel from derived Order rows. Used by the ad
-      // allocator for historical SP rows and SB rows where we need a
-      // proportional split across a campaign's / brand's SKUs.
-      const skuSales = _buildSkuSales(rows, inputs.products);
-
-      const adSpend = _allocateAdSpend({
-        spAdRows: inputs.spAdRows,
-        sbAdRows: inputs.sbAdRows,
-        products: inputs.products,
-        brandToSkus: inputs.brandToSkus,
-        productCampaignToSkus: inputs.productCampaignToSkus,
-        brandCampaignToBrand: inputs.brandCampaignToBrand,
-        skuSales,
-        startDate,
-        endDate
-      });
-
-      // Shipping costs are 100% FBM (seller fulfills), so no allocation
-      // needed — just sum the rows in the date window and hand the total
-      // to the statement builder.
-      const shippingCosts = _sumShippingInRange(inputs.shippingRows, startDate, endDate);
-
-      const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts);
-      const metrics = extractProfitabilityMetrics(statement);
-
-      return {
-        statement, missingSkus, unmappedFees, rows,
-        lastSynced: inputs.lastSynced,
-        adSpend, shippingCosts, metrics
-      };
-    }
-
     // ─── INPUT FETCHING ─────────────────────────────────────────────────
-
-    async function _fetchUpstashInputs(startDate, endDate) {
-      const authHeader = { Authorization: `Bearer ${accessToken}` };
-      const startMonth = startDate.slice(0, 7);
-      const endMonth   = endDate.slice(0, 7);
-
-      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes, shipRes] = await Promise.all([
-        fetch(`/api/transactions?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
-        fetch('/api/products?action=get', { headers: authHeader }),
-        fetch(`/api/adspend?action=get-range&type=sp&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
-        fetch(`/api/adspend?action=get-range&type=sb&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
-        fetch('/api/mappings?action=get&type=product', { headers: authHeader }),
-        fetch('/api/mappings?action=get&type=brand',   { headers: authHeader }),
-        fetch(`/api/shipping?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader })
-      ]);
-      if (!txRes.ok)   throw new Error(`Transactions fetch failed (${txRes.status})`);
-      if (!prodRes.ok) throw new Error(`Products fetch failed (${prodRes.status})`);
-
-      const tx         = await txRes.json();
-      const prod       = await prodRes.json();
-      const spAd       = spAdRes.ok     ? await spAdRes.json()    : { rows: [] };
-      const sbAd       = sbAdRes.ok     ? await sbAdRes.json()    : { rows: [] };
-      const prodMap    = prodMapRes.ok  ? await prodMapRes.json() : { mappings: {} };
-      const brandMap   = brandMapRes.ok ? await brandMapRes.json() : { mappings: {} };
-      const shipping   = shipRes.ok     ? await shipRes.json()    : { rows: [] };
-
-      // Products keyed by SKU for O(1) lookup during derivation. We also
-      // build a brand → [skus] index since Sponsored Brands allocation needs
-      // to know which SKUs roll up under a given brand.
-      const products = {};
-      const brandToSkus = {};
-      for (const p of (prod.products || [])) {
-        if (!p?.sku) continue;
-        products[p.sku] = p;
-        const brand = (p.brand || '').trim();
-        if (brand) {
-          if (!brandToSkus[brand]) brandToSkus[brand] = [];
-          brandToSkus[brand].push(p.sku);
-        }
-      }
-
-      // Campaign → SKU[] from /api/mappings (product) and campaign → brand
-      // (brand). These only matter for historical SP rows without an
-      // advertisedSku (Sheets-backfilled) and for SB rows (which are
-      // always campaign-level).
-      const productCampaignToSkus = {};
-      for (const [campaign, data] of Object.entries(prodMap.mappings || {})) {
-        if (Array.isArray(data?.skus) && data.skus.length > 0) {
-          productCampaignToSkus[campaign] = data.skus.slice();
-        }
-      }
-      const brandCampaignToBrand = {};
-      for (const [campaign, brand] of Object.entries(brandMap.mappings || {})) {
-        if (brand) brandCampaignToBrand[campaign] = brand;
-      }
-
-      // Grab the latest-synced timestamp across the months we're reading,
-      // for the blurb at the top of the rendered statement.
-      let lastSynced = null;
-      try {
-        const months = Array.isArray(tx.months) ? tx.months : [];
-        if (months.length > 0) {
-          const latest = months[months.length - 1];
-          const lsRes = await fetch(`/api/transactions?action=get&month=${latest}`, { headers: authHeader });
-          if (lsRes.ok) lastSynced = (await lsRes.json()).lastSynced || null;
-        }
-      } catch { /* non-fatal */ }
-
-      return {
-        pages: tx.pages || [],
-        products,
-        brandToSkus,
-        spAdRows: spAd.rows || [],
-        sbAdRows: sbAd.rows || [],
-        shippingRows: shipping.rows || [],
-        productCampaignToSkus,
-        brandCampaignToBrand,
-        lastSynced
-      };
-    }
-
-    // Same as _fetchUpstashInputs but the transactions fetch hits
-    // get-range-v2024 (returning { transactions: [...] } instead of
-    // { pages: [...] }). Everything else — products, ad spend, mappings,
-    // shipping — is identical, so the ad allocator and shipping summer
-    // continue to work without changes.
+    //
+    // Fetches the v2024-shape transactions from KV (via get-range-v2024)
+    // alongside products / ad spend / shipping mappings — everything the
+    // statement builder needs. Same shape as the v0 inputs bundle but the
+    // transactions arrive as a flat list rather than paginated raw pages.
     async function _fetchV2024Inputs(startDate, endDate) {
       const authHeader = { Authorization: `Bearer ${accessToken}` };
       const startMonth = startDate.slice(0, 7);
@@ -879,6 +475,135 @@
       }
     }
 
+    // ─── YTD v2024 ──────────────────────────────────────────────────────
+    function showYTDV2024() {
+      _hideAllOverviewViews();
+      document.getElementById('ytd-v2024-view').style.display = 'block';
+      document.getElementById('ytd-v2024-tab').classList.add('active');
+      _initYTDV2024Dropdown();
+      if (!_ytdV2024AutoLoaded && accessToken) {
+        _ytdV2024AutoLoaded = true;
+        setYTDV2024Year('thisYear');
+      }
+      _ensureV2024Months().then(() => _refreshV2024NavButtons());
+      _refreshV2024NavButtons();
+    }
+
+    function _initYTDV2024Dropdown() {
+      const yearSel = document.getElementById('ytd-v2024-year-select');
+      if (yearSel && yearSel.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let y = currentYear; y >= currentYear - 5; y--) {
+          const o = document.createElement('option');
+          o.value = y; o.textContent = y;
+          yearSel.appendChild(o);
+        }
+        yearSel.value = currentYear;
+      }
+    }
+
+    // Same semantics as setYTDUpstashYear: thisYear/lastYear are absolute
+    // (relative to today), prevYear/nextYear are relative to the currently
+    // selected dropdown value.
+    function setYTDV2024Year(preset) {
+      const today = new Date();
+      const sel = document.getElementById('ytd-v2024-year-select');
+      const cur = parseInt(sel.value, 10);
+
+      if (preset === 'thisYear') {
+        _setSelectByValue(sel, today.getFullYear());
+      } else if (preset === 'lastYear') {
+        _setSelectByValue(sel, today.getFullYear() - 1);
+      } else if (preset === 'prevYear' && Number.isFinite(cur)) {
+        _setSelectByValue(sel, cur - 1);
+      } else if (preset === 'nextYear' && Number.isFinite(cur)) {
+        _setSelectByValue(sel, cur + 1);
+      }
+
+      _refreshV2024NavButtons();
+      generateYTDV2024Report();
+    }
+
+    async function generateYTDV2024Report() {
+      const year = document.getElementById('ytd-v2024-year-select').value;
+      if (!year) return;
+
+      const container = document.getElementById('ytd-v2024-content');
+      if (!container) return;
+      if (!accessToken) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
+        return;
+      }
+
+      const cacheKey = `ytd-v2024|${year}`;
+      const cached = window._overviewReportCache && window._overviewReportCache.get(cacheKey);
+      if (cached) {
+        container.innerHTML = cached;
+        return;
+      }
+
+      _refreshV2024NavButtons();
+
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+
+      try {
+        // Same date logic as generateYTDUpstashReport: current year runs
+        // Jan 1 → end of last complete month; past years run Jan 1 → Dec 31.
+        // Previous year matches the cutoff so YoY % comparisons are
+        // apples-to-apples.
+        const today = new Date();
+        const selectedYear = parseInt(year, 10);
+        const isCurrentYear = selectedYear === today.getFullYear();
+
+        const startDate = `${year}-01-01`;
+        let endDate;
+        if (isCurrentYear) {
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const lastCompleteMonthYear = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+          endDate = _ymd(new Date(lastCompleteMonthYear, lastCompleteMonth + 1, 0));
+        } else {
+          endDate = `${year}-12-31`;
+        }
+
+        const prevYear = selectedYear - 1;
+        const prevStart = `${prevYear}-01-01`;
+        let prevEnd;
+        if (isCurrentYear) {
+          const lastCompleteMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+          const prevLastCompleteMonthYear = today.getMonth() === 0 ? prevYear - 1 : prevYear;
+          prevEnd = _ymd(new Date(prevLastCompleteMonthYear, lastCompleteMonth + 1, 0));
+        } else {
+          prevEnd = `${prevYear}-12-31`;
+        }
+
+        const [current, prev] = await Promise.all([
+          _computeV2024Period(startDate, endDate),
+          _computeV2024Period(prevStart, prevEnd)
+        ]);
+
+        const comparisons = calculateYTDComparisons(current.metrics, prev.metrics);
+        _renderV2024Statement(container, {
+          statement: current.statement,
+          missingSkus: current.missingSkus,
+          unmappedFees: current.unmappedFees,
+          unmappedBreakdowns: current.unmappedBreakdowns,
+          dedupSkipped: current.dedupSkipped,
+          transferSkipped: current.transferSkipped,
+          rows: current.rows,
+          lastSynced: current.lastSynced,
+          startDate, endDate,
+          adSpend: current.adSpend,
+          shippingCosts: current.shippingCosts,
+          comparisons
+        });
+
+        if (window._overviewReportCache) window._overviewReportCache.set(cacheKey, container.innerHTML);
+      } catch (err) {
+        console.error('v2024 YTD overview failed:', err);
+        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+      }
+    }
+
     // Same as _renderUpstashStatement but adds a v2024-specific diagnostic
     // strip showing dedup-skipped count, transfer-skipped count, and any
     // unmapped breakdownTypes (signals an Amazon schema change).
@@ -937,269 +662,18 @@
       `;
     }
 
-    // ─── TRANSACTION DERIVE ─────────────────────────────────────────────
-    // Walk both ShipmentEventList (type='Order') and RefundEventList
-    // (type='Refund') and emit one row per item per the schema. Refund
-    // items live in ShipmentItemAdjustmentList with charge/fee/promotion
-    // lists named *AdjustmentList* — the sum helpers accept either form.
-    // Refund quantity is negated so it reads like the Amazon Transaction
-    // report convention (negative qty = unit coming back in).
-
-    function _deriveTransactionRows(pages, startDate, endDate) {
-      const rows = [];
-      for (const page of pages) {
-        for (const ev of (page.ShipmentEventList || [])) {
-          _pushEventItemRows(rows, ev, 'Order', ev.ShipmentItemList, +1, startDate, endDate);
-        }
-        for (const ev of (page.RefundEventList || [])) {
-          _pushEventItemRows(rows, ev, 'Refund', ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
-        }
-        for (const ev of (page.ServiceFeeEventList || [])) {
-          _pushServiceFeeRows(rows, ev, startDate, endDate);
-        }
-        for (const ev of (page.AdjustmentEventList || [])) {
-          _pushAdjustmentRows(rows, ev, startDate, endDate);
-        }
-        // Chargeback / GuaranteeClaim / Retrocharge events are uncommon
-        // enough that per the user's call, we drop the entire event
-        // amount into Other Expenses without further breakdown. Still
-        // emit per-item rows so the derived CSV remains granular, just
-        // all columns collapse to Other Expenses in the statement.
-        for (const ev of (page.ChargebackEventList || [])) {
-          _pushEventItemRows(rows, ev, 'Chargeback',     ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
-        }
-        for (const ev of (page.GuaranteeClaimEventList || [])) {
-          _pushEventItemRows(rows, ev, 'GuaranteeClaim', ev.ShipmentItemAdjustmentList, -1, startDate, endDate);
-        }
-        for (const ev of (page.RetrochargeEventList || [])) {
-          _pushEventItemRows(rows, ev, 'Retrocharge',    ev.ShipmentItemAdjustmentList, +1, startDate, endDate);
-        }
-      }
-      return rows;
-    }
-
-    // AdjustmentEvent has an event-level AdjustmentType plus an
-    // AdjustmentItemList with per-SKU detail (TotalAmount per item). Emit
-    // one row per item so SKU-specific amounts are visible in the derived
-    // CSV; if the event has no items, emit one event-level row using
-    // ev.AdjustmentAmount as the total.
-    function _pushAdjustmentRows(rows, ev, startDate, endDate) {
-      const date = (ev.PostedDate || '').substring(0, 10);
-      if (date && (date < startDate || date > endDate)) return;
-
-      const adjustmentType = ev.AdjustmentType || '';
-      const items = ev.AdjustmentItemList || [];
-      const base = {
-        type: 'Adjustment',
-        orderId: '',
-        date,
-        qty: 0,
-        sale: 0, otherCharges: 0, fbaFees: 0, transactionFees: 0, promotions: 0,
-        feeType: '', feeAmount: 0
-      };
-
-      if (items.length === 0) {
-        rows.push({
-          ...base,
-          sku: '',
-          adjustmentType,
-          adjustmentAmount: _amount(ev.AdjustmentAmount)
-        });
-        return;
-      }
-
-      for (const item of items) {
-        const amt = _amount(item.TotalAmount) ||
-                    (_amount(item.PerUnitAmount) * (parseInt(item.Quantity, 10) || 0));
-        rows.push({
-          ...base,
-          sku: _normalizeSku(item.SellerSKU),
-          qty: parseInt(item.Quantity, 10) || 0,
-          adjustmentType,
-          adjustmentAmount: amt
-        });
-      }
-    }
+    // ─── TRANSACTION DERIVE — v2024 ──────────────────────────────────────
 
     // Route an Adjustment row to the right Expense line. Checks the four
     // explicit sets first, then the "Other" special case, then falls back
-    // to the "has SKU?" rule.
+    // to the "has SKU?" rule. Used by _buildStatement on Adjustment-type
+    // rows emitted from _deriveV2024Rows.
     function _adjustmentLine(r) {
       if (ADJUSTMENT_INVENTORY_TYPES.has(r.adjustmentType))   return 'FBA Inventory Adjustment';
       if (ADJUSTMENT_RETURNS_FEE_TYPES.has(r.adjustmentType)) return 'FBA Returns Fees';
       if (r.adjustmentType === 'Other')                       return 'Other Expenses';
       return r.sku ? 'FBA Inventory Adjustment' : 'Other Expenses';
     }
-
-    // ServiceFeeEvent has no items — just a FeeList at the event level.
-    // Emit one row per FeeList entry, carrying FeeType and FeeAmount
-    // through verbatim. Routing to the Expense line happens in
-    // _buildStatement using the SERVICE_FEE_LINE_MAP.
-    function _pushServiceFeeRows(rows, ev, startDate, endDate) {
-      const date = (ev.PostedDate || '').substring(0, 10);
-      // ServiceFeeEvents frequently ship without a PostedDate. The sync
-      // already scoped them to the requested month via PostedAfter /
-      // PostedBefore, and KV stores them under transactions:raw:YYYY-MM —
-      // so an empty date doesn't mean "out of range," it means "Amazon
-      // didn't include the field." Only filter when we actually have one.
-      if (date && (date < startDate || date > endDate)) return;
-      const base = {
-        type: 'ServiceFee',
-        orderId: ev.AmazonOrderId || '',
-        date,
-        sku: _normalizeSku(ev.SellerSKU),
-        qty: 0,
-        sale: 0, otherCharges: 0, fbaFees: 0, transactionFees: 0, promotions: 0
-      };
-      const feeList = ev.FeeList || [];
-      if (feeList.length === 0) {
-        // Still emit a placeholder row so the derived CSV reflects every
-        // event — otherwise empty-FeeList events vanish from the audit view.
-        rows.push({ ...base, feeType: ev.FeeReason || '', feeAmount: 0 });
-        return;
-      }
-      for (const f of feeList) {
-        rows.push({
-          ...base,
-          feeType: f.FeeType || '',
-          feeAmount: _amount(f.FeeAmount)
-        });
-      }
-    }
-
-    function _pushEventItemRows(rows, ev, type, items, qtySign, startDate, endDate) {
-      const date = (ev.PostedDate || '').substring(0, 10);
-      // Only filter out events that have a date and fall outside the
-      // window. Events with no PostedDate came from a KV bucket already
-      // scoped to the requested month(s) — trust that scope rather than
-      // dropping them because one field was missing.
-      if (date && (date < startDate || date > endDate)) return;
-      const orderId = ev.AmazonOrderId || '';
-
-      for (const item of (items || [])) {
-        rows.push({
-          type,
-          orderId,
-          date,
-          // SP-API sometimes returns SellerSKU with HTML-entity-encoded
-          // ampersands ("&amp;") where the real SKU has a literal "&".
-          // Decode at the edge so every downstream consumer (lookup,
-          // missing-SKU warning, CSV export) sees the real SKU string.
-          sku: _normalizeSku(item.SellerSKU),
-          qty: (parseInt(item.QuantityShipped, 10) || 0) * qtySign,
-          sale:            _sumCharges(item, ['Principal']),
-          otherCharges:    _sumOtherCharges(item),
-          fbaFees:         _sumFees(item, _isFbaFee),
-          transactionFees: _sumFees(item, _isTransactionFee),
-          promotions:      _sumPromotions(item)
-        });
-      }
-    }
-
-    // ─── TRANSACTION DERIVE — v2024-06-19 ───────────────────────────────
-    //
-    // Walks the listTransactions response shape (Finances API v2024-06-19)
-    // and emits rows in the SAME shape _buildStatement already consumes for
-    // v0, plus a `fulfillment` field set from each item's ProductContext
-    // (AFN→FBA, MFN→FBM). _buildStatement honors that hint over the catalog
-    // lookup, so v2024 rows aren't subject to the catalog-shift bug.
-    //
-    // Dedup rule (validated via probe-v2024 against Feb 2026):
-    //   skip RELEASED transactions that carry a DEFERRED_TRANSACTION_ID
-    //   related identifier — those are settlement-side duplicates of a
-    //   DEFERRED_RELEASED record with the same dollars but later postedDate.
-    //
-    // Transfer transactions (bank disbursements) are dropped entirely —
-    // they're not P&L events.
-    //
-    // Breakdown handling: each transaction's items[].breakdowns is a nested
-    // tree. _v2024WalkAndRoute walks down until it hits a node whose
-    // breakdownType is in V2024_LEAF_HANDLER, then routes the amount to the
-    // appropriate row bucket (or emits a separate ServiceFee/Adjustment
-    // row). Aggregator nodes (Sales, Expenses, AmazonFees, etc.) have no
-    // handler and we recurse through them to find the leaves.
-
-    // Handler kinds:
-    //   item       — Order/Refund per-item bucket. Adds amount to one of
-    //                {sale, otherCharges, fbaFees, transactionFees, promotions}
-    //                on the Order/Refund row being built.
-    //   serviceFee — emit a ServiceFee row with feeType = breakdownType,
-    //                feeAmount = the leaf's currencyAmount.
-    //   adjustment — emit an Adjustment row with adjustmentType =
-    //                breakdownType, adjustmentAmount = the leaf's amount.
-    //   skip       — recognized but intentionally not added (e.g. taxes,
-    //                which net to zero for the seller).
-    //
-    // Anything not in this map AND not an aggregator we recurse through
-    // ends up in the unmappedBreakdowns diagnostic so we don't silently
-    // lose money on a future Amazon schema change.
-    const V2024_LEAF_HANDLER = {
-      // Item-level Order/Refund leaves
-      'OurPricePrincipal':         { kind: 'item', bucket: 'sale' },
-      'Shipping':                  { kind: 'item', bucket: 'otherCharges' },
-      'ShippingPrincipal':         { kind: 'item', bucket: 'otherCharges' },
-      'Promo':                     { kind: 'item', bucket: 'promotions' },
-      'PromoRebates':              { kind: 'item', bucket: 'promotions' },
-      'ShippingDiscount':          { kind: 'item', bucket: 'promotions' },
-      'Commission':                { kind: 'item', bucket: 'transactionFees' },
-      'VariableClosingFee':        { kind: 'item', bucket: 'transactionFees' },
-      'FixedClosingFee':           { kind: 'item', bucket: 'transactionFees' },
-      'RefundCommission':          { kind: 'item', bucket: 'transactionFees' },
-      'FBAPerUnitFulfillmentFee':  { kind: 'item', bucket: 'fbaFees' },
-      'FBAPerOrderFulfillmentFee': { kind: 'item', bucket: 'fbaFees' },
-      'FBAWeightBasedFee':         { kind: 'item', bucket: 'fbaFees' },
-
-      // ServiceFee leaves (names match v0 SERVICE_FEE_LINE_MAP keys so
-      // emitted rows route through the existing _buildStatement logic)
-      'FBADisposalFee':              { kind: 'serviceFee' },
-      'CustomerReturnHRRUnitFee':    { kind: 'serviceFee' },
-      'HRRNonApparelRollup':         { kind: 'serviceFee' },
-      'FBAStorageFee':               { kind: 'serviceFee' },
-      'FBALongTermStorageFee':       { kind: 'serviceFee' },
-      'LongTermStorageFee':          { kind: 'serviceFee' },
-      'StorageBillingFee':           { kind: 'serviceFee' },
-      'FBAInboundTransportationFee': { kind: 'serviceFee' },
-      'InboundTransportationFee':    { kind: 'serviceFee' },
-
-      // Adjustment / Reimbursement leaves — names match v0 adjustment maps
-      'COMPENSATED_CLAWBACK':         { kind: 'adjustment' },
-      'FBAInventoryReimbursement':    { kind: 'adjustment' },
-      'FBAReversedReimbursement':     { kind: 'adjustment' },
-      'WAREHOUSE_LOST':               { kind: 'adjustment' },
-      'MISSING_FROM_INBOUND':         { kind: 'adjustment' },
-      'MISSING_FROM_INBOUND_CLAWBACK': { kind: 'adjustment' },
-      'PostageBilling_Postage':                 { kind: 'adjustment' },
-      'PostageBilling_FuelSurcharge':           { kind: 'adjustment' },
-      'PostageBilling_Other':                   { kind: 'adjustment' },
-      'PostageBilling_PostageAdjustment':       { kind: 'adjustment' },
-      'CarrierPackagingCharge':                 { kind: 'adjustment' },
-      'CustomerPackagingCharge':                { kind: 'adjustment' },
-      'ReturnPostageBilling_Tracking':          { kind: 'adjustment' },
-      'ReturnPostageBilling_Postage':           { kind: 'adjustment' },
-      'ReturnPostageBilling_TransactionFee':    { kind: 'adjustment' },
-      'ReturnPostageBilling_FuelSurcharge':     { kind: 'adjustment' },
-      'ReturnPostageBilling_OversizeSurcharge': { kind: 'adjustment' },
-      'ReturnPostageBilling_DeliveryAreaSurcharge': { kind: 'adjustment' },
-      'ShippingChargeback':                     { kind: 'adjustment' },
-      'ShippingHB':                             { kind: 'adjustment' },
-      'ShippingServiceChargebacks':             { kind: 'adjustment' },
-      'RestockingDeductionPrincipal':           { kind: 'adjustment' },
-      'ReturnShippingDeductionPrincipal':       { kind: 'adjustment' },
-
-      // Tax types — net-zero for seller, explicitly skipped (don't recurse,
-      // don't track as unmapped)
-      'OurPriceTax':                          { kind: 'skip' },
-      'ShippingTax':                          { kind: 'skip' },
-      'MarketplaceFacilitatorTax-Principal':  { kind: 'skip' },
-      'MarketplaceFacilitatorTax-Shipping':   { kind: 'skip' },
-      'MarketplaceFacilitatorTax-Other':      { kind: 'skip' },
-      'MarketplaceFacilitatorVAT-Principal':  { kind: 'skip' },
-      'MarketplaceFacilitatorVAT-Shipping':   { kind: 'skip' },
-      'MarketplaceFacilitatorVAT-Other':      { kind: 'skip' },
-
-      // Fallback — Amazon's catch-all "Other" bucket maps to Other Expenses
-      'Other': { kind: 'adjustment' }
-    };
 
     function _v2024RidValue(t, name) {
       const found = (t.relatedIdentifiers || []).find(r => r?.relatedIdentifierName === name);
@@ -1449,89 +923,6 @@
     }
     // Expose on window so it's callable from DevTools.
     window.compareV2024 = compareV2024;
-
-    // ─── TRANSACTION DERIVE — v0 LEGACY (kept while v2024 is being validated)
-
-    // Charge lists live under `ItemChargeList` on Orders and
-    // `ItemChargeAdjustmentList` on Refunds. Same shape, different name.
-    function _chargeList(item) {
-      return item.ItemChargeList || item.ItemChargeAdjustmentList || [];
-    }
-
-    // Fee lists live under `ItemFeeList` on Orders and
-    // `ItemFeeAdjustmentList` on Refunds. Same shape, different name.
-    function _feeList(item) {
-      return item.ItemFeeList || item.ItemFeeAdjustmentList || [];
-    }
-
-    function _sumCharges(item, types) {
-      let total = 0;
-      for (const c of _chargeList(item)) {
-        if (types.includes(c.ChargeType)) total += _amount(c.ChargeAmount);
-      }
-      return total;
-    }
-
-    // "Other charges" = every non-Principal, non-tax ChargeType — so
-    // GiftWrap, Shipping/ShippingCharge, ReturnShipping (RefundEvent-only),
-    // and any future ChargeType Amazon ships all land here per the user's
-    // catch-all rule. Tax types are dropped (seller net-zero).
-    function _sumOtherCharges(item) {
-      const TAX_TYPES = new Set([
-        'Tax', 'GiftWrapTax', 'ShippingTax',
-        'MarketplaceFacilitatorTax-Principal',
-        'MarketplaceFacilitatorTax-Shipping',
-        'MarketplaceFacilitatorTax-Other',
-        'MarketplaceFacilitatorVAT-Principal',
-        'MarketplaceFacilitatorVAT-Shipping',
-        'MarketplaceFacilitatorVAT-Other',
-        'RenewedProgramFee'
-      ]);
-      let total = 0;
-      for (const c of _chargeList(item)) {
-        const t = c.ChargeType;
-        if (!t) continue;
-        if (t === 'Principal') continue;
-        if (TAX_TYPES.has(t)) continue;
-        total += _amount(c.ChargeAmount);
-      }
-      return total;
-    }
-
-    function _sumFees(item, predicate) {
-      let total = 0;
-      for (const f of _feeList(item)) {
-        if (predicate(f.FeeType)) total += _amount(f.FeeAmount);
-      }
-      return total;
-    }
-
-    // Rule: any FeeType that starts with "FBA" goes to fba fees.
-    function _isFbaFee(feeType) {
-      return typeof feeType === 'string' && feeType.startsWith('FBA');
-    }
-
-    // Rule: everything non-FBA on ItemFeeList goes to transaction fees.
-    function _isTransactionFee(feeType) {
-      return typeof feeType === 'string' && !feeType.startsWith('FBA');
-    }
-
-    function _sumPromotions(item) {
-      // Promotions on Orders → PromotionList. On Refunds the equivalent
-      // is PromotionAdjustmentList with the same PromotionAmount shape.
-      const list = item.PromotionList || item.PromotionAdjustmentList || [];
-      let total = 0;
-      for (const p of list) {
-        total += _amount(p.PromotionAmount);
-      }
-      return total;
-    }
-
-    function _amount(money) {
-      if (!money) return 0;
-      const n = parseFloat(money.CurrencyAmount ?? money.Amount ?? 0);
-      return Number.isFinite(n) ? n : 0;
-    }
 
     // ─── STATEMENT BUILDER ──────────────────────────────────────────────
     // Each derived row's columns flow into statement buckets based on
@@ -1880,28 +1271,6 @@
 
     // ─── RENDER ─────────────────────────────────────────────────────────
 
-    function _renderUpstashStatement(container, { statement, missingSkus, unmappedFees, rows, lastSynced, startDate, endDate, comparisons }) {
-      // Delegate to the existing full renderer — it draws both the
-      // traditional Income/Expenses tables AND the FBM/FBA/Total
-      // Profitability Breakdown panels on the right. Passing `comparisons`
-      // unlocks the MoM / YoY arrows in the breakdown panels.
-      renderFinancialStatement(statement, startDate, endDate, container, comparisons || null);
-
-      // Prepend Upstash-specific context: row count, last-synced, and any
-      // warnings (missing SKUs, unmapped ServiceFee FeeTypes) above the
-      // standard Income / Expenses / Breakdown tables.
-      const syncLine = lastSynced
-        ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Last synced: ${_formatSyncTime(lastSynced)}</div>`
-        : '';
-      const countLine = `
-        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          ${rows.length.toLocaleString()} transaction row${rows.length === 1 ? '' : 's'} derived from raw SP-API payload (Orders + Refunds + Service Fees + Adjustments + Chargebacks/Guarantees/Retrocharges)
-        </div>
-      `;
-      const missingWarning  = missingSkus.length  > 0 ? _renderMissingSkuWarning(missingSkus)   : '';
-      const feeWarning      = unmappedFees && unmappedFees.length > 0 ? _renderUnmappedFeeWarning(unmappedFees) : '';
-      container.innerHTML = syncLine + countLine + missingWarning + feeWarning + container.innerHTML;
-    }
 
     // ServiceFee FeeTypes we don't have a rule for get bucketed into
     // "Other Expenses" and listed here so the user can decide where they
@@ -1966,681 +1335,7 @@
       `;
     }
 
-    // ─── SHEETS-VS-UPSTASH SKU DIFF (DIAGNOSTIC) ────────────────────────
-    // Fetches the Sheets Transactions tab + the Upstash derived rows for the
-    // currently-selected Monthly Upstash period, aggregates per-SKU Order /
-    // Refund product-sales on both sides, and renders a comparison table
-    // sorted by |diff| descending. Also includes each SKU's recorded-at-
-    // order-time fulfillment (from Sheets) vs current-catalog fulfillment so
-    // classification shifts surface immediately.
-    async function showMonthlyUpstashSkuDiff() {
-      const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-
-      const container = document.getElementById('monthly-upstash-content');
-      if (!container) return;
-      if (!accessToken) {
-        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to run the Sheets-vs-Upstash comparison</div>';
-        return;
-      }
-
-      const startDate = _ymd(new Date(year, month, 1));
-      const endDate   = _ymd(new Date(year, month + 1, 0));
-      container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Comparing Sheets vs Upstash for ${startDate} → ${endDate}…</div>`;
-
-      try {
-        const [sheetsInputs, upstashInputs] = await Promise.all([
-          _fetchOverviewInputsFromSheets(),
-          _fetchUpstashInputs(startDate, endDate)
-        ]);
-
-        // ── Aggregate Sheets side: sku → { order, refund, fulfillment } ──
-        const sheetsRows = sheetsInputs.transactionsData.values || [];
-        const headers = sheetsRows[0] || [];
-        const idx = (needle) => headers.findIndex(h => String(h || '').toLowerCase() === needle);
-        const dateIdx        = headers.findIndex(h => String(h || '').toLowerCase().includes('date'));
-        const typeIdx        = idx('type');
-        const skuIdx         = idx('sku');
-        const fulfillmentIdx = idx('fulfillment');
-        const salesIdx       = idx('product sales');
-
-        const sheetsPerSku = Object.create(null);
-        for (let i = 1; i < sheetsRows.length; i++) {
-          const row = sheetsRows[i] || [];
-          const dateStr = String(row[dateIdx] || '').substring(0, 10);
-          if (!dateStr || dateStr < startDate || dateStr > endDate) continue;
-          const type = String(row[typeIdx] || '').trim();
-          const sku = _normalizeSku(row[skuIdx]);
-          if (!sku) continue;
-          const fulfillment = String(row[fulfillmentIdx] || '').trim();
-          const amount = parseFloat(row[salesIdx]) || 0;
-          let bucket = sheetsPerSku[sku];
-          if (!bucket) bucket = sheetsPerSku[sku] = { order: 0, refund: 0, fulfillment: '' };
-          if (type === 'Order')       bucket.order  += amount;
-          else if (type === 'Refund') bucket.refund += amount;
-          if (fulfillment && !bucket.fulfillment) bucket.fulfillment = fulfillment;
-        }
-
-        // ── Aggregate Upstash side: sku → { order, refund } ──────────────
-        // Fulfillment is resolved from the catalog at merge time (not here)
-        // so SKUs that exist in Sheets but have zero Upstash rows still
-        // report their current catalog classification instead of falsely
-        // looking "not in catalog."
-        const rows = _deriveTransactionRows(upstashInputs.pages, startDate, endDate);
-        const upstashPerSku = Object.create(null);
-        for (const r of rows) {
-          if (!r.sku || (r.type !== 'Order' && r.type !== 'Refund')) continue;
-          let bucket = upstashPerSku[r.sku];
-          if (!bucket) bucket = upstashPerSku[r.sku] = { order: 0, refund: 0 };
-          if (r.type === 'Order')  bucket.order  += r.sale;
-          else                      bucket.refund += r.sale;
-        }
-
-        // ── Merge + sort by |order diff| desc ─────────────────────────────
-        // Catalog lookup is done unconditionally for every SKU in the union,
-        // regardless of whether that SKU appeared in Upstash derived rows,
-        // so the "Catalog Fulfillment" column is always trustworthy.
-        const skus = new Set([...Object.keys(sheetsPerSku), ...Object.keys(upstashPerSku)]);
-        const diffs = [];
-        let sheetsTotal = 0, upstashTotal = 0;
-        for (const sku of skus) {
-          const s = sheetsPerSku[sku]  || { order: 0, refund: 0, fulfillment: '' };
-          const u = upstashPerSku[sku] || { order: 0, refund: 0 };
-          const prod = upstashInputs.products[sku];
-          let catalogFulfillment;
-          if (!prod) catalogFulfillment = '(not in catalog)';
-          else if (!String(prod.fulfillment || '').trim()) catalogFulfillment = '(blank)';
-          else catalogFulfillment = String(prod.fulfillment).trim();
-
-          sheetsTotal  += s.order;
-          upstashTotal += u.order;
-          diffs.push({
-            sku,
-            sheetsOrder:  s.order,
-            upstashOrder: u.order,
-            orderDiff:    u.order - s.order,
-            sheetsRefund:  s.refund,
-            upstashRefund: u.refund,
-            sheetsFulfillment: s.fulfillment,
-            catalogFulfillment
-          });
-        }
-        diffs.sort((a, b) => Math.abs(b.orderDiff) - Math.abs(a.orderDiff));
-
-        _renderSkuDiff(container, {
-          startDate, endDate,
-          sheetsTotal, upstashTotal,
-          totalDiff: upstashTotal - sheetsTotal,
-          diffs
-        });
-      } catch (err) {
-        console.error('SKU diff failed:', err);
-        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
-      }
-    }
-
-    function _renderSkuDiff(container, { startDate, endDate, sheetsTotal, upstashTotal, totalDiff, diffs, backLabel, rightSideLabel }) {
-      // Default to the original Upstash labels for backward compatibility
-      // with showMonthlyUpstashSkuDiff. Callers can override to point the
-      // Back button at a different generator and/or rename the right-hand
-      // dataset (e.g. "v2024" instead of "Upstash").
-      const backCall = backLabel || 'generateMonthlyUpstashReport()';
-      const rightLabel = rightSideLabel || 'Upstash';
-      const fmt = (n) => {
-        const abs = Math.abs(n);
-        const s = '$' + abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        return n < 0 ? `(${s})` : s;
-      };
-      const diffColor = (n) => n > 0.005 ? 'var(--success, #1f9d55)' : (n < -0.005 ? 'var(--error)' : 'var(--text-secondary)');
-
-      // Synthetic markers shouldn't participate in the classification-shift
-      // comparison — "(not in catalog)" and "(blank)" mean "we don't have
-      // a catalog value to compare against," not "the classification flipped."
-      const isRealFulfillment = (v) => v && v !== '(not in catalog)' && v !== '(blank)';
-      const fulfillmentShifted = (d) =>
-        isRealFulfillment(d.sheetsFulfillment) &&
-        isRealFulfillment(d.catalogFulfillment) &&
-        d.sheetsFulfillment.toLowerCase() !== d.catalogFulfillment.toLowerCase();
-
-      // Only list SKUs with a meaningful order diff (≥ $0.01) OR with a
-      // real fulfillment-classification mismatch. Everything else is noise.
-      const filtered = diffs.filter(d =>
-        Math.abs(d.orderDiff) >= 0.01 || fulfillmentShifted(d)
-      );
-
-      const rowsHtml = filtered.map(d => {
-        const shifted = fulfillmentShifted(d);
-        return `
-          <tr>
-            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(d.sku || '(empty)')}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.sheetsOrder)}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.upstashOrder)}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem; color: ${diffColor(d.orderDiff)};">${fmt(d.orderDiff)}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.sheetsRefund)}</td>
-            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(d.upstashRefund)}</td>
-            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;${shifted ? ' color: var(--warning);' : ''}">${_escape(d.sheetsFulfillment || '—')}</td>
-            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;${shifted ? ' color: var(--warning);' : ''}">${_escape(d.catalogFulfillment || '—')}</td>
-          </tr>
-        `;
-      }).join('');
-
-      const thStyle = 'text-align: left; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;';
-      const thRight = thStyle.replace('text-align: left', 'text-align: right');
-
-      container.innerHTML = `
-        <div style="margin-bottom: 1rem;">
-          <button class="btn btn-secondary" onclick="${backCall}" style="padding: 0.5rem 1rem;">← Back to report</button>
-        </div>
-        <div style="margin-bottom: 1rem; font-weight: 600;">
-          Per-SKU Sheets vs ${rightLabel} comparison · ${startDate} → ${endDate}
-        </div>
-        <div style="display: flex; gap: 2rem; margin-bottom: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.9rem;">
-          <div><span style="color: var(--text-secondary);">Sheets Orders total:</span> ${fmt(sheetsTotal)}</div>
-          <div><span style="color: var(--text-secondary);">${rightLabel} Orders total:</span> ${fmt(upstashTotal)}</div>
-          <div><span style="color: var(--text-secondary);">Diff (${rightLabel} − Sheets):</span> <span style="color: ${diffColor(totalDiff)};">${fmt(totalDiff)}</span></div>
-        </div>
-        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">
-          Showing ${filtered.length} of ${diffs.length} SKUs that have a non-zero order diff (≥ $0.01) or a fulfillment mismatch. Rows with amber fulfillment cells had a different fulfillment recorded on the order's date than the current Products catalog.
-        </div>
-        <table style="width: 100%; border-collapse: collapse;">
-          <thead>
-            <tr>
-              <th style="${thStyle}">SKU</th>
-              <th style="${thRight}">Sheets Orders</th>
-              <th style="${thRight}">${rightLabel} Orders</th>
-              <th style="${thRight}">Diff</th>
-              <th style="${thRight}">Sheets Refunds</th>
-              <th style="${thRight}">${rightLabel} Refunds</th>
-              <th style="${thStyle}">Sheets Fulfillment</th>
-              <th style="${thStyle}">Catalog Fulfillment</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml || '<tr><td colspan="8" style="padding: 1rem; text-align: center; color: var(--text-secondary);">No meaningful diffs found.</td></tr>'}</tbody>
-        </table>
-      `;
-    }
-
-    // ─── CSV EXPORT ─────────────────────────────────────────────────────
-    // Exports the derived transaction rows (Orders + Refunds, 10 columns) —
-    // what ends up fed into the statement builder. Lets the user spot-check
-    // the mapping per row without having to scroll the raw payload.
-
-    async function exportMonthlyUpstashCSV() {
-      const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-      const startDate = _ymd(new Date(year, month, 1));
-      const endDate   = _ymd(new Date(year, month + 1, 0));
-      await _downloadDerivedCSV(startDate, endDate, `transactions-derived-${year}-${String(month + 1).padStart(2, '0')}.csv`);
-    }
-
-    async function exportYTDUpstashCSV() {
-      const year = document.getElementById('ytd-upstash-year-select').value;
-      if (!year) return;
-      await _downloadDerivedCSV(`${year}-01-01`, `${year}-12-31`, `transactions-derived-${year}-YTD.csv`);
-    }
-
-    async function _downloadDerivedCSV(startDate, endDate, filename) {
-      if (!accessToken) { alert('Please sign in first'); return; }
-      try {
-        const { pages } = await _fetchUpstashInputs(startDate, endDate);
-        const rows = _deriveTransactionRows(pages, startDate, endDate);
-        if (rows.length === 0) {
-          alert('No transaction rows in range — has this period been synced?');
-          return;
-        }
-        const headers = [
-          'type', 'order id', 'date', 'sku', 'qty',
-          'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions',
-          'fee type', 'fee amount',
-          'adjustment type', 'adjustment amount'
-        ];
-        const lines = [headers.map(_csvCell).join(',')];
-        for (const r of rows) {
-          lines.push([
-            r.type, r.orderId, r.date, r.sku, r.qty,
-            _round2(r.sale), _round2(r.otherCharges),
-            _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions),
-            r.feeType || '',
-            r.feeAmount != null ? _round2(r.feeAmount) : '',
-            r.adjustmentType || '',
-            r.adjustmentAmount != null ? _round2(r.adjustmentAmount) : ''
-          ].map(_csvCell).join(','));
-        }
-        _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), filename);
-      } catch (err) {
-        console.error('CSV export failed:', err);
-        alert(`Export failed: ${err.message}`);
-      }
-    }
-
-    async function exportMonthlyUpstashDetailCSV() {
-      const month = parseInt(document.getElementById('monthly-upstash-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-upstash-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-      const yyyyMM = `${year}-${String(month + 1).padStart(2, '0')}`;
-
-      if (!accessToken) { alert('Please sign in first'); return; }
-      try {
-        const res = await fetch(`/api/transactions?action=get&month=${yyyyMM}`, {
-          headers: { Authorization: `Bearer ${accessToken}` }
-        });
-        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
-        const data = await res.json();
-        const rows = _flattenRawPages(data.pages || []);
-        if (rows.length === 0) {
-          alert('No raw events found — has this month been synced?');
-          return;
-        }
-        const HEADERS = [
-          'event_type', 'posted_date', 'amazon_order_id', 'seller_sku',
-          'reason', 'description', 'quantity',
-          'charge_type', 'charge_amount', 'fee_type', 'fee_amount',
-          'currency'
-        ];
-        const lines = [HEADERS.map(_csvCell).join(',')];
-        for (const r of rows) lines.push(HEADERS.map(h => _csvCell(r[h] ?? '')).join(','));
-        _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), `transactions-detail-${yyyyMM}.csv`);
-      } catch (err) {
-        console.error('Detail CSV export failed:', err);
-        alert(`Export failed: ${err.message}`);
-      }
-    }
-
-    function _download(blob, filename) {
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = href;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(href);
-    }
-
-    // Flatten raw pages → one row per atomic charge/fee for the Detail CSV.
-    // v2024 Compare-to-Sheets — line-item diff. Pulls the full Sheets-side
-    // statement (via loadOverviewData with returnStatement=true) AND the
-    // v2024-side statement (via _computeV2024Period), then renders one row
-    // per line in the financial statement: FBM Sales / FBA Sales / FBM
-    // Returns / FBM Transaction Fees / FBA Fees / etc. Each row shows
-    // Sheets net, v2024 net, and the diff. More useful than the old SKU
-    // diff for spotting which categories diverge — a SKU diff couldn't
-    // distinguish "$10k missing because of a fee miscategorization" from
-    // "$10k missing because of a sales miscategorization."
-    async function showMonthlyV2024SkuDiff() {
-      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-
-      const container = document.getElementById('monthly-v2024-content');
-      if (!container) return;
-      if (!accessToken) {
-        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to run the Sheets-vs-v2024 comparison</div>';
-        return;
-      }
-
-      const startDate = _ymd(new Date(year, month, 1));
-      const endDate   = _ymd(new Date(year, month + 1, 0));
-      container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Comparing Sheets vs v2024 for ${startDate} → ${endDate}…</div>`;
-
-      try {
-        // Both sides return the same statement shape: { income: {<line>:
-        // {debit, credit}}, expenses: {<line>: {debit, credit}} }.
-        const [sheetsResult, v2024Period] = await Promise.all([
-          loadOverviewData(startDate, endDate, 'monthly-v2024-content', false, null, null, true),
-          _computeV2024Period(startDate, endDate)
-        ]);
-
-        if (!sheetsResult || !sheetsResult.statement) {
-          container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Sheets statement could not be computed (no data, no token, or fetch failed). Try the v0 Monthly Profitability tab to confirm the Sheets path is working.</div>`;
-          return;
-        }
-
-        _renderLineItemDiff(container, {
-          startDate, endDate,
-          sheetsStatement: sheetsResult.statement,
-          v2024Statement: v2024Period.statement
-        });
-      } catch (err) {
-        console.error('v2024 line-item diff failed:', err);
-        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
-      }
-    }
-
-    // Renders side-by-side line items for two statements with the same
-    // shape. Income lines net = credit - debit (positive = revenue,
-    // negative = returns). Expense lines net = debit - credit (positive =
-    // cost, negative = refund/recovery). The diff column is v2024 − Sheets
-    // — positive = v2024 captured more, negative = Sheets captured more.
-    function _renderLineItemDiff(container, { startDate, endDate, sheetsStatement, v2024Statement }) {
-      const fmt = (n) => {
-        const abs = Math.abs(n);
-        const s = '$' + abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        return n < 0 ? `(${s})` : s;
-      };
-      const diffColor = (n) =>
-        Math.abs(n) < 0.01 ? 'var(--text-secondary)'
-        : n > 0 ? 'var(--success, #1f9d55)'
-        : 'var(--error)';
-
-      // Net helper — sign convention matches extractProfitabilityMetrics
-      // so the totals line up with what the on-page report displays.
-      const lineNet = (line, section) => {
-        if (!line) return 0;
-        const credit = line.credit || 0;
-        const debit  = line.debit || 0;
-        return section === 'income' ? credit - debit : debit - credit;
-      };
-
-      // Same line order the rendered statement uses, so the diff reads
-      // top-to-bottom in the same sequence as the on-page report.
-      const INCOME_LINES = [
-        'FBM Sales', 'FBM Returns', 'FBM Other',
-        'FBA Sales', 'FBA Returns', 'FBA Other'
-      ];
-      const EXPENSE_LINES = [
-        'FBM Product Costs', 'FBM Transaction Fees', 'FBM Shipping Costs', 'FBM Ad Spend',
-        'FBA Product Costs', 'FBA Transaction Fees', 'FBA Fees',
-        'FBA Returns Fees',
-        'FBA Inbound Placement Fees', 'FBA Inbound Shipping Costs',
-        'FBA Inventory Storage Fees', 'FBA Inventory Adjustment', 'FBA Ad Spend',
-        'Other Expenses', 'Unallocated Ad Spend'
-      ];
-
-      const buildRow = (label, sheetsNet, v2024Net, opts = {}) => {
-        const diff = v2024Net - sheetsNet;
-        const indent = opts.indent || 0;
-        const bold = opts.bold ? 'font-weight: 700;' : '';
-        const rowBg = opts.bg ? ` background: ${opts.bg};` : '';
-        return `
-          <tr style="${bold}${rowBg}">
-            <td style="padding: 0.4rem 0.75rem; padding-left: ${0.75 + indent}rem; font-size: 0.85rem;">${_escape(label)}</td>
-            <td style="padding: 0.4rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(sheetsNet)}</td>
-            <td style="padding: 0.4rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(v2024Net)}</td>
-            <td style="padding: 0.4rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem; color: ${diffColor(diff)};">${fmt(diff)}</td>
-          </tr>
-        `;
-      };
-
-      const incomeRows = INCOME_LINES.map(line => {
-        const s = lineNet(sheetsStatement.income[line], 'income');
-        const v = lineNet(v2024Statement.income[line], 'income');
-        return buildRow(line, s, v);
-      }).join('');
-
-      const expenseRows = EXPENSE_LINES.map(line => {
-        const s = lineNet(sheetsStatement.expenses[line], 'expenses');
-        const v = lineNet(v2024Statement.expenses[line], 'expenses');
-        return buildRow(line, s, v);
-      }).join('');
-
-      const totalIncomeSheets = INCOME_LINES.reduce((a, line) => a + lineNet(sheetsStatement.income[line], 'income'), 0);
-      const totalIncomeV2024  = INCOME_LINES.reduce((a, line) => a + lineNet(v2024Statement.income[line], 'income'), 0);
-      const totalExpenseSheets = EXPENSE_LINES.reduce((a, line) => a + lineNet(sheetsStatement.expenses[line], 'expenses'), 0);
-      const totalExpenseV2024  = EXPENSE_LINES.reduce((a, line) => a + lineNet(v2024Statement.expenses[line], 'expenses'), 0);
-      const netSheets = totalIncomeSheets - totalExpenseSheets;
-      const netV2024  = totalIncomeV2024  - totalExpenseV2024;
-
-      const thStyle = 'text-align: left; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem; position: sticky; top: 0;';
-      const thRight = thStyle.replace('text-align: left', 'text-align: right');
-      const sectionHeaderStyle = 'padding: 0.6rem 0.75rem; background: var(--bg-secondary); font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em;';
-
-      container.innerHTML = `
-        <div style="margin-bottom: 1rem;">
-          <button class="btn btn-secondary" onclick="generateMonthlyV2024Report()" style="padding: 0.5rem 1rem;">← Back to report</button>
-        </div>
-        <div style="margin-bottom: 1rem; font-weight: 600;">
-          Line-item Sheets vs v2024 comparison · ${startDate} → ${endDate}
-        </div>
-        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">
-          Sign convention matches the rendered report: income lines = credit − debit (positive is revenue), expense lines = debit − credit (positive is cost). Diff column is v2024 − Sheets — green means v2024 captured more, red means Sheets captured more.
-        </div>
-        <table style="width: 100%; border-collapse: collapse;">
-          <thead>
-            <tr>
-              <th style="${thStyle}">Line</th>
-              <th style="${thRight}">Sheets</th>
-              <th style="${thRight}">v2024</th>
-              <th style="${thRight}">Diff (v2024 − Sheets)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td colspan="4" style="${sectionHeaderStyle}">Income</td></tr>
-            ${incomeRows}
-            ${buildRow('Total Income', totalIncomeSheets, totalIncomeV2024, { bold: true, bg: 'var(--bg-secondary)' })}
-            <tr><td colspan="4" style="${sectionHeaderStyle}">Expenses</td></tr>
-            ${expenseRows}
-            ${buildRow('Total Expenses', totalExpenseSheets, totalExpenseV2024, { bold: true, bg: 'var(--bg-secondary)' })}
-            <tr><td colspan="4" style="${sectionHeaderStyle}">Net</td></tr>
-            ${buildRow('Net (Income − Expenses)', netSheets, netV2024, { bold: true, bg: 'var(--bg-card)' })}
-          </tbody>
-        </table>
-      `;
-    }
-
-    async function exportMonthlyV2024CSV() {
-      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-      const startDate = _ymd(new Date(year, month, 1));
-      const endDate   = _ymd(new Date(year, month + 1, 0));
-      if (!accessToken) return;
-      try {
-        const inputs = await _fetchV2024Inputs(startDate, endDate);
-        const { rows } = _deriveV2024Rows(inputs.transactions, startDate, endDate);
-        if (rows.length === 0) {
-          _v2024ExportNotice('No v2024 transactions in range — sync via /api/transactions?action=sync-v2024&month=YYYY-MM first.');
-          return;
-        }
-        const headers = [
-          'type', 'order id', 'date', 'sku', 'qty', 'fulfillment',
-          'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions',
-          'fee type', 'fee amount',
-          'adjustment type', 'adjustment amount',
-          'transaction id', 'transaction status'
-        ];
-        const lines = [headers.map(_csvCell).join(',')];
-        for (const r of rows) {
-          lines.push([
-            r.type, r.orderId, r.date, r.sku, r.qty, r.fulfillment || '',
-            _round2(r.sale), _round2(r.otherCharges),
-            _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions),
-            r.feeType || '',
-            r.feeAmount != null ? _round2(r.feeAmount) : '',
-            r.adjustmentType || '',
-            r.adjustmentAmount != null ? _round2(r.adjustmentAmount) : '',
-            r._transactionId || '',
-            r._transactionStatus || ''
-          ].map(_csvCell).join(','));
-        }
-        const filename = `transactions-v2024-derived-${year}-${String(month + 1).padStart(2, '0')}.csv`;
-        _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), filename);
-      } catch (err) {
-        console.error('v2024 CSV export failed:', err);
-        _v2024ExportNotice(`Export failed: ${err.message}`);
-      }
-    }
-
-    // Detail CSV: one row per top-level transaction (no breakdown walking)
-    // so the user can scroll the raw v2024 shape and verify against the
-    // Amazon Payment Report's row count / total amounts.
-    async function exportMonthlyV2024DetailCSV() {
-      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
-      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
-      if (isNaN(month) || isNaN(year)) return;
-      const yyyyMM = `${year}-${String(month + 1).padStart(2, '0')}`;
-      if (!accessToken) return;
-      try {
-        const res = await fetch(`/api/transactions?action=get-v2024&month=${yyyyMM}`, {
-          headers: { Authorization: `Bearer ${accessToken}` }
-        });
-        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
-        const data = await res.json();
-        const transactions = data.transactions || [];
-        if (transactions.length === 0) {
-          _v2024ExportNotice('No v2024 transactions found — sync via /api/transactions?action=sync-v2024&month=YYYY-MM first.');
-          return;
-        }
-        const HEADERS = [
-          'transaction_id', 'transaction_type', 'transaction_status',
-          'posted_date', 'description', 'total_amount', 'account_type',
-          'order_id', 'shipment_id', 'settlement_id', 'deferred_transaction_id',
-          'deferral_reason', 'maturity_date', 'item_count'
-        ];
-        const lines = [HEADERS.map(_csvCell).join(',')];
-        for (const t of transactions) {
-          const rid = (name) => (t.relatedIdentifiers || []).find(r => r?.relatedIdentifierName === name)?.relatedIdentifierValue || '';
-          const deferred = (t.contexts || []).find(c => c?.contextType === 'DeferredContext') || {};
-          lines.push([
-            t.transactionId || '',
-            t.transactionType || '',
-            t.transactionStatus || '',
-            t.postedDate || '',
-            t.description || '',
-            t.totalAmount?.currencyAmount ?? '',
-            t.sellingPartnerMetadata?.accountType || '',
-            rid('ORDER_ID'),
-            rid('SHIPMENT_ID'),
-            rid('SETTLEMENT_ID'),
-            rid('DEFERRED_TRANSACTION_ID'),
-            deferred.deferralReason || '',
-            deferred.maturityDate || '',
-            Array.isArray(t.items) ? t.items.length : 0
-          ].map(_csvCell).join(','));
-        }
-        _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), `transactions-v2024-detail-${yyyyMM}.csv`);
-      } catch (err) {
-        console.error('v2024 detail CSV export failed:', err);
-        _v2024ExportNotice(`Export failed: ${err.message}`);
-      }
-    }
-
-    // Inline-banner version of an export-failure / no-data message. Drops a
-    // dismissible warning banner above the current statement instead of an
-    // alert popup — auto-removes after 8s.
-    function _v2024ExportNotice(message) {
-      const container = document.getElementById('monthly-v2024-content');
-      if (!container) return;
-      const banner = document.createElement('div');
-      banner.style.cssText = 'background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; color: var(--warning); font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center;';
-      banner.innerHTML = `<span>⚠ ${_escape(message)}</span><button style="background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1rem; padding: 0 0.5rem;">×</button>`;
-      banner.querySelector('button').addEventListener('click', () => banner.remove());
-      container.prepend(banner);
-      setTimeout(() => banner.remove(), 8000);
-    }
-
-    function _flattenRawPages(pages) {
-      const rows = [];
-      for (const page of pages) {
-        for (const ev of (page.ShipmentEventList || []))      _emitItemEventRows(rows, ev, 'ShipmentEvent',      ev.ShipmentItemList);
-        for (const ev of (page.RefundEventList || []))        _emitItemEventRows(rows, ev, 'RefundEvent',        ev.ShipmentItemAdjustmentList);
-        for (const ev of (page.GuaranteeClaimEventList || [])) _emitItemEventRows(rows, ev, 'GuaranteeClaimEvent', ev.ShipmentItemAdjustmentList);
-        for (const ev of (page.ChargebackEventList || []))    _emitItemEventRows(rows, ev, 'ChargebackEvent',    ev.ShipmentItemAdjustmentList);
-        for (const ev of (page.RetrochargeEventList || []))   _emitItemEventRows(rows, ev, 'RetrochargeEvent',   ev.ShipmentItemAdjustmentList);
-        for (const ev of (page.ServiceFeeEventList || []))    _emitServiceFeeRows(rows, ev);
-        for (const ev of (page.AdjustmentEventList || []))    _emitAdjustmentRows(rows, ev);
-      }
-      return rows;
-    }
-
-    function _emitItemEventRows(rows, ev, eventType, items) {
-      const base = {
-        event_type: eventType,
-        posted_date: (ev.PostedDate || '').substring(0, 10),
-        amazon_order_id: ev.AmazonOrderId || '',
-        reason: '', description: ''
-      };
-      const itemList = items || [];
-      if (itemList.length === 0) {
-        rows.push({ ...base, seller_sku: '', quantity: '', charge_type: '', charge_amount: '', fee_type: '', fee_amount: '', currency: '' });
-        return;
-      }
-      for (const item of itemList) {
-        const itemBase = {
-          ...base,
-          seller_sku: _normalizeSku(item.SellerSKU),
-          quantity: item.QuantityShipped ?? '',
-          description: item.ProductDescription || ''
-        };
-        const charges = item.ItemChargeList || item.ItemChargeAdjustmentList || [];
-        const fees    = item.ItemFeeList    || item.ItemFeeAdjustmentList    || [];
-        const proms   = item.PromotionList || [];
-        if (charges.length === 0 && fees.length === 0 && proms.length === 0) {
-          rows.push({ ...itemBase, charge_type: '', charge_amount: '', fee_type: '', fee_amount: '', currency: '' });
-          continue;
-        }
-        for (const c of charges) {
-          rows.push({ ...itemBase, charge_type: c.ChargeType || '', charge_amount: _amount(c.ChargeAmount), fee_type: '', fee_amount: '', currency: c.ChargeAmount?.CurrencyCode || '' });
-        }
-        for (const f of fees) {
-          rows.push({ ...itemBase, charge_type: '', charge_amount: '', fee_type: f.FeeType || '', fee_amount: _amount(f.FeeAmount), currency: f.FeeAmount?.CurrencyCode || '' });
-        }
-        for (const p of proms) {
-          rows.push({ ...itemBase, charge_type: 'Promotion', charge_amount: _amount(p.PromotionAmount), fee_type: '', fee_amount: '', currency: p.PromotionAmount?.CurrencyCode || '', reason: p.PromotionType || '', description: p.PromotionId || '' });
-        }
-      }
-    }
-
-    function _emitServiceFeeRows(rows, ev) {
-      const base = {
-        event_type: 'ServiceFeeEvent',
-        posted_date: (ev.PostedDate || '').substring(0, 10),
-        amazon_order_id: ev.AmazonOrderId || '',
-        seller_sku: _normalizeSku(ev.SellerSKU),
-        reason: ev.FeeReason || '',
-        description: ev.FeeDescription || '',
-        quantity: '',
-        charge_type: '', charge_amount: ''
-      };
-      const feeList = ev.FeeList || [];
-      if (feeList.length === 0) {
-        rows.push({ ...base, fee_type: '', fee_amount: '', currency: '' });
-        return;
-      }
-      for (const f of feeList) {
-        rows.push({ ...base, fee_type: f.FeeType || '', fee_amount: _amount(f.FeeAmount), currency: f.FeeAmount?.CurrencyCode || '' });
-      }
-    }
-
-    function _emitAdjustmentRows(rows, ev) {
-      const base = {
-        event_type: 'AdjustmentEvent',
-        posted_date: (ev.PostedDate || '').substring(0, 10),
-        amazon_order_id: '',
-        reason: ev.AdjustmentType || '',
-        description: '',
-        charge_type: '', charge_amount: ''
-      };
-      const items = ev.AdjustmentItemList || [];
-      if (items.length === 0) {
-        rows.push({ ...base, seller_sku: '', quantity: '', fee_type: 'Adjustment', fee_amount: _amount(ev.AdjustmentAmount), currency: ev.AdjustmentAmount?.CurrencyCode || '' });
-        return;
-      }
-      for (const item of items) {
-        rows.push({
-          ...base,
-          seller_sku: _normalizeSku(item.SellerSKU),
-          description: item.ProductDescription || '',
-          quantity: item.Quantity ?? '',
-          fee_type: 'Adjustment',
-          fee_amount: _amount(item.TotalAmount || item.PerUnitAmount),
-          currency: (item.TotalAmount || item.PerUnitAmount)?.CurrencyCode || ''
-        });
-      }
-    }
-
     // ─── SMALL UTILITIES ────────────────────────────────────────────────
-
-    function _csvCell(v) {
-      const s = v == null ? '' : String(v);
-      return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
-    }
-
-    function _round2(n) {
-      return Math.round((Number(n) || 0) * 100) / 100;
-    }
 
     function _ymd(d) {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

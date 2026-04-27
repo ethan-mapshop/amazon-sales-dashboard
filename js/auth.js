@@ -65,12 +65,11 @@
           }, 100);
         }
       } else {
-        // Default to Overview Monthly. showMonthly() handles the auto-load
-        // itself via the first-view flag (gated on accessToken), so we
-        // don't need a separate generateMonthlyReport() call here. Calling
-        // it again would double-fire the 4-period × 7-sheet Sheets fan-out
-        // and trip Google's 429 rate limit.
-        showMonthly();
+        // Default to Overview Monthly Profitability. showMonthlyV2024()
+        // handles the auto-load itself via the first-view flag (gated on
+        // accessToken), so triggerCurrentOverviewLoad will fire it after
+        // sign-in if the user lands here pre-auth.
+        showMonthlyV2024();
       }
     });
     
@@ -99,10 +98,8 @@
       const activeTab = document.querySelector('#overview-page .page-header .tabs .tab.active');
       if (!activeTab) return;
       const tabId = activeTab.id;
-      if (tabId === 'monthly-tab' && typeof showMonthly === 'function') showMonthly();
-      else if (tabId === 'ytd-tab' && typeof showYTD === 'function') showYTD();
-      else if (tabId === 'monthly-upstash-tab' && typeof showMonthlyUpstash === 'function') showMonthlyUpstash();
-      else if (tabId === 'ytd-upstash-tab' && typeof showYTDUpstash === 'function') showYTDUpstash();
+      if (tabId === 'monthly-v2024-tab' && typeof showMonthlyV2024 === 'function') showMonthlyV2024();
+      else if (tabId === 'ytd-v2024-tab' && typeof showYTDV2024 === 'function') showYTDV2024();
     }
     
     document.addEventListener('DOMContentLoaded', () => {

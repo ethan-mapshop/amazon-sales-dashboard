@@ -6,6 +6,14 @@
       total: { income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 }
     });
 
+    // Case-insensitive header lookup — used everywhere we parse Sheets-shape
+    // data (Products, ProductAdSpend, BrandAdSpend, ShippingCosts, etc.) to
+    // find a column by name without being fussy about capitalization.
+    function findHeaderIndex(headers, searchTerm) {
+      const lowerSearch = String(searchTerm).toLowerCase();
+      return headers.findIndex(h => h && String(h).toLowerCase() === lowerSearch);
+    }
+
     // Normalize the various date formats that appear in the sheets
     // (ISO string, "Dec 1, 2025 12:07 AM PST" text, Excel serial number)
     // down to a YYYY-MM-DD string so they can be max-compared lexically.

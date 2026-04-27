@@ -112,11 +112,10 @@
       }
       
       if (pageName === 'overview') {
-        // showMonthly() auto-loads the report itself via the first-view
-        // flag — calling generateMonthlyReport() here too would double-fire
-        // the 4-period × 7-sheet Google Sheets fan-out and trip the 429
-        // rate limit.
-        showMonthly();
+        // showMonthlyV2024() handles its own auto-load via the first-view
+        // flag. The Sheets/Upstash tabs were retired — Monthly Profitability
+        // is the v2024-backed tab, default-active for the Overview page.
+        showMonthlyV2024();
       }
 
       if (pageName === 'catalog' && accessToken) {

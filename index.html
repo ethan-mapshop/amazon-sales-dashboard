@@ -593,144 +593,17 @@
 
           <!-- Tabs -->
           <div class="tabs">
-            <button id="monthly-tab" class="tab active" onclick="showMonthly()">
+            <button id="monthly-v2024-tab" class="tab active" onclick="showMonthlyV2024()">
               Monthly Profitability
             </button>
-            <button id="ytd-tab" class="tab" onclick="showYTD()">
+            <button id="ytd-v2024-tab" class="tab" onclick="showYTDV2024()">
               Year-to-Date Profitability
             </button>
-            <button id="monthly-upstash-tab" class="tab" onclick="showMonthlyUpstash()">
-              Monthly Profitability &mdash; Upstash
-            </button>
-            <button id="ytd-upstash-tab" class="tab" onclick="showYTDUpstash()">
-              Year-to-Date Profitability &mdash; Upstash
-            </button>
-            <button id="monthly-v2024-tab" class="tab" onclick="showMonthlyV2024()">
-              Monthly Profitability &mdash; v2024
-            </button>
           </div>
         </div>
 
-        <!-- Year-to-Date View -->
-        <div id="ytd-view">
-          <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
-              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
-              <select id="ytd-year-select" onchange="generateYTDReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
-              </select>
-              <button class="btn" onclick="setYTDYear('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
-              <button class="btn" onclick="setYTDYear('nextYear')" style="padding: 0.5rem 1rem;">Next ▶</button>
-              <button class="btn" onclick="setYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-            </div>
-          </div>
-
-          <div id="ytd-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability</div>
-            </div>
-          </div>
-        </div>
-        
         <!-- Monthly View -->
-        <div id="monthly-view" style="display: none;">
-          <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
-              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Month:</label>
-              <select id="monthly-month-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 140px;">
-                <option value="0">January</option>
-                <option value="1">February</option>
-                <option value="2">March</option>
-                <option value="3">April</option>
-                <option value="4">May</option>
-                <option value="5">June</option>
-                <option value="6">July</option>
-                <option value="7">August</option>
-                <option value="8">September</option>
-                <option value="9">October</option>
-                <option value="10">November</option>
-                <option value="11">December</option>
-              </select>
-              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
-              <select id="monthly-year-select" onchange="generateMonthlyReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
-              </select>
-              <button class="btn" onclick="setMonthlyDate('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
-              <button class="btn" onclick="setMonthlyDate('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
-              <button class="btn" onclick="setMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-            </div>
-          </div>
-
-          <div id="monthly-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Monthly View — Upstash -->
-        <div id="monthly-upstash-view" style="display: none;">
-          <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
-              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Month:</label>
-              <select id="monthly-upstash-month-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 140px;">
-                <option value="0">January</option>
-                <option value="1">February</option>
-                <option value="2">March</option>
-                <option value="3">April</option>
-                <option value="4">May</option>
-                <option value="5">June</option>
-                <option value="6">July</option>
-                <option value="7">August</option>
-                <option value="8">September</option>
-                <option value="9">October</option>
-                <option value="10">November</option>
-                <option value="11">December</option>
-              </select>
-              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
-              <select id="monthly-upstash-year-select" onchange="generateMonthlyUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
-              </select>
-              <button id="monthly-upstash-prev-btn" class="btn" onclick="setMonthlyUpstashDate('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
-              <button id="monthly-upstash-next-btn" class="btn" onclick="setMonthlyUpstashDate('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
-              <button class="btn" onclick="setMonthlyUpstashDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-              <button class="btn btn-secondary" onclick="showMonthlyUpstashSkuDiff()" style="padding: 0.5rem 1rem; margin-left: auto;">Compare to Sheets</button>
-              <button class="btn btn-secondary" onclick="exportMonthlyUpstashCSV()" style="padding: 0.5rem 1rem;">Export CSV</button>
-              <button class="btn btn-secondary" onclick="exportMonthlyUpstashDetailCSV()" style="padding: 0.5rem 1rem;">Export Detail CSV</button>
-            </div>
-          </div>
-
-          <div id="monthly-upstash-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability (from Upstash)</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- YTD View — Upstash -->
-        <div id="ytd-upstash-view" style="display: none;">
-          <div style="margin-bottom: 2rem;">
-            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
-              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
-              <select id="ytd-upstash-year-select" onchange="generateYTDUpstashReport()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
-              </select>
-              <button id="ytd-upstash-prev-btn" class="btn" onclick="setYTDUpstashYear('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
-              <button id="ytd-upstash-next-btn" class="btn" onclick="setYTDUpstashYear('nextYear')" style="padding: 0.5rem 1rem;">Next ▶</button>
-              <button class="btn" onclick="setYTDUpstashYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-              <button class="btn btn-secondary" onclick="exportYTDUpstashCSV()" style="padding: 0.5rem 1rem; margin-left: auto;">Export CSV</button>
-            </div>
-          </div>
-
-          <div id="ytd-upstash-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability (from Upstash)</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Monthly View — v2024 -->
-        <div id="monthly-v2024-view" style="display: none;">
+        <div id="monthly-v2024-view">
           <div style="margin-bottom: 2rem;">
             <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
               <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Month:</label>
@@ -754,16 +627,34 @@
               <button id="monthly-v2024-prev-btn" class="btn" onclick="setMonthlyV2024Date('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
               <button id="monthly-v2024-next-btn" class="btn" onclick="setMonthlyV2024Date('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
               <button class="btn" onclick="setMonthlyV2024Date('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-              <button class="btn btn-secondary" onclick="showMonthlyV2024SkuDiff()" style="padding: 0.5rem 1rem; margin-left: auto;">Compare to Sheets</button>
-              <button class="btn btn-secondary" onclick="exportMonthlyV2024CSV()" style="padding: 0.5rem 1rem;">Export CSV</button>
-              <button class="btn btn-secondary" onclick="exportMonthlyV2024DetailCSV()" style="padding: 0.5rem 1rem;">Export Detail CSV</button>
             </div>
           </div>
 
           <div id="monthly-v2024-content">
             <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
               <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability (Finances v2024-06-19)</div>
+              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Year-to-Date View -->
+        <div id="ytd-v2024-view" style="display: none;">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
+              <select id="ytd-v2024-year-select" onchange="generateYTDV2024Report()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
+              </select>
+              <button id="ytd-v2024-prev-btn" class="btn" onclick="setYTDV2024Year('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
+              <button id="ytd-v2024-next-btn" class="btn" onclick="setYTDV2024Year('nextYear')" style="padding: 0.5rem 1rem;">Next ▶</button>
+              <button class="btn" onclick="setYTDV2024Year('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+            </div>
+          </div>
+
+          <div id="ytd-v2024-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability</div>
             </div>
           </div>
         </div>
@@ -1625,7 +1516,6 @@
   <script src="js/auth.js"></script>
   <script src="js/upload.js"></script>
   <script src="js/mappings.js"></script>
-  <script src="js/sales-monthly.js"></script>
   <script src="js/brand-product.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/catalog.js"></script>
