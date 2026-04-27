@@ -746,7 +746,18 @@
 
     /* Brand & Product Table Styles */
     .bp-table-wrapper {
-      overflow-x: auto;
+      /* Both axes scroll inside the wrapper so position: sticky on the
+         thead and brand rows pins against the wrapper's top edge. With
+         overflow-x: auto alone (the previous setup), CSS auto-promotes
+         overflow-y to auto too, so the wrapper became the scroll
+         container for both axes — but with no height constraint it
+         never actually scrolled, and sticky had nothing to pin against.
+         max-height: 70vh gives the wrapper an actual viewport so the
+         table scrolls internally, the column headers freeze, and the
+         brand-row pins follow. The filter bar / Overview tabs stay in
+         normal page flow above. */
+      overflow: auto;
+      max-height: 70vh;
       margin-top: 2rem;
     }
     
