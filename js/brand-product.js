@@ -86,14 +86,17 @@
       };
     }
 
-    async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null, providedInputs = null) {
+    async function loadOverviewData(startDate, endDate, containerId = 'overview-content', returnData = false, comparisons = null, providedInputs = null, returnStatement = false) {
       // Guard early-exits: for prereq calls (returnData=true) return
       // ZERO_METRICS so calculateComparisons has a valid shape to read from
-      // rather than crashing on `undefined.fbm`. For render calls, set an
-      // inline message in the container. Never use an alert — see user
+      // rather than crashing on `undefined.fbm`. For pure-compute callers
+      // (returnStatement=true, used by the v2024 line-item diff), return
+      // null on guard failure and don't touch the container. For render
+      // calls, set an inline message. Never use an alert — see user
       // preferences.
       if (!accessToken) {
         if (returnData) return ZERO_METRICS;
+        if (returnStatement) return null;
         const container = document.getElementById(containerId);
         if (container) container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to load Profitability Overview data</div>';
         return;
@@ -101,20 +104,29 @@
 
       if (!startDate || !endDate) {
         if (returnData) return ZERO_METRICS;
+        if (returnStatement) return null;
         const container = document.getElementById(containerId);
         if (container) container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--error);">Please select a date range</div>';
         return;
       }
 
-      console.log('Loading data for container:', containerId);
+      // Skip the noisy "Loading data for container" log during pure-compute
+      // callers — they don't render and that log was useful only when this
+      // function was always rendering.
+      if (!returnStatement) console.log('Loading data for container:', containerId);
       const container = document.getElementById(containerId);
-      if (!container) {
+      if (!container && !returnStatement) {
         console.error('Container not found:', containerId);
         if (returnData) return ZERO_METRICS;
         return;
       }
 
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      // Don't clobber the container during pure-compute paths — the caller
+      // is rendering its own UI somewhere else (e.g. the line-item diff
+      // table on the v2024 tab).
+      if (!returnStatement && !returnData && container) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      }
 
       try {
         // providedInputs lets overview-upstash.js reuse this function with
@@ -453,19 +465,25 @@
         
         // Calculate financial statement with product costs, ad spend, and shipping costs
         const statement = calculateFinancialStatement(filtered, productCosts, fbaAdSpend, fbmAdSpend, unallocatedAdSpend, totalShippingCosts);
-        
+
+        // Pure-compute path: hand the raw statement back to the caller.
+        if (returnStatement) {
+          return { statement };
+        }
+
         // If returnData is true, return profitability metrics instead of rendering
         if (returnData) {
           return extractProfitabilityMetrics(statement);
         }
-        
+
         // Render the report
         renderFinancialStatement(statement, startDate, endDate, container, comparisons);
-        
+
       } catch (error) {
         console.error('Error loading overview:', error);
         if (returnData) return ZERO_METRICS;
-        container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
+        if (returnStatement) return null;
+        if (container) container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--error);">Error: ${error.message}</div>`;
       }
     }
     

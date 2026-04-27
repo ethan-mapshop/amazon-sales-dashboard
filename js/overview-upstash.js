@@ -2260,11 +2260,15 @@
     }
 
     // Flatten raw pages → one row per atomic charge/fee for the Detail CSV.
-    // v2024 Compare-to-Sheets. Same shape as showMonthlyUpstashSkuDiff but
-    // sources the right side from _fetchV2024Inputs + _deriveV2024Rows so
-    // deferred B2B Invoiced Orders are correctly included in the dollar
-    // totals. Renders via the same _renderSkuDiff helper, just with a
-    // different "Back to report" target.
+    // v2024 Compare-to-Sheets — line-item diff. Pulls the full Sheets-side
+    // statement (via loadOverviewData with returnStatement=true) AND the
+    // v2024-side statement (via _computeV2024Period), then renders one row
+    // per line in the financial statement: FBM Sales / FBA Sales / FBM
+    // Returns / FBM Transaction Fees / FBA Fees / etc. Each row shows
+    // Sheets net, v2024 net, and the diff. More useful than the old SKU
+    // diff for spotting which categories diverge — a SKU diff couldn't
+    // distinguish "$10k missing because of a fee miscategorization" from
+    // "$10k missing because of a sales miscategorization."
     async function showMonthlyV2024SkuDiff() {
       const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
       const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
@@ -2282,92 +2286,138 @@
       container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Comparing Sheets vs v2024 for ${startDate} → ${endDate}…</div>`;
 
       try {
-        const [sheetsInputs, v2024Inputs] = await Promise.all([
-          _fetchOverviewInputsFromSheets(),
-          _fetchV2024Inputs(startDate, endDate)
+        // Both sides return the same statement shape: { income: {<line>:
+        // {debit, credit}}, expenses: {<line>: {debit, credit}} }.
+        const [sheetsResult, v2024Period] = await Promise.all([
+          loadOverviewData(startDate, endDate, 'monthly-v2024-content', false, null, null, true),
+          _computeV2024Period(startDate, endDate)
         ]);
 
-        // Sheets aggregation — identical to the Upstash variant.
-        const sheetsRows = sheetsInputs.transactionsData.values || [];
-        const headers = sheetsRows[0] || [];
-        const idx = (needle) => headers.findIndex(h => String(h || '').toLowerCase() === needle);
-        const dateIdx        = headers.findIndex(h => String(h || '').toLowerCase().includes('date'));
-        const typeIdx        = idx('type');
-        const skuIdx         = idx('sku');
-        const fulfillmentIdx = idx('fulfillment');
-        const salesIdx       = idx('product sales');
-
-        const sheetsPerSku = Object.create(null);
-        for (let i = 1; i < sheetsRows.length; i++) {
-          const row = sheetsRows[i] || [];
-          const dateStr = String(row[dateIdx] || '').substring(0, 10);
-          if (!dateStr || dateStr < startDate || dateStr > endDate) continue;
-          const type = String(row[typeIdx] || '').trim();
-          const sku = _normalizeSku(row[skuIdx]);
-          if (!sku) continue;
-          const fulfillment = String(row[fulfillmentIdx] || '').trim();
-          const amount = parseFloat(row[salesIdx]) || 0;
-          let bucket = sheetsPerSku[sku];
-          if (!bucket) bucket = sheetsPerSku[sku] = { order: 0, refund: 0, fulfillment: '' };
-          if (type === 'Order')       bucket.order  += amount;
-          else if (type === 'Refund') bucket.refund += amount;
-          if (fulfillment && !bucket.fulfillment) bucket.fulfillment = fulfillment;
+        if (!sheetsResult || !sheetsResult.statement) {
+          container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Sheets statement could not be computed (no data, no token, or fetch failed). Try the v0 Monthly Profitability tab to confirm the Sheets path is working.</div>`;
+          return;
         }
 
-        // v2024 aggregation — sourced from listTransactions + dedup-aware
-        // derivation, so deferred B2B sales are included.
-        const { rows } = _deriveV2024Rows(v2024Inputs.transactions, startDate, endDate);
-        const v2024PerSku = Object.create(null);
-        for (const r of rows) {
-          if (!r.sku || (r.type !== 'Order' && r.type !== 'Refund')) continue;
-          let bucket = v2024PerSku[r.sku];
-          if (!bucket) bucket = v2024PerSku[r.sku] = { order: 0, refund: 0 };
-          if (r.type === 'Order') bucket.order  += r.sale;
-          else                     bucket.refund += r.sale;
-        }
-
-        const skus = new Set([...Object.keys(sheetsPerSku), ...Object.keys(v2024PerSku)]);
-        const diffs = [];
-        let sheetsTotal = 0, v2024Total = 0;
-        for (const sku of skus) {
-          const s = sheetsPerSku[sku] || { order: 0, refund: 0, fulfillment: '' };
-          const u = v2024PerSku[sku]  || { order: 0, refund: 0 };
-          const prod = v2024Inputs.products[sku];
-          let catalogFulfillment;
-          if (!prod) catalogFulfillment = '(not in catalog)';
-          else if (!String(prod.fulfillment || '').trim()) catalogFulfillment = '(blank)';
-          else catalogFulfillment = String(prod.fulfillment).trim();
-
-          sheetsTotal += s.order;
-          v2024Total  += u.order;
-          diffs.push({
-            sku,
-            sheetsOrder:  s.order,
-            upstashOrder: u.order,
-            orderDiff:    u.order - s.order,
-            sheetsRefund:  s.refund,
-            upstashRefund: u.refund,
-            sheetsFulfillment: s.fulfillment,
-            catalogFulfillment
-          });
-        }
-        diffs.sort((a, b) => Math.abs(b.orderDiff) - Math.abs(a.orderDiff));
-
-        // Reuse the Upstash renderer — its column header says "Upstash" but
-        // the user already knows this is the v2024 view; rather than fork
-        // the renderer, point its "Back" button to the v2024 generator.
-        _renderSkuDiff(container, {
+        _renderLineItemDiff(container, {
           startDate, endDate,
-          sheetsTotal, upstashTotal: v2024Total,
-          totalDiff: v2024Total - sheetsTotal,
-          diffs,
-          backLabel: 'generateMonthlyV2024Report()',
-          rightSideLabel: 'v2024'
+          sheetsStatement: sheetsResult.statement,
+          v2024Statement: v2024Period.statement
         });
       } catch (err) {
-        console.error('v2024 SKU diff failed:', err);
+        console.error('v2024 line-item diff failed:', err);
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
       }
+    }
+
+    // Renders side-by-side line items for two statements with the same
+    // shape. Income lines net = credit - debit (positive = revenue,
+    // negative = returns). Expense lines net = debit - credit (positive =
+    // cost, negative = refund/recovery). The diff column is v2024 − Sheets
+    // — positive = v2024 captured more, negative = Sheets captured more.
+    function _renderLineItemDiff(container, { startDate, endDate, sheetsStatement, v2024Statement }) {
+      const fmt = (n) => {
+        const abs = Math.abs(n);
+        const s = '$' + abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return n < 0 ? `(${s})` : s;
+      };
+      const diffColor = (n) =>
+        Math.abs(n) < 0.01 ? 'var(--text-secondary)'
+        : n > 0 ? 'var(--success, #1f9d55)'
+        : 'var(--error)';
+
+      // Net helper — sign convention matches extractProfitabilityMetrics
+      // so the totals line up with what the on-page report displays.
+      const lineNet = (line, section) => {
+        if (!line) return 0;
+        const credit = line.credit || 0;
+        const debit  = line.debit || 0;
+        return section === 'income' ? credit - debit : debit - credit;
+      };
+
+      // Same line order the rendered statement uses, so the diff reads
+      // top-to-bottom in the same sequence as the on-page report.
+      const INCOME_LINES = [
+        'FBM Sales', 'FBM Returns', 'FBM Other',
+        'FBA Sales', 'FBA Returns', 'FBA Other'
+      ];
+      const EXPENSE_LINES = [
+        'FBM Product Costs', 'FBM Transaction Fees', 'FBM Shipping Costs', 'FBM Ad Spend',
+        'FBA Product Costs', 'FBA Transaction Fees', 'FBA Fees',
+        'FBA Returns Fees',
+        'FBA Inbound Placement Fees', 'FBA Inbound Shipping Costs',
+        'FBA Inventory Storage Fees', 'FBA Inventory Adjustment', 'FBA Ad Spend',
+        'Other Expenses', 'Unallocated Ad Spend'
+      ];
+
+      const buildRow = (label, sheetsNet, v2024Net, opts = {}) => {
+        const diff = v2024Net - sheetsNet;
+        const indent = opts.indent || 0;
+        const bold = opts.bold ? 'font-weight: 700;' : '';
+        const rowBg = opts.bg ? ` background: ${opts.bg};` : '';
+        return `
+          <tr style="${bold}${rowBg}">
+            <td style="padding: 0.4rem 0.75rem; padding-left: ${0.75 + indent}rem; font-size: 0.85rem;">${_escape(label)}</td>
+            <td style="padding: 0.4rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(sheetsNet)}</td>
+            <td style="padding: 0.4rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(v2024Net)}</td>
+            <td style="padding: 0.4rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem; color: ${diffColor(diff)};">${fmt(diff)}</td>
+          </tr>
+        `;
+      };
+
+      const incomeRows = INCOME_LINES.map(line => {
+        const s = lineNet(sheetsStatement.income[line], 'income');
+        const v = lineNet(v2024Statement.income[line], 'income');
+        return buildRow(line, s, v);
+      }).join('');
+
+      const expenseRows = EXPENSE_LINES.map(line => {
+        const s = lineNet(sheetsStatement.expenses[line], 'expenses');
+        const v = lineNet(v2024Statement.expenses[line], 'expenses');
+        return buildRow(line, s, v);
+      }).join('');
+
+      const totalIncomeSheets = INCOME_LINES.reduce((a, line) => a + lineNet(sheetsStatement.income[line], 'income'), 0);
+      const totalIncomeV2024  = INCOME_LINES.reduce((a, line) => a + lineNet(v2024Statement.income[line], 'income'), 0);
+      const totalExpenseSheets = EXPENSE_LINES.reduce((a, line) => a + lineNet(sheetsStatement.expenses[line], 'expenses'), 0);
+      const totalExpenseV2024  = EXPENSE_LINES.reduce((a, line) => a + lineNet(v2024Statement.expenses[line], 'expenses'), 0);
+      const netSheets = totalIncomeSheets - totalExpenseSheets;
+      const netV2024  = totalIncomeV2024  - totalExpenseV2024;
+
+      const thStyle = 'text-align: left; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem; position: sticky; top: 0;';
+      const thRight = thStyle.replace('text-align: left', 'text-align: right');
+      const sectionHeaderStyle = 'padding: 0.6rem 0.75rem; background: var(--bg-secondary); font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em;';
+
+      container.innerHTML = `
+        <div style="margin-bottom: 1rem;">
+          <button class="btn btn-secondary" onclick="generateMonthlyV2024Report()" style="padding: 0.5rem 1rem;">← Back to report</button>
+        </div>
+        <div style="margin-bottom: 1rem; font-weight: 600;">
+          Line-item Sheets vs v2024 comparison · ${startDate} → ${endDate}
+        </div>
+        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">
+          Sign convention matches the rendered report: income lines = credit − debit (positive is revenue), expense lines = debit − credit (positive is cost). Diff column is v2024 − Sheets — green means v2024 captured more, red means Sheets captured more.
+        </div>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th style="${thStyle}">Line</th>
+              <th style="${thRight}">Sheets</th>
+              <th style="${thRight}">v2024</th>
+              <th style="${thRight}">Diff (v2024 − Sheets)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="4" style="${sectionHeaderStyle}">Income</td></tr>
+            ${incomeRows}
+            ${buildRow('Total Income', totalIncomeSheets, totalIncomeV2024, { bold: true, bg: 'var(--bg-secondary)' })}
+            <tr><td colspan="4" style="${sectionHeaderStyle}">Expenses</td></tr>
+            ${expenseRows}
+            ${buildRow('Total Expenses', totalExpenseSheets, totalExpenseV2024, { bold: true, bg: 'var(--bg-secondary)' })}
+            <tr><td colspan="4" style="${sectionHeaderStyle}">Net</td></tr>
+            ${buildRow('Net (Income − Expenses)', netSheets, netV2024, { bold: true, bg: 'var(--bg-card)' })}
+          </tbody>
+        </table>
+      `;
     }
 
     async function exportMonthlyV2024CSV() {
