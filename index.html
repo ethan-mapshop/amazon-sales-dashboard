@@ -23,7 +23,6 @@
     <a class="nav-item" onclick="showPage('salesvolume')">Sales &amp; Volume</a>
     <a class="nav-item active" onclick="showPage('overview')">Profitability Overview</a>
     <a class="nav-item" onclick="showPage('brandproduct')">Brand &amp; Product</a>
-    <a class="nav-item" onclick="showPage('charts')">Charts</a>
     <a class="nav-item" onclick="showPage('listing')">Listing Optimization</a>
 
     <div class="nav-group-label">Tools</div>
@@ -601,6 +600,9 @@
             <button id="ytd-v2024-tab" class="tab" onclick="showYTDV2024()">
               Year-to-Date Profitability
             </button>
+            <button id="charts-v2024-tab" class="tab" onclick="showChartsV2024()">
+              Charts
+            </button>
           </div>
         </div>
 
@@ -659,6 +661,71 @@
             <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
               <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
               <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts View (12-month rolling) -->
+        <div id="charts-v2024-view" style="display: none;">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <span style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">12-Month Rolling Trends</span>
+              <button class="btn btn-secondary" onclick="refreshV2024Charts()" style="padding: 0.5rem 1rem; margin-left: auto;" title="Re-fetch transactions, products, mappings, and ad spend; clear the cached statement.">↻ Refresh</button>
+            </div>
+          </div>
+
+          <div id="charts-v2024-content">
+            <!-- Overall -->
+            <div style="margin-bottom: 3rem;">
+              <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">Overall Performance</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
+                <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+                  <h4 style="margin-bottom: 1rem;">Revenue Trend (12 Months)</h4>
+                  <canvas id="v2024-revenue-chart"></canvas>
+                </div>
+                <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+                  <h4 style="margin-bottom: 1rem;">Profitability Trend (12 Months)</h4>
+                  <canvas id="v2024-profit-chart"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <!-- Channel -->
+            <div style="margin-bottom: 3rem;">
+              <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">By Channel (FBM vs FBA)</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
+                <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+                  <h4 style="margin-bottom: 1rem;">Revenue by Channel</h4>
+                  <canvas id="v2024-revenue-channel-chart"></canvas>
+                </div>
+                <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+                  <h4 style="margin-bottom: 1rem;">Profit by Channel</h4>
+                  <canvas id="v2024-profit-channel-chart"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <!-- Brand -->
+            <div style="margin-bottom: 3rem;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;">
+                <h3 style="color: var(--text-primary); margin: 0;">By Brand</h3>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <label style="font-size: 0.9rem; color: var(--text-secondary);">Filter:</label>
+                  <select id="v2024-brand-chart-filter" onchange="updateV2024BrandCharts()" style="padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font-size: 0.9rem; width: 220px;">
+                    <option value="all">All Brands</option>
+                  </select>
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
+                <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+                  <h4 style="margin-bottom: 1rem;">Revenue by Brand</h4>
+                  <canvas id="v2024-revenue-brand-chart"></canvas>
+                </div>
+                <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
+                  <h4 style="margin-bottom: 1rem;">Profit by Brand</h4>
+                  <canvas id="v2024-profit-brand-chart"></canvas>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -736,71 +803,6 @@
             <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
               <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
               <div style="font-size: 1.125rem;">Select a month and year to view brand & product profitability</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- CHARTS PAGE -->
-    <div id="charts-page" class="page">
-      <div class="card">
-        <h2 class="section-title">Performance Charts</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 2rem;">12-month rolling trends</p>
-        
-        <!-- Overall Charts -->
-        <div style="margin-bottom: 3rem;">
-          <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">Overall Performance</h3>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
-            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
-              <h4 style="margin-bottom: 1rem;">Revenue Trend (12 Months)</h4>
-              <canvas id="revenueChart"></canvas>
-            </div>
-            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
-              <h4 style="margin-bottom: 1rem;">Profitability Trend (12 Months)</h4>
-              <canvas id="profitChart"></canvas>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Channel Breakdown -->
-        <div style="margin-bottom: 3rem;">
-          <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">By Channel (FBM vs FBA)</h3>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
-            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
-              <h4 style="margin-bottom: 1rem;">Revenue by Channel</h4>
-              <canvas id="revenueChannelChart"></canvas>
-            </div>
-            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
-              <h4 style="margin-bottom: 1rem;">Profit by Channel</h4>
-              <canvas id="profitChannelChart"></canvas>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Brand Breakdown -->
-        <div style="margin-bottom: 3rem;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;">
-            <h3 style="color: var(--text-primary); margin: 0;">By Brand</h3>
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <label style="font-size: 0.9rem; color: var(--text-secondary);">Filter:</label>
-              <select id="brand-chart-filter" onchange="updateBrandCharts()" style="padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font-size: 0.9rem; width: 200px;">
-                <option value="all">All Brands</option>
-                <option value="BrightWay Educational">BrightWay Educational</option>
-                <option value="Hubbard Scientific">Hubbard Scientific</option>
-                <option value="South of Kings">South of Kings</option>
-                <option value="MapShop State Maps">MapShop State Maps</option>
-              </select>
-            </div>
-          </div>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 2rem;">
-            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
-              <h4 style="margin-bottom: 1rem;">Revenue by Brand</h4>
-              <canvas id="revenueBrandChart"></canvas>
-            </div>
-            <div style="background: var(--bg-secondary); padding: 1.5rem; border-radius: 8px;">
-              <h4 style="margin-bottom: 1rem;">Profit by Brand</h4>
-              <canvas id="profitBrandChart"></canvas>
             </div>
           </div>
         </div>
@@ -1521,7 +1523,6 @@
   <script src="js/upload.js"></script>
   <script src="js/mappings.js"></script>
   <script src="js/brand-product.js"></script>
-  <script src="js/charts.js"></script>
   <script src="js/catalog.js"></script>
   <script src="js/overview-upstash.js"></script>
   <script src="js/credentials.js"></script>

@@ -139,7 +139,7 @@
 
 
     function _hideAllOverviewViews() {
-      ['monthly-v2024-view', 'ytd-v2024-view']
+      ['monthly-v2024-view', 'ytd-v2024-view', 'charts-v2024-view']
         .forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -767,6 +767,369 @@
         container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
       }
     }
+
+    // ─── CHARTS v2024 ───────────────────────────────────────────────────
+    //
+    // 12-month rolling trend charts sourced from the same v2024 Upstash
+    // pipeline that powers the Monthly / YTD profitability statements.
+    // One fetch covers the whole window (12 months + 6-month dedup
+    // lookback); we then derive rows per month locally so the six charts
+    // stay consistent with what the tables show.
+    //
+    // Six charts: overall revenue, overall profit, revenue by channel
+    // (FBM/FBA), profit by channel, revenue by brand, profit by brand.
+    let _chartsV2024AutoLoaded = false;
+    let _chartsV2024Instances = {};
+    let _chartsV2024MonthlyData = null; // cached so the brand filter
+                                        // doesn't re-fetch on every change
+
+    function showChartsV2024() {
+      _hideAllOverviewViews();
+      document.getElementById('charts-v2024-view').style.display = 'block';
+      document.getElementById('charts-v2024-tab').classList.add('active');
+      _ensureV2024Months().then(_updateOverviewDataLabels);
+      _ensureAdSpendMonths().then(_updateOverviewDataLabels);
+      if (!_chartsV2024AutoLoaded && accessToken) {
+        _chartsV2024AutoLoaded = true;
+        _loadV2024Charts();
+      }
+    }
+    window.showChartsV2024 = showChartsV2024;
+
+    function refreshV2024Charts() {
+      _chartsV2024MonthlyData = null;
+      _loadV2024Charts();
+    }
+    window.refreshV2024Charts = refreshV2024Charts;
+
+    // 12-month rolling window ending at the last complete month. Returns
+    // [{ label, year, month, startDate, endDate }, ...] in chronological
+    // order — same shape the original Sheets-backed loadChartsData built.
+    function _build12MonthWindow() {
+      const today = new Date();
+      const lastComplete = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const start = new Date(lastComplete);
+      start.setMonth(start.getMonth() - 11);
+      const out = [];
+      const cur = new Date(start);
+      while (cur <= lastComplete) {
+        const y = cur.getFullYear();
+        const m = cur.getMonth();
+        const lastDay = new Date(y, m + 1, 0).getDate();
+        out.push({
+          label: cur.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          year: y,
+          month: m,
+          startDate: `${y}-${String(m + 1).padStart(2, '0')}-01`,
+          endDate:   `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+        });
+        cur.setMonth(cur.getMonth() + 1);
+      }
+      return out;
+    }
+
+    async function _loadV2024Charts() {
+      const container = document.getElementById('charts-v2024-content');
+      if (!container) return;
+      if (!accessToken) {
+        container.style.opacity = '0.4';
+        return;
+      }
+      // Soft loading state — dim the charts while we work but keep the
+      // existing rendering in place so a refresh doesn't flash empty.
+      container.style.opacity = '0.5';
+
+      try {
+        const months = _build12MonthWindow();
+        const fullStart = months[0].startDate;
+        const fullEnd   = months[months.length - 1].endDate;
+
+        // One fetch covers 12 months + 6-month lookback (handled inside
+        // _fetchV2024Inputs). Way cheaper than 12 separate Period calls.
+        const inputs = await _fetchV2024Inputs(fullStart, fullEnd);
+
+        const monthlyData = months.map(m => {
+          const { rows } = _deriveV2024Rows(
+            inputs.transactions, m.startDate, m.endDate, inputs.feeMappings || {}
+          );
+          const skuSales = _buildSkuSales(rows, inputs.products);
+          const adSpend = _allocateAdSpend({
+            spAdRows: inputs.spAdRows,
+            sbAdRows: inputs.sbAdRows,
+            products: inputs.products,
+            brandToSkus: inputs.brandToSkus,
+            productCampaignToSkus: inputs.productCampaignToSkus,
+            brandCampaignToBrand: inputs.brandCampaignToBrand,
+            skuSales,
+            startDate: m.startDate,
+            endDate: m.endDate
+          });
+          const shippingCosts = _sumShippingInRange(inputs.shippingRows, m.startDate, m.endDate);
+          const { statement } = _buildStatement(
+            rows, inputs.products, adSpend, shippingCosts, inputs.feeMappings || {}
+          );
+          const metrics = extractProfitabilityMetrics(statement);
+          const byBrand = _computeBrandTotalsForMonth(rows, inputs, m.startDate, m.endDate);
+          return { ...m, metrics, byBrand };
+        });
+
+        _chartsV2024MonthlyData = monthlyData;
+        _populateV2024BrandFilter(monthlyData);
+        _renderV2024Charts(monthlyData);
+      } catch (err) {
+        console.error('v2024 charts load failed:', err);
+        // Keep stale charts visible; an inline message at the top tells
+        // the user to refresh. No popup per project preference.
+        const note = document.createElement('div');
+        note.style.cssText = 'padding: 1rem; color: var(--error); margin-bottom: 1rem;';
+        note.textContent = `Charts load failed: ${err.message}`;
+        container.prepend(note);
+      } finally {
+        container.style.opacity = '1';
+      }
+    }
+
+    // Per-brand income + profit for a single month. Walks rows once,
+    // attributes Order/Refund principal + fees + product costs to the
+    // brand whose SKU set contains the row's SKU, then layers ad spend
+    // on top: SB campaign → brand directly, SP campaign → brand if all
+    // mapped SKUs belong to the same brand (proportional split if not).
+    function _computeBrandTotalsForMonth(rows, inputs, startDate, endDate) {
+      const brandToSkus = inputs.brandToSkus || {};
+      const brands = Object.keys(brandToSkus);
+
+      const skuToBrand = {};
+      for (const [brand, skus] of Object.entries(brandToSkus)) {
+        for (const sku of skus) skuToBrand[sku] = brand;
+      }
+
+      const totals = {};
+      for (const b of brands) totals[b] = { income: 0, opex: 0, productCosts: 0, adSpend: 0 };
+
+      // Walk rows
+      for (const r of rows) {
+        const brand = r.sku && skuToBrand[r.sku];
+        if (!brand || !totals[brand]) continue;
+        // Order/Refund: principal + other charges + promotions are income
+        // (signs already preserved in row). FBA/transaction fees go to
+        // opex (abs of negatives).
+        if (r.type === 'Order' || r.type === 'Refund') {
+          const income = (r.sale || 0) + (r.otherCharges || 0) + (r.promotions || 0);
+          const fees   = Math.abs(r.fbaFees || 0) + Math.abs(r.transactionFees || 0);
+          totals[brand].income += income;
+          totals[brand].opex   += fees;
+          const prod = inputs.products[r.sku];
+          const cost = prod ? (Number(prod.cost) || 0) : 0;
+          totals[brand].productCosts += cost * Math.abs(r.quantity || 1);
+        }
+      }
+
+      // Ad spend allocation (date-windowed). SB rows attribute by
+      // campaign→brand; SP rows attribute by SKU when present, else by
+      // campaign mapping, splitting across brands if a campaign spans
+      // multiple brands' SKUs.
+      const inWindow = (d) => d && d >= startDate && d <= endDate;
+
+      for (const ad of (inputs.sbAdRows || [])) {
+        if (!inWindow(ad.date)) continue;
+        const b = inputs.brandCampaignToBrand?.[ad.campaign];
+        if (b && totals[b]) totals[b].adSpend += Number(ad.cost) || 0;
+      }
+
+      for (const ad of (inputs.spAdRows || [])) {
+        if (!inWindow(ad.date)) continue;
+        const cost = Number(ad.cost) || 0;
+        if (cost <= 0) continue;
+        if (ad.sku && skuToBrand[ad.sku]) {
+          totals[skuToBrand[ad.sku]].adSpend += cost;
+          continue;
+        }
+        const skus = inputs.productCampaignToSkus?.[ad.campaign] || [];
+        if (skus.length === 0) continue;
+        const brandHits = {};
+        for (const s of skus) {
+          const b = skuToBrand[s];
+          if (b) brandHits[b] = (brandHits[b] || 0) + 1;
+        }
+        const hitBrands = Object.keys(brandHits);
+        if (hitBrands.length === 0) continue;
+        const totalHits = hitBrands.reduce((sum, b) => sum + brandHits[b], 0);
+        for (const b of hitBrands) {
+          if (totals[b]) totals[b].adSpend += cost * (brandHits[b] / totalHits);
+        }
+      }
+
+      const out = {};
+      for (const b of brands) {
+        const t = totals[b];
+        out[b] = {
+          income: t.income,
+          profit: t.income - t.opex - t.productCosts - t.adSpend
+        };
+      }
+      return out;
+    }
+
+    function _populateV2024BrandFilter(monthlyData) {
+      const sel = document.getElementById('v2024-brand-chart-filter');
+      if (!sel) return;
+      const cur = sel.value || 'all';
+      // Brands seen anywhere in the 12-month window; sorted alpha for
+      // stable ordering. Drops brands that never had income or profit.
+      const brandSet = new Set();
+      for (const m of monthlyData) {
+        for (const [b, t] of Object.entries(m.byBrand || {})) {
+          if ((t.income || 0) !== 0 || (t.profit || 0) !== 0) brandSet.add(b);
+        }
+      }
+      const brands = [...brandSet].sort();
+      sel.innerHTML = '<option value="all">All Brands</option>' +
+        brands.map(b => `<option value="${_escape(b)}">${_escape(b)}</option>`).join('');
+      sel.value = brandSet.has(cur) || cur === 'all' ? cur : 'all';
+    }
+
+    // Brand color palette — extends if there are more brands than
+    // entries by cycling through. Order roughly matches the original
+    // Sheets-backed charts so a returning user sees similar colors per
+    // brand.
+    const _V2024_BRAND_COLORS = [
+      '#10b981', '#3b82f6', '#f59e0b', '#ec4899',
+      '#8b5cf6', '#14b8a6', '#ef4444', '#84cc16'
+    ];
+
+    function _renderV2024Charts(monthlyData) {
+      const labels = monthlyData.map(m => m.label);
+      Object.values(_chartsV2024Instances).forEach(c => { try { c.destroy(); } catch {} });
+      _chartsV2024Instances = {};
+
+      const $ = (id) => document.getElementById(id);
+      const moneyTicks = {
+        callback: (v) => '$' + Number(v).toLocaleString()
+      };
+
+      // Overall revenue
+      _chartsV2024Instances.revenue = new Chart($('v2024-revenue-chart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Revenue',
+            data: monthlyData.map(m => m.metrics?.total?.income || 0),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: moneyTicks } } }
+      });
+
+      // Overall profit
+      _chartsV2024Instances.profit = new Chart($('v2024-profit-chart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Profit',
+            data: monthlyData.map(m => m.metrics?.total?.profit || 0),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: moneyTicks } } }
+      });
+
+      // Revenue by channel
+      _chartsV2024Instances.revenueChannel = new Chart($('v2024-revenue-channel-chart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'FBM', data: monthlyData.map(m => m.metrics?.fbm?.income || 0),
+              borderColor: '#60a5fa', backgroundColor: 'rgba(96, 165, 250, 0.1)', tension: 0.4 },
+            { label: 'FBA', data: monthlyData.map(m => m.metrics?.fba?.income || 0),
+              borderColor: '#f97316', backgroundColor: 'rgba(249, 115, 22, 0.1)', tension: 0.4 }
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: true,
+          scales: { y: { beginAtZero: true, ticks: moneyTicks } } }
+      });
+
+      // Profit by channel
+      _chartsV2024Instances.profitChannel = new Chart($('v2024-profit-channel-chart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'FBM', data: monthlyData.map(m => m.metrics?.fbm?.profit || 0),
+              borderColor: '#60a5fa', backgroundColor: 'rgba(96, 165, 250, 0.1)', tension: 0.4 },
+            { label: 'FBA', data: monthlyData.map(m => m.metrics?.fba?.profit || 0),
+              borderColor: '#f97316', backgroundColor: 'rgba(249, 115, 22, 0.1)', tension: 0.4 }
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: true,
+          scales: { y: { beginAtZero: true, ticks: moneyTicks } } }
+      });
+
+      _renderV2024BrandCharts(monthlyData);
+    }
+
+    function _renderV2024BrandCharts(monthlyData) {
+      const labels = monthlyData.map(m => m.label);
+      const filter = document.getElementById('v2024-brand-chart-filter')?.value || 'all';
+      // Pull the brand list from monthlyData (whatever brands ended up
+      // in byBrand for any month) so it matches the dropdown.
+      const allBrands = new Set();
+      for (const m of monthlyData) {
+        for (const b of Object.keys(m.byBrand || {})) allBrands.add(b);
+      }
+      const brands = filter === 'all' ? [...allBrands].sort() : [filter];
+
+      const datasetsFor = (key) => brands.map((brandName, idx) => ({
+        label: brandName,
+        data: monthlyData.map(m => m.byBrand?.[brandName]?.[key] || 0),
+        borderColor: _V2024_BRAND_COLORS[idx % _V2024_BRAND_COLORS.length],
+        tension: 0.4
+      }));
+
+      const moneyTicks = { callback: (v) => '$' + Number(v).toLocaleString() };
+      const legendOpts = {
+        display: brands.length > 1,
+        position: 'top',
+        labels: { boxWidth: 12, padding: 15, font: { size: 11 } }
+      };
+
+      if (_chartsV2024Instances.revenueBrand) try { _chartsV2024Instances.revenueBrand.destroy(); } catch {}
+      if (_chartsV2024Instances.profitBrand)  try { _chartsV2024Instances.profitBrand.destroy(); }  catch {}
+
+      _chartsV2024Instances.revenueBrand = new Chart(document.getElementById('v2024-revenue-brand-chart'), {
+        type: 'line',
+        data: { labels, datasets: datasetsFor('income') },
+        options: { responsive: true, maintainAspectRatio: true,
+          plugins: { legend: legendOpts },
+          scales: { y: { beginAtZero: true, ticks: moneyTicks } } }
+      });
+
+      _chartsV2024Instances.profitBrand = new Chart(document.getElementById('v2024-profit-brand-chart'), {
+        type: 'line',
+        data: { labels, datasets: datasetsFor('profit') },
+        options: { responsive: true, maintainAspectRatio: true,
+          plugins: { legend: legendOpts },
+          scales: { y: { beginAtZero: true, ticks: moneyTicks } } }
+      });
+    }
+
+    function updateV2024BrandCharts() {
+      if (!_chartsV2024MonthlyData) return;
+      _renderV2024BrandCharts(_chartsV2024MonthlyData);
+    }
+    window.updateV2024BrandCharts = updateV2024BrandCharts;
 
     // Renders the financial statement plus any unmapped-data warnings.
     // The status strip (data-through / last-synced / dedup counters) was

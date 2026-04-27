@@ -129,10 +129,6 @@
         }
       }
       
-      if (pageName === 'charts' && accessToken) {
-        loadChartsData(); // Load chart data
-      }
-      
       if (pageName === 'salesvolume' && accessToken) {
         loadSalesVolumeData();
       }
