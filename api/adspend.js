@@ -274,11 +274,61 @@ async function handleGetMonths(req, res) {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
 
-    const [spIndex, sbIndex] = await Promise.all([
+    const [spIndex, sbIndex, spLatestMap, sbLatestMap] = await Promise.all([
       kv.get('adspend:sp:index'),
-      kv.get('adspend:sb:index')
+      kv.get('adspend:sb:index'),
+      kv.get('adspend:sp:latest-posted'),
+      kv.get('adspend:sb:latest-posted')
     ]);
-    return res.status(200).json({ success: true, sp: spIndex || [], sb: sbIndex || [] });
+
+    const sp = Array.isArray(spIndex) ? spIndex : [];
+    const sb = Array.isArray(sbIndex) ? sbIndex : [];
+
+    // Lazy backfill: the most recent month for each type may pre-date
+    // the latest-posted-by-month dictionary. Scan that month's rows
+    // once if missing so the overview "Most Recent Ad Spend Data" label
+    // still shows the actual latest date (e.g. 3/31/26) rather than
+    // being blank for users who haven't re-synced since this code
+    // shipped.
+    const sanitize = (v) => (v && typeof v === 'object') ? { ...v } : {};
+    const spMap = sanitize(spLatestMap);
+    const sbMap = sanitize(sbLatestMap);
+
+    async function backfill(type, months, map, mapKey) {
+      if (months.length === 0) return;
+      const latestMonth = months[months.length - 1];
+      if (map[latestMonth]) return;
+      const stored = await kv.get(`adspend:${type}:raw:${latestMonth}`);
+      const rows = (stored && Array.isArray(stored.rows)) ? stored.rows : [];
+      let monthLatest = null;
+      for (const r of rows) {
+        const d = r?.date;
+        if (d && (!monthLatest || d > monthLatest)) monthLatest = d;
+      }
+      if (monthLatest) {
+        map[latestMonth] = monthLatest;
+        await kv.set(mapKey, map);
+      }
+    }
+    await Promise.all([
+      backfill('sp', sp, spMap, 'adspend:sp:latest-posted'),
+      backfill('sb', sb, sbMap, 'adspend:sb:latest-posted')
+    ]);
+
+    // Global latest across both ad-product types.
+    let latestPostedDate = null;
+    for (const v of [...Object.values(spMap), ...Object.values(sbMap)]) {
+      if (v && (!latestPostedDate || v > latestPostedDate)) latestPostedDate = v;
+    }
+
+    return res.status(200).json({
+      success: true,
+      sp,
+      sb,
+      latestPostedDate,
+      spLatestPostedByMonth: spMap,
+      sbLatestPostedByMonth: sbMap
+    });
   } catch (error) {
     return res.status(500).json({ error: 'Failed: ' + error.message });
   }
@@ -582,6 +632,21 @@ async function storeMonthly(type, month, rows) {
     index.push(month);
     index.sort();
     await kv.set(`adspend:${type}:index`, index);
+  }
+
+  // Track the latest daily date in this month's rows so the overview
+  // page can render "Most Recent Ad Spend Data: 3/31/26" without
+  // scanning every blob. Stored as a single dictionary key per type
+  // keyed by YYYY-MM.
+  let monthLatest = null;
+  for (const r of rows) {
+    const d = r?.date;
+    if (d && (!monthLatest || d > monthLatest)) monthLatest = d;
+  }
+  if (monthLatest) {
+    const map = (await kv.get(`adspend:${type}:latest-posted`)) || {};
+    map[month] = monthLatest;
+    await kv.set(`adspend:${type}:latest-posted`, map);
   }
 }
 

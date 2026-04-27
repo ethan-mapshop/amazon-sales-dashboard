@@ -121,12 +121,21 @@
     // has no synced v2024 data yet.
     let _v2024MonthsSet = null;
     let _v2024MonthsPromise = null;
+    // Captured from get-months-v2024 alongside the months index. ISO
+    // string (e.g. "2026-03-31T12:34:56Z") of the absolute latest
+    // postedDate across all synced months — drives the "Most Recent
+    // Transaction Data" label at the top of the Overview page.
+    let _v2024LatestPostedDate = null;
 
     // Same pattern for the Sponsored-Products and Sponsored-Brands ad
     // spend months index — used to populate the "Most Recent Ad Spend
     // Data" label at the top of the page. Lazy-loaded.
     let _adSpendMonthsSet = null;
     let _adSpendMonthsPromise = null;
+    // Captured from /api/adspend?action=get-months alongside the
+    // sp/sb indexes. YYYY-MM-DD string of the latest daily date in
+    // synced ad-spend rows.
+    let _adSpendLatestPostedDate = null;
 
 
     function _hideAllOverviewViews() {
@@ -239,6 +248,12 @@
           if (!res.ok) return null;
           const data = await res.json();
           _v2024MonthsSet = new Set(Array.isArray(data.months) ? data.months : []);
+          // latestPostedDate is the absolute latest postedDate across
+          // all synced months, computed server-side. May be null on
+          // first call against pre-existing data; the server lazily
+          // backfills the most recent month so subsequent calls return
+          // a value.
+          _v2024LatestPostedDate = data.latestPostedDate || null;
           return _v2024MonthsSet;
         } catch {
           return null;
@@ -251,21 +266,23 @@
 
     // Lazy-loads the union of synced Sponsored-Products and Sponsored-Brands
     // ad-spend month buckets. Used to populate the page-level "Most Recent
-    // Ad Spend Data" label.
+    // Ad Spend Data" label. The /api/adspend?action=get-months endpoint
+    // returns { sp: [...], sb: [...], latestPostedDate } in a single call.
     async function _ensureAdSpendMonths() {
       if (_adSpendMonthsSet) return _adSpendMonthsSet;
       if (_adSpendMonthsPromise) return _adSpendMonthsPromise;
       if (!accessToken) return null;
       _adSpendMonthsPromise = (async () => {
         try {
-          const headers = { Authorization: `Bearer ${accessToken}` };
-          const [spRes, sbRes] = await Promise.all([
-            fetch('/api/adspend?action=get-months&type=sp', { headers }),
-            fetch('/api/adspend?action=get-months&type=sb', { headers })
-          ]);
-          const spMonths = spRes.ok ? ((await spRes.json()).months || []) : [];
-          const sbMonths = sbRes.ok ? ((await sbRes.json()).months || []) : [];
+          const res = await fetch('/api/adspend?action=get-months', {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          const spMonths = Array.isArray(data.sp) ? data.sp : [];
+          const sbMonths = Array.isArray(data.sb) ? data.sb : [];
           _adSpendMonthsSet = new Set([...spMonths, ...sbMonths]);
+          _adSpendLatestPostedDate = data.latestPostedDate || null;
           return _adSpendMonthsSet;
         } catch {
           return null;
@@ -278,22 +295,34 @@
 
     // Updates the page-level "Most Recent Transaction Data" / "Most Recent
     // Ad Spend Data" labels at the top of the Profitability Overview. Uses
-    // the OVERALL latest synced month (not just the months in the current
-    // view's range) so the labels reflect data freshness regardless of
-    // which tab/period the user is currently looking at.
+    // the absolute latest postedDate (across all synced data, not just
+    // the currently-viewed range) formatted as M/D/YY — e.g. "3/31/26".
     function _updateOverviewDataLabels() {
       const txEl = document.getElementById('overview-latest-transaction');
       const adEl = document.getElementById('overview-latest-adspend');
       if (txEl) {
-        const latest = (_v2024MonthsSet && _v2024MonthsSet.size > 0)
-          ? [..._v2024MonthsSet].sort().pop() : null;
-        txEl.textContent = latest ? _formatYYYYMM(latest) : '—';
+        txEl.textContent = _v2024LatestPostedDate
+          ? _formatMDY(_v2024LatestPostedDate) : '—';
       }
       if (adEl) {
-        const latest = (_adSpendMonthsSet && _adSpendMonthsSet.size > 0)
-          ? [..._adSpendMonthsSet].sort().pop() : null;
-        adEl.textContent = latest ? _formatYYYYMM(latest) : '—';
+        adEl.textContent = _adSpendLatestPostedDate
+          ? _formatMDY(_adSpendLatestPostedDate) : '—';
       }
+    }
+
+    // ISO date or "YYYY-MM-DD" → "M/D/YY" (e.g. "2026-03-31T..." → "3/31/26").
+    // Parses the date components literally — no timezone shifting — so a
+    // postedDate that's stored as 2026-03-31 doesn't become 3/30/26 in
+    // the user's local zone.
+    function _formatMDY(dateStr) {
+      if (!dateStr) return '—';
+      const ymd = String(dateStr).slice(0, 10);
+      const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return dateStr;
+      const yy = m[1].slice(2);
+      const mm = String(parseInt(m[2], 10));
+      const dd = String(parseInt(m[3], 10));
+      return `${mm}/${dd}/${yy}`;
     }
 
     function _v2024HasMonth(year, month) {
@@ -1676,8 +1705,10 @@
       if (window._overviewReportCache) window._overviewReportCache.clear();
       _v2024MonthsSet = null;
       _v2024MonthsPromise = null;
+      _v2024LatestPostedDate = null;
       _adSpendMonthsSet = null;
       _adSpendMonthsPromise = null;
+      _adSpendLatestPostedDate = null;
       await Promise.all([_ensureV2024Months(), _ensureAdSpendMonths()]);
       _populateV2024YearDropdowns();
       _refreshV2024NavButtons();

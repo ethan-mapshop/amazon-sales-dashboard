@@ -27,9 +27,21 @@ import { kv } from '@vercel/kv';
 //   transactions:last-synced:YYYY-MM → ISO timestamp
 //
 // KV layout — v2024 (parallel during migration, replaces v0 after cutover):
-//   transactions:v2024:raw:YYYY-MM         → { transactions: [<Transaction>, ...] }
+//   transactions:v2024:raw:YYYY-MM         → { chunkCount: N, totalCount: M }
+//                                            (legacy: { transactions: [...] })
+//   transactions:v2024:raw:YYYY-MM:pK      → { transactions: [<Transaction>, ...] }
+//                                            (chunked storage; K = 0..N-1)
 //   transactions:v2024:index               → ['YYYY-MM', ...]
 //   transactions:v2024:last-synced:YYYY-MM → ISO timestamp
+//   transactions:v2024:latest-posted       → { 'YYYY-MM': 'YYYY-MM-DDTHH:MM:SSZ', ... }
+//
+// Chunked storage: Upstash imposes a 10 MB per-request size limit on KV
+// writes. A single month's transactions can exceed that (notably 2025-08
+// at 3,300+ transactions / >10 MB JSON). handleSyncV2024 splits the
+// transactions array into chunks targeting ~8 MB serialized each, writes
+// them to per-chunk keys, and stores a metadata record at the legacy
+// path. handleGetV2024 / handleGetRangeV2024 transparently read either
+// shape so months synced before chunking still work.
 //
 // The derivation into report-ready rows happens client-side in
 // overview-upstash.js so mapping changes don't require a re-sync.
@@ -112,24 +124,117 @@ async function handleSyncV2024(req, res) {
     const { start, end } = monthBounds(month);
     const { transactions, pageCount } = await fetchListTransactions(start, end);
 
-    await kv.set(`transactions:v2024:raw:${month}`, { transactions });
+    // Chunk to stay under Upstash's 10 MB per-request limit. Each chunk
+    // serializes to roughly the target size; if a single transaction
+    // somehow exceeds the target the chunk holds just that one record.
+    const chunks = chunkTransactions(transactions, V2024_CHUNK_TARGET_BYTES);
+
+    // Wipe stale chunks from a previous sync that produced more chunks
+    // than this one (otherwise old tail chunks would linger and double-
+    // count on read). We don't know the previous chunkCount cheaply so
+    // we delete the standard range we'd ever have written.
+    const prevMeta = await kv.get(`transactions:v2024:raw:${month}`);
+    const prevChunkCount = (prevMeta && Number.isFinite(prevMeta.chunkCount))
+      ? prevMeta.chunkCount : 0;
+    const wipeUpTo = Math.max(prevChunkCount, chunks.length);
+    for (let k = chunks.length; k < wipeUpTo; k++) {
+      await kv.del(`transactions:v2024:raw:${month}:p${k}`);
+    }
+
+    // Write chunks first, then the metadata pointer last — so a partial
+    // failure leaves the prior month's data intact rather than half-
+    // overwriting it.
+    for (let k = 0; k < chunks.length; k++) {
+      await kv.set(`transactions:v2024:raw:${month}:p${k}`, { transactions: chunks[k] });
+    }
+    await kv.set(`transactions:v2024:raw:${month}`, {
+      chunkCount: chunks.length,
+      totalCount: transactions.length
+    });
+
     const index = (await kv.get('transactions:v2024:index')) || [];
     const updatedIndex = [...new Set([...index, month])].sort();
     await kv.set('transactions:v2024:index', updatedIndex);
     await kv.set(`transactions:v2024:last-synced:${month}`, new Date().toISOString());
 
-    console.log(`[TRANSACTIONS SYNC v2024] ${month}: pages=${pageCount} transactions=${transactions.length}`);
+    // Track the absolute latest postedDate for this month so the
+    // overview page can render "Most Recent Transaction Data: 3/31/26"
+    // without scanning every blob.
+    const monthLatest = transactions.reduce((acc, t) => {
+      const d = t?.postedDate;
+      return (d && (!acc || d > acc)) ? d : acc;
+    }, null);
+    if (monthLatest) {
+      const map = (await kv.get('transactions:v2024:latest-posted')) || {};
+      map[month] = monthLatest;
+      await kv.set('transactions:v2024:latest-posted', map);
+    }
+
+    console.log(`[TRANSACTIONS SYNC v2024] ${month}: pages=${pageCount} transactions=${transactions.length} chunks=${chunks.length}`);
     return res.status(200).json({
       success: true,
       month,
       pageCount,
       transactionCount: transactions.length,
+      chunkCount: chunks.length,
+      latestPostedDate: monthLatest,
       message: `v2024 transactions sync complete for ${month}`
     });
   } catch (error) {
     console.error('[TRANSACTIONS SYNC v2024] Error:', error);
     return res.status(500).json({ success: false, error: 'Sync failed: ' + error.message });
   }
+}
+
+// Target serialized size per chunk. Upstash caps single requests at
+// 10 MiB (10,485,760 bytes); 8 MiB leaves room for JSON wrapper bytes,
+// transport encoding, and the small metadata fields the @vercel/kv client
+// adds.
+const V2024_CHUNK_TARGET_BYTES = 8 * 1024 * 1024;
+
+function chunkTransactions(transactions, targetBytes) {
+  const chunks = [];
+  let current = [];
+  let currentBytes = 2; // [] brackets
+  for (const t of transactions) {
+    // +1 for the comma separator between elements (negligible at scale
+    // but keeps the estimate honest near the boundary).
+    const tBytes = Buffer.byteLength(JSON.stringify(t)) + 1;
+    if (current.length > 0 && currentBytes + tBytes > targetBytes) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 2;
+    }
+    current.push(t);
+    currentBytes += tBytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  // Edge case: empty month still gets one (empty) chunk so reads have a
+  // consistent shape.
+  if (chunks.length === 0) chunks.push([]);
+  return chunks;
+}
+
+// Reads a single month's transactions from KV, transparently handling
+// both the chunked layout (current) and the legacy single-blob layout
+// (months synced before chunking).
+async function readMonthV2024(month) {
+  const meta = await kv.get(`transactions:v2024:raw:${month}`);
+  if (!meta) return [];
+  if (Array.isArray(meta.transactions)) return meta.transactions; // legacy
+  const chunkCount = Number.isFinite(meta.chunkCount) ? meta.chunkCount : 0;
+  if (chunkCount === 0) return [];
+  const keys = [];
+  for (let k = 0; k < chunkCount; k++) {
+    keys.push(`transactions:v2024:raw:${month}:p${k}`);
+  }
+  const buckets = await Promise.all(keys.map(k => kv.get(k)));
+  const out = [];
+  for (const b of buckets) {
+    if (!b || !Array.isArray(b.transactions)) continue;
+    for (const t of b.transactions) out.push(t);
+  }
+  return out;
 }
 
 // ─── READ v2024 ──────────────────────────────────────────────────────────────
@@ -143,15 +248,15 @@ async function handleGetV2024(req, res) {
       return res.status(400).json({ error: 'month=YYYY-MM required' });
     }
 
-    const [stored, lastSynced] = await Promise.all([
-      kv.get(`transactions:v2024:raw:${month}`),
+    const [transactions, lastSynced] = await Promise.all([
+      readMonthV2024(month),
       kv.get(`transactions:v2024:last-synced:${month}`)
     ]);
 
     return res.status(200).json({
       success: true,
       month,
-      transactions: stored?.transactions || [],
+      transactions,
       lastSynced: lastSynced || null
     });
   } catch (error) {
@@ -171,15 +276,16 @@ async function handleGetRangeV2024(req, res) {
 
     const index = (await kv.get('transactions:v2024:index')) || [];
     const months = index.filter(m => m >= startMonth && m <= endMonth);
-    const buckets = await Promise.all(months.map(m => kv.get(`transactions:v2024:raw:${m}`)));
+    // Read each month via readMonthV2024 so chunked + legacy layouts are
+    // both handled. Months are read in parallel.
+    const monthArrays = await Promise.all(months.map(m => readMonthV2024(m)));
 
     // Flatten: all months' transactions concatenated. Dedup happens later
     // in the client-side derivation, since the dedup rule needs to inspect
     // each transaction's relatedIdentifiers.
     const transactions = [];
-    for (const b of buckets) {
-      if (!b || !Array.isArray(b.transactions)) continue;
-      for (const t of b.transactions) transactions.push(t);
+    for (const arr of monthArrays) {
+      for (const t of arr) transactions.push(t);
     }
 
     return res.status(200).json({ success: true, startMonth, endMonth, months, transactions });
@@ -192,8 +298,45 @@ async function handleGetMonthsV2024(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
-    const index = (await kv.get('transactions:v2024:index')) || [];
-    return res.status(200).json({ success: true, months: index });
+    const [index, storedMap] = await Promise.all([
+      kv.get('transactions:v2024:index'),
+      kv.get('transactions:v2024:latest-posted')
+    ]);
+    const latestPostedMap = (storedMap && typeof storedMap === 'object') ? { ...storedMap } : {};
+    const months = Array.isArray(index) ? index : [];
+
+    // Lazy backfill: months synced before the latest-posted-by-month
+    // dictionary existed have no entry. Compute the max postedDate for
+    // the *most recent* synced month if it's missing — that's the only
+    // month that could affect the global "latest" label, so we don't
+    // need to scan older months. After this populates once it persists.
+    if (months.length > 0) {
+      const latestMonth = months[months.length - 1];
+      if (!latestPostedMap[latestMonth]) {
+        const txs = await readMonthV2024(latestMonth);
+        let monthLatest = null;
+        for (const t of txs) {
+          const d = t?.postedDate;
+          if (d && (!monthLatest || d > monthLatest)) monthLatest = d;
+        }
+        if (monthLatest) {
+          latestPostedMap[latestMonth] = monthLatest;
+          await kv.set('transactions:v2024:latest-posted', latestPostedMap);
+        }
+      }
+    }
+
+    // Global max across the dictionary.
+    let latestPostedDate = null;
+    for (const v of Object.values(latestPostedMap)) {
+      if (v && (!latestPostedDate || v > latestPostedDate)) latestPostedDate = v;
+    }
+    return res.status(200).json({
+      success: true,
+      months,
+      latestPostedDate,
+      latestPostedByMonth: latestPostedMap
+    });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to list v2024 months: ' + error.message });
   }
