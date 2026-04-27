@@ -299,19 +299,40 @@
       select.value = str;
     }
 
+    // Shift a YYYY-MM string by a number of months (positive forward,
+    // negative backward). Returns YYYY-MM. Used to widen the transactions
+    // fetch window so cross-month deferred parents are visible to dedup.
+    function _shiftMonth(yyyymm, deltaMonths) {
+      const [y, m] = yyyymm.split('-').map(Number);
+      const d = new Date(Date.UTC(y, m - 1 + deltaMonths, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    // How many months before the requested startMonth we widen the
+    // transactions fetch. NET 90 B2B is the realistic max deferral term —
+    // 6 months gives that plus a buffer so SHIPMENT_ID-based dedup can see
+    // a parent DEFERRED_RELEASED record even when the release-side
+    // companion lands many months later.
+    const V2024_LOOKBACK_MONTHS = 6;
+
     // ─── INPUT FETCHING ─────────────────────────────────────────────────
     //
     // Fetches the v2024-shape transactions from KV (via get-range-v2024)
     // alongside products / ad spend / shipping mappings — everything the
-    // statement builder needs. Same shape as the v0 inputs bundle but the
-    // transactions arrive as a flat list rather than paginated raw pages.
+    // statement builder needs. The transactions fetch is widened by
+    // V2024_LOOKBACK_MONTHS months before the requested startMonth so the
+    // dedup pass in _deriveV2024Rows can see DEFERRED_RELEASED parents of
+    // RELEASED records that fall in the requested window. After dedup the
+    // derivation filters records by postedDate so only records inside the
+    // user-requested window become rows.
     async function _fetchV2024Inputs(startDate, endDate) {
       const authHeader = { Authorization: `Bearer ${accessToken}` };
       const startMonth = startDate.slice(0, 7);
       const endMonth   = endDate.slice(0, 7);
+      const widenedStart = _shiftMonth(startMonth, -V2024_LOOKBACK_MONTHS);
 
       const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes, feeMapRes, shipRes] = await Promise.all([
-        fetch(`/api/transactions?action=get-range-v2024&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch(`/api/transactions?action=get-range-v2024&startMonth=${widenedStart}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch('/api/products?action=get', { headers: authHeader }),
         fetch(`/api/adspend?action=get-range&type=sp&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch(`/api/adspend?action=get-range&type=sb&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
@@ -390,7 +411,7 @@
     async function _computeV2024Period(startDate, endDate) {
       const inputs = await _fetchV2024Inputs(startDate, endDate);
       const feeMappings = inputs.feeMappings || {};
-      const { rows, unmappedBreakdowns, dedupSkipped, transferSkipped } =
+      const { rows, unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped } =
         _deriveV2024Rows(inputs.transactions, startDate, endDate, feeMappings);
 
       const skuSales = _buildSkuSales(rows, inputs.products);
@@ -417,7 +438,7 @@
         adSpend, shippingCosts, metrics,
         // v2024-only diagnostics (rendered in the warning area below the
         // statement so a schema drift doesn't get swallowed silently)
-        unmappedBreakdowns, dedupSkipped, transferSkipped
+        unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped
       };
     }
 
@@ -469,6 +490,7 @@
           unmappedBreakdowns: current.unmappedBreakdowns,
           dedupSkipped: current.dedupSkipped,
           transferSkipped: current.transferSkipped,
+          outOfWindowSkipped: current.outOfWindowSkipped,
           rows: current.rows,
           lastSynced: current.lastSynced,
           latestSyncedMonth: current.latestSyncedMonth,
@@ -599,6 +621,7 @@
           unmappedBreakdowns: current.unmappedBreakdowns,
           dedupSkipped: current.dedupSkipped,
           transferSkipped: current.transferSkipped,
+          outOfWindowSkipped: current.outOfWindowSkipped,
           rows: current.rows,
           lastSynced: current.lastSynced,
           latestSyncedMonth: current.latestSyncedMonth,
@@ -619,7 +642,7 @@
     // strip showing dedup-skipped count, transfer-skipped count, and any
     // unmapped breakdownTypes (signals an Amazon schema change).
     function _renderV2024Statement(container, opts) {
-      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, dedupSkipped, transferSkipped, rows, lastSynced, latestSyncedMonth, startDate, endDate, comparisons } = opts;
+      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped, rows, lastSynced, latestSyncedMonth, startDate, endDate, comparisons } = opts;
       renderFinancialStatement(statement, startDate, endDate, container, comparisons || null);
 
       // Data status strip — always rendered, even if some fields are null,
@@ -634,7 +657,8 @@
           <span><strong style="color: var(--text-primary);">Data through:</strong> ${_escape(dataThrough)}</span>
           <span><strong style="color: var(--text-primary);">Last synced:</strong> ${_escape(lastSyncedDisplay)}</span>
           <span><strong style="color: var(--text-primary);">Derived rows:</strong> ${rows.length.toLocaleString()}</span>
-          <span title="RELEASED transactions skipped because they're settlement-side duplicates of a DEFERRED_RELEASED record">Dedup-skipped: ${dedupSkipped}</span>
+          <span title="Release-side companion records skipped because their deferred-side parent (the invoice-date record) is preferred for invoice-date allocation. Grouped by SHIPMENT_ID/REFUND_ID across the 6-month lookback window.">Dedup-skipped: ${dedupSkipped}</span>
+          <span title="Records pulled in via the lookback window that fall outside the requested date range — used for cross-month dedup visibility but not rendered.">Lookback-only: ${outOfWindowSkipped || 0}</span>
           <span title="Disbursement transfers (bank payouts) — not P&amp;L events">Transfers skipped: ${transferSkipped}</span>
         </div>
       `;
@@ -827,29 +851,89 @@
       };
     }
 
+    // Status priority for SHIPMENT_ID/REFUND_ID-keyed dedup. Lower = preferred.
+    // DEFERRED_RELEASED and DEFERRED both carry postedDate = invoice date,
+    // which is what we want for invoice-date allocation. RELEASED carries
+    // postedDate = release date, which we only want when there's no
+    // deferred sibling at all (genuinely non-deferred orders, where release
+    // date ≈ order date).
+    const _V2024_STATUS_PRIORITY = { DEFERRED_RELEASED: 0, DEFERRED: 1, RELEASED: 2 };
+
     function _deriveV2024Rows(transactions, startDate, endDate, feeMappings) {
       const rows = [];
       const unmappedBreakdowns = {}; // breakdownType → cumulative amount
       let dedupSkipped = 0;
       let transferSkipped = 0;
+      let outOfWindowSkipped = 0;
 
+      // ─── PRE-PASS: SHIPMENT_ID/REFUND_ID-keyed dedup ──────────────────
+      //
+      // Amazon emits separate records for the deferred-side (postedDate =
+      // invoice date) and the release-side (postedDate = release date) of
+      // the same logical sale. The DEFERRED_TRANSACTION_ID linking that
+      // would let us detect this pair-wise was unreliable in early-2025
+      // data (Amazon's transition to the new "include deferred" report
+      // format), so we instead group records by their stable identifiers:
+      //   - Shipment: SHIPMENT_ID
+      //   - Refund:   REFUND_ID
+      // For each group keep one record, preferring DEFERRED_RELEASED >
+      // DEFERRED > RELEASED. Lookback window in _fetchV2024Inputs ensures
+      // cross-month parents are visible (NET-30/60/90 B2B all covered by
+      // the 6-month default). Records without a stable identifier (rare)
+      // pass through this pass untouched.
+      const dedupGroups = new Map();
+      const passThrough = [];
       for (const t of (transactions || [])) {
-        // Dedup: a RELEASED transaction with a DEFERRED_TRANSACTION_ID is a
-        // settlement-side duplicate of a DEFERRED_RELEASED record we'll
-        // count separately. Skip it.
-        if (t.transactionStatus === 'RELEASED' && _v2024HasDeferredAncestor(t)) {
-          dedupSkipped++;
+        const tType = t.transactionType;
+        if (tType !== 'Shipment' && tType !== 'Refund') {
+          passThrough.push(t);
           continue;
         }
+        const sid = _v2024RidValue(t, 'SHIPMENT_ID');
+        const rid = _v2024RidValue(t, 'REFUND_ID');
+        const key = tType === 'Refund'
+          ? (rid ? `Refund|${rid}` : null)
+          : (sid ? `Shipment|${sid}` : null);
+        if (!key) {
+          passThrough.push(t);
+          continue;
+        }
+        if (!dedupGroups.has(key)) dedupGroups.set(key, []);
+        dedupGroups.get(key).push(t);
+      }
+      const dedupKept = [];
+      for (const group of dedupGroups.values()) {
+        if (group.length === 1) {
+          dedupKept.push(group[0]);
+          continue;
+        }
+        group.sort((a, b) => {
+          const pa = _V2024_STATUS_PRIORITY[a.transactionStatus] ?? 99;
+          const pb = _V2024_STATUS_PRIORITY[b.transactionStatus] ?? 99;
+          if (pa !== pb) return pa - pb;
+          return (a.postedDate || '').localeCompare(b.postedDate || '');
+        });
+        dedupKept.push(group[0]);
+        dedupSkipped += group.length - 1;
+      }
+      const deduped = [...dedupKept, ...passThrough];
 
+      // ─── MAIN PASS ────────────────────────────────────────────────────
+      for (const t of deduped) {
         // Transfers are bank disbursements — not P&L.
         if (t.transactionType === 'Transfer') {
           transferSkipped++;
           continue;
         }
 
+        // Drop records whose postedDate is outside the user-requested
+        // window. The lookback months were fetched only so the dedup pass
+        // above could see cross-month parents — they shouldn't render.
         const date = (t.postedDate || '').substring(0, 10);
-        if (date && (date < startDate || date > endDate)) continue;
+        if (date && (date < startDate || date > endDate)) {
+          outOfWindowSkipped++;
+          continue;
+        }
 
         const orderId = _v2024RidValue(t, 'ORDER_ID');
         const tType = t.transactionType || '';
@@ -954,7 +1038,7 @@
         // Unknown transactionType → silently skip (would surface in probe)
       }
 
-      return { rows, unmappedBreakdowns, dedupSkipped, transferSkipped };
+      return { rows, unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped };
     }
 
     // ─── CONSOLE VALIDATION HELPER ──────────────────────────────────────
