@@ -1474,9 +1474,18 @@
         return '<td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td><td class="neutral">--</td>';
       }
       
+      // Thousands separators via toLocaleString — e.g. 1234567.8 →
+      // "1,234,567.80". minimumFractionDigits/maximumFractionDigits = 2
+      // keeps cents aligned even on whole-dollar values. Negatives use
+      // a leading minus sign rather than parentheses to match the rest
+      // of the table's number style.
       const formatMoney = (val) => {
+        const abs = Math.abs(val).toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        });
         if (val === 0) return '$0.00';
-        return val >= 0 ? `$${val.toFixed(2)}` : `-$${Math.abs(val).toFixed(2)}`;
+        return val >= 0 ? `$${abs}` : `-$${abs}`;
       };
       
       const profitClass = metrics.profit >= 0 ? 'positive' : 'negative';
