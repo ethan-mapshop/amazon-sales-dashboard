@@ -9,6 +9,11 @@
       "schedule": "0 11 * * *"
     }
   ],
+  "functions": {
+    "api/transactions.js": {
+      "maxDuration": 300
+    }
+  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ]

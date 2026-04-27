@@ -355,12 +355,14 @@
         if (brand) brandCampaignToBrand[campaign] = brand;
       }
 
+      const monthsInRange = Array.isArray(tx.months) ? tx.months : [];
+      const latestSyncedMonth = monthsInRange.length > 0
+        ? monthsInRange[monthsInRange.length - 1]
+        : null;
       let lastSynced = null;
       try {
-        const months = Array.isArray(tx.months) ? tx.months : [];
-        if (months.length > 0) {
-          const latest = months[months.length - 1];
-          const lsRes = await fetch(`/api/transactions?action=get-v2024&month=${latest}`, { headers: authHeader });
+        if (latestSyncedMonth) {
+          const lsRes = await fetch(`/api/transactions?action=get-v2024&month=${latestSyncedMonth}`, { headers: authHeader });
           if (lsRes.ok) lastSynced = (await lsRes.json()).lastSynced || null;
         }
       } catch { /* non-fatal */ }
@@ -375,7 +377,9 @@
         productCampaignToSkus,
         brandCampaignToBrand,
         feeMappings: feeMap.mappings || {},
-        lastSynced
+        lastSynced,
+        latestSyncedMonth,
+        monthsInRange
       };
     }
 
@@ -409,6 +413,7 @@
       return {
         statement, missingSkus, unmappedFees, rows,
         lastSynced: inputs.lastSynced,
+        latestSyncedMonth: inputs.latestSyncedMonth,
         adSpend, shippingCosts, metrics,
         // v2024-only diagnostics (rendered in the warning area below the
         // statement so a schema drift doesn't get swallowed silently)
@@ -466,6 +471,7 @@
           transferSkipped: current.transferSkipped,
           rows: current.rows,
           lastSynced: current.lastSynced,
+          latestSyncedMonth: current.latestSyncedMonth,
           startDate, endDate,
           adSpend: current.adSpend,
           shippingCosts: current.shippingCosts,
@@ -595,6 +601,7 @@
           transferSkipped: current.transferSkipped,
           rows: current.rows,
           lastSynced: current.lastSynced,
+          latestSyncedMonth: current.latestSyncedMonth,
           startDate, endDate,
           adSpend: current.adSpend,
           shippingCosts: current.shippingCosts,
@@ -612,17 +619,23 @@
     // strip showing dedup-skipped count, transfer-skipped count, and any
     // unmapped breakdownTypes (signals an Amazon schema change).
     function _renderV2024Statement(container, opts) {
-      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, dedupSkipped, transferSkipped, rows, lastSynced, startDate, endDate, comparisons } = opts;
+      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, dedupSkipped, transferSkipped, rows, lastSynced, latestSyncedMonth, startDate, endDate, comparisons } = opts;
       renderFinancialStatement(statement, startDate, endDate, container, comparisons || null);
 
-      const syncLine = lastSynced
-        ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Last synced (v2024): ${_formatSyncTime(lastSynced)}</div>`
-        : '';
-      const countLine = `
-        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          ${rows.length.toLocaleString()} derived rows from Finances v2024-06-19 listTransactions
-          · ${dedupSkipped} dedup-skipped (RELEASED with deferred ancestor)
-          · ${transferSkipped} disbursement transfers skipped
+      // Data status strip — always rendered, even if some fields are null,
+      // so the user can tell at a glance what's loaded and how fresh it is.
+      // "Data through" = the latest YYYY-MM in the queried range that has
+      // synced transactions; "Last synced" = ISO timestamp of that month's
+      // most recent sync. Both fall back to "—" if unknown.
+      const dataThrough = latestSyncedMonth ? _formatYYYYMM(latestSyncedMonth) : '—';
+      const lastSyncedDisplay = lastSynced ? _formatSyncTime(lastSynced) : '—';
+      const statusStrip = `
+        <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <span><strong style="color: var(--text-primary);">Data through:</strong> ${_escape(dataThrough)}</span>
+          <span><strong style="color: var(--text-primary);">Last synced:</strong> ${_escape(lastSyncedDisplay)}</span>
+          <span><strong style="color: var(--text-primary);">Derived rows:</strong> ${rows.length.toLocaleString()}</span>
+          <span title="RELEASED transactions skipped because they're settlement-side duplicates of a DEFERRED_RELEASED record">Dedup-skipped: ${dedupSkipped}</span>
+          <span title="Disbursement transfers (bank payouts) — not P&amp;L events">Transfers skipped: ${transferSkipped}</span>
         </div>
       `;
       const missingWarning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
@@ -630,7 +643,18 @@
       const breakdownWarning = unmappedBreakdowns && Object.keys(unmappedBreakdowns).length > 0
         ? _renderUnmappedBreakdownWarning(unmappedBreakdowns)
         : '';
-      container.innerHTML = syncLine + countLine + missingWarning + feeWarning + breakdownWarning + container.innerHTML;
+      container.innerHTML = statusStrip + missingWarning + feeWarning + breakdownWarning + container.innerHTML;
+    }
+
+    // YYYY-MM → "Mon YYYY" (e.g. "2025-08" → "Aug 2025"). Used in the data-
+    // status strip so the user sees a friendly month label rather than the
+    // numeric form.
+    function _formatYYYYMM(yyyyMM) {
+      if (!yyyyMM) return '—';
+      const [y, m] = yyyyMM.split('-').map(Number);
+      if (!Number.isFinite(y) || !Number.isFinite(m)) return yyyyMM;
+      const d = new Date(Date.UTC(y, m - 1, 1));
+      return d.toLocaleString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
     }
 
     // ─── TRANSACTION DERIVE — v2024 ──────────────────────────────────────
@@ -1483,6 +1507,24 @@
     }
     // Expose so inline onclick="saveFeeMapping(this)" can resolve it.
     window.saveFeeMapping = saveFeeMapping;
+
+    // Manual refresh — clears every level of in-memory cache so the next
+    // render fetches fresh transactions, products, mappings, ad spend, and
+    // shipping. Use after editing the Products catalog, after running a
+    // sync, or any time you want to force-bust the per-session report
+    // cache. Resets _v2024MonthsSet too so the Prev/Next nav-button
+    // gating picks up newly-synced months.
+    async function refreshV2024Report() {
+      if (window._overviewReportCache) window._overviewReportCache.clear();
+      _v2024MonthsSet = null;
+      _v2024MonthsPromise = null;
+      await _ensureV2024Months();
+      _refreshV2024NavButtons();
+      const activeTabId = document.querySelector('#overview-page .page-header .tabs .tab.active')?.id;
+      if (activeTabId === 'ytd-v2024-tab') generateYTDV2024Report();
+      else                                  generateMonthlyV2024Report();
+    }
+    window.refreshV2024Report = refreshV2024Report;
 
     function _renderMissingSkuWarning(missing) {
       const rows = missing.map(m => `
