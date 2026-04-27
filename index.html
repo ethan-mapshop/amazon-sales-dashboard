@@ -22,7 +22,6 @@
     <div class="nav-group-label">Reporting</div>
     <a class="nav-item" onclick="showPage('salesvolume')">Sales &amp; Volume</a>
     <a class="nav-item active" onclick="showPage('overview')">Profitability Overview</a>
-    <a class="nav-item" onclick="showPage('brandproduct')">Brand &amp; Product</a>
     <a class="nav-item" onclick="showPage('listing')">Listing Optimization</a>
 
     <div class="nav-group-label">Tools</div>
@@ -603,6 +602,9 @@
             <button id="charts-v2024-tab" class="tab" onclick="showChartsV2024()">
               Charts
             </button>
+            <button id="brandproduct-v2024-tab" class="tab" onclick="showBrandProductV2024()">
+              Brand &amp; Product
+            </button>
           </div>
         </div>
 
@@ -729,80 +731,76 @@
             </div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- BRAND & PRODUCT PAGE -->
-    <div id="brandproduct-page" class="page">
-      <div class="card">
-        <h2 class="section-title">Brand & Product Profitability</h2>
-        
-        <!-- Tabs -->
-        <div class="tabs">
-          <button id="bp-ytd-tab" class="tab active" onclick="showBPYTD()">
-            Year-to-Date
-          </button>
-          <button id="bp-monthly-tab" class="tab" onclick="showBPMonthly()">
-            Monthly
-          </button>
-        </div>
-        
-        <!-- Year-to-Date View -->
-        <div id="bp-ytd-view">
-          <!-- Filter Bar -->
-          <div class="bp-filter-bar">
-            <label>Brand:</label>
-            <select id="bp-ytd-brand-select" onchange="generateBPYTDReport()">
-              <option value="all">All Brands</option>
-            </select>
-            <label>Year:</label>
-            <select id="bp-ytd-year-select" onchange="generateBPYTDReport()">
-            </select>
-            <button class="btn" onclick="setBPYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
-            <button class="btn" onclick="setBPYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+        <!-- Brand & Product View (sub-tabs: YTD / Monthly) -->
+        <div id="brandproduct-v2024-view" style="display: none;">
+          <!-- Sub-tabs -->
+          <div class="tabs" style="margin-bottom: 1.5rem;">
+            <button id="bp-ytd-tab" class="tab active" onclick="showBPYTD()">
+              Year-to-Date
+            </button>
+            <button id="bp-monthly-tab" class="tab" onclick="showBPMonthly()">
+              Monthly
+            </button>
           </div>
 
-          <div id="bp-ytd-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a year to view brand & product profitability</div>
+          <!-- Year-to-Date View -->
+          <div id="bp-ytd-view">
+            <div class="bp-filter-bar">
+              <label>Brand:</label>
+              <select id="bp-ytd-brand-select" onchange="generateBPYTDReport()">
+                <option value="all">All Brands</option>
+              </select>
+              <label>Year:</label>
+              <select id="bp-ytd-year-select" onchange="generateBPYTDReport()">
+              </select>
+              <button class="btn" onclick="setBPYTDYear('lastYear')" style="padding: 0.5rem 1rem;">Last Year</button>
+              <button class="btn" onclick="setBPYTDYear('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
+              <button class="btn btn-secondary" onclick="refreshBrandProductV2024()" style="padding: 0.5rem 1rem; margin-left: auto;" title="Re-fetch transactions, products, mappings, and ad spend.">↻ Refresh</button>
+            </div>
+
+            <div id="bp-ytd-content">
+              <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+                <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+                <div style="font-size: 1.125rem;">Select a year to view brand &amp; product profitability</div>
+              </div>
             </div>
           </div>
-        </div>
-        
-        <!-- Monthly View -->
-        <div id="bp-monthly-view" style="display: none;">
-          <!-- Filter Bar -->
-          <div class="bp-filter-bar">
-            <label>Brand:</label>
-            <select id="bp-monthly-brand-select" onchange="generateBPMonthlyReport()">
-              <option value="all">All Brands</option>
-            </select>
-            <label>Month:</label>
-            <select id="bp-monthly-month-select" onchange="generateBPMonthlyReport()">
-              <option value="0">January</option>
-              <option value="1">February</option>
-              <option value="2">March</option>
-              <option value="3">April</option>
-              <option value="4">May</option>
-              <option value="5">June</option>
-              <option value="6">July</option>
-              <option value="7">August</option>
-              <option value="8">September</option>
-              <option value="9">October</option>
-              <option value="10">November</option>
-              <option value="11">December</option>
-            </select>
-            <label>Year:</label>
-            <select id="bp-monthly-year-select" onchange="generateBPMonthlyReport()">
-            </select>
-            <button class="btn" onclick="setBPMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-          </div>
 
-          <div id="bp-monthly-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
-              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
-              <div style="font-size: 1.125rem;">Select a month and year to view brand & product profitability</div>
+          <!-- Monthly View -->
+          <div id="bp-monthly-view" style="display: none;">
+            <div class="bp-filter-bar">
+              <label>Brand:</label>
+              <select id="bp-monthly-brand-select" onchange="generateBPMonthlyReport()">
+                <option value="all">All Brands</option>
+              </select>
+              <label>Month:</label>
+              <select id="bp-monthly-month-select" onchange="generateBPMonthlyReport()">
+                <option value="0">January</option>
+                <option value="1">February</option>
+                <option value="2">March</option>
+                <option value="3">April</option>
+                <option value="4">May</option>
+                <option value="5">June</option>
+                <option value="6">July</option>
+                <option value="7">August</option>
+                <option value="8">September</option>
+                <option value="9">October</option>
+                <option value="10">November</option>
+                <option value="11">December</option>
+              </select>
+              <label>Year:</label>
+              <select id="bp-monthly-year-select" onchange="generateBPMonthlyReport()">
+              </select>
+              <button class="btn" onclick="setBPMonthlyDate('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
+              <button class="btn btn-secondary" onclick="refreshBrandProductV2024()" style="padding: 0.5rem 1rem; margin-left: auto;" title="Re-fetch transactions, products, mappings, and ad spend.">↻ Refresh</button>
+            </div>
+
+            <div id="bp-monthly-content">
+              <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+                <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+                <div style="font-size: 1.125rem;">Select a month and year to view brand &amp; product profitability</div>
+              </div>
             </div>
           </div>
         </div>

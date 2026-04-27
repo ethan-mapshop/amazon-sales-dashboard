@@ -567,46 +567,36 @@
       await initializeBrandDropdown('bp-monthly-brand-select');
     }
     
-    // Initialize brand dropdown from Products sheet
+    // Initialize brand dropdown from the Upstash products catalog. Same
+    // endpoint the v2024 statement / charts pipeline uses — keeps the
+    // dropdown in sync with whatever brands actually exist in the catalog
+    // (no hardcoded list, no Sheets fetch). Adds an option per distinct
+    // non-empty brand, sorted alphabetically.
     async function initializeBrandDropdown(selectId) {
       if (!accessToken) return;
-      
+
       const select = document.getElementById(selectId);
+      if (!select) return;
       if (select.options.length > 1) return; // Already initialized
-      
+
       try {
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
+        const res = await fetch('/api/products?action=get', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        
-        if (!response.ok) return;
-        
-        const data = await response.json();
-        const rows = data.values || [];
-        if (rows.length < 2) return;
-        
-        const headers = rows[0];
-        const brandIdx = headers.findIndex(h => h.toLowerCase() === 'brand');
-        
-        if (brandIdx === -1) return;
-        
-        // Get unique brands
+        if (!res.ok) return;
+        const data = await res.json();
+        const products = Array.isArray(data.products) ? data.products : [];
         const brands = new Set();
-        for (let i = 1; i < rows.length; i++) {
-          const brand = rows[i][brandIdx];
-          if (brand && brand.trim()) {
-            brands.add(brand.trim());
-          }
+        for (const p of products) {
+          const b = (p?.brand || '').trim();
+          if (b) brands.add(b);
         }
-        
-        // Add brand options
-        const sortedBrands = Array.from(brands).sort();
-        sortedBrands.forEach(brand => {
+        for (const brand of [...brands].sort()) {
           const option = document.createElement('option');
           option.value = brand;
           option.text = brand;
           select.appendChild(option);
-        });
+        }
       } catch (error) {
         console.error('Error loading brands:', error);
       }
@@ -975,12 +965,31 @@
       return costs;
     }
     
-    // Load and calculate brand/product data
+    // Load and calculate brand/product data — now sourced from the v2024
+    // Upstash pipeline (transactions widened by 6-month dedup lookback,
+    // products / mappings / ad spend / shipping). Implementation lives
+    // in overview-upstash.js as `_loadBrandProductV2024` so the dedup
+    // and statement-derive logic stays in one place. The legacy
+    // Sheets-backed body below is kept as `_loadBrandProductDataFromSheets`
+    // for archive purposes only — not called.
     async function loadBrandProductData(startDate, endDate, brandFilter) {
+      if (typeof window._loadBrandProductV2024 === 'function') {
+        return window._loadBrandProductV2024(startDate, endDate, brandFilter);
+      }
+      // Fallback (should never hit in practice — overview-upstash.js loads
+      // after this file): defer to the legacy Sheets implementation.
+      return _loadBrandProductDataFromSheets(startDate, endDate, brandFilter);
+    }
+
+    // Legacy Sheets-backed implementation. Retained because
+    // _fetchOverviewInputsFromSheets / parseTransactions / parseProducts
+    // are still defined above and the function still runs; the new
+    // Upstash path above is what production uses.
+    async function _loadBrandProductDataFromSheets(startDate, endDate, brandFilter) {
       if (!accessToken) {
         throw new Error('Please sign in first');
       }
-      
+
       const sheet = (name) => fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${name}`,
         { headers: { 'Authorization': `Bearer ${accessToken}` } }

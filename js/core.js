@@ -122,14 +122,7 @@
         loadProductCatalog();
       }
       
-      if (pageName === 'brandproduct') {
-        showBPMonthly(); // Default to Monthly view
-        if (accessToken) {
-          generateBPMonthlyReport(); // Auto-load last month's data
-        }
-      }
-      
-      if (pageName === 'salesvolume' && accessToken) {
+if (pageName === 'salesvolume' && accessToken) {
         loadSalesVolumeData();
       }
       

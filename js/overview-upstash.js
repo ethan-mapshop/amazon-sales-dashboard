@@ -139,7 +139,7 @@
 
 
     function _hideAllOverviewViews() {
-      ['monthly-v2024-view', 'ytd-v2024-view', 'charts-v2024-view']
+      ['monthly-v2024-view', 'ytd-v2024-view', 'charts-v2024-view', 'brandproduct-v2024-view']
         .forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -1130,6 +1130,263 @@
       _renderV2024BrandCharts(_chartsV2024MonthlyData);
     }
     window.updateV2024BrandCharts = updateV2024BrandCharts;
+
+    // ─── BRAND & PRODUCT v2024 ──────────────────────────────────────────
+    //
+    // Wraps the existing brand-product.js UI (showBPYTD / showBPMonthly /
+    // generateBP*Report / setBP*Date / initializeBP*Dropdowns / etc.) but
+    // sources its data from the same v2024 Upstash pipeline that powers
+    // the rest of the Profitability Overview. The actual data fetch +
+    // derive lives in `loadBrandProductData` (rewritten in brand-product.js
+    // to call _fetchV2024Inputs / _deriveV2024Rows here).
+    let _brandProductV2024AutoLoaded = false;
+
+    function showBrandProductV2024() {
+      _hideAllOverviewViews();
+      document.getElementById('brandproduct-v2024-view').style.display = 'block';
+      document.getElementById('brandproduct-v2024-tab').classList.add('active');
+      _ensureV2024Months().then(_updateOverviewDataLabels);
+      _ensureAdSpendMonths().then(_updateOverviewDataLabels);
+      // First view: populate dropdowns + auto-load last month's report so
+      // the user lands on data instead of an empty placeholder.
+      if (!_brandProductV2024AutoLoaded && accessToken) {
+        _brandProductV2024AutoLoaded = true;
+        // Default to the Monthly sub-tab on first view; matches the prior
+        // top-level page's behaviour from the old core.js handler.
+        if (typeof showBPMonthly === 'function') showBPMonthly();
+        if (typeof generateBPMonthlyReport === 'function') generateBPMonthlyReport();
+      }
+    }
+    window.showBrandProductV2024 = showBrandProductV2024;
+
+    function refreshBrandProductV2024() {
+      // Re-runs whichever sub-tab is active. The brand-product.js report
+      // generators don't memoize, so this just re-fetches and re-renders.
+      const ytdActive = document.getElementById('bp-ytd-tab')?.classList.contains('active');
+      if (ytdActive) {
+        if (typeof generateBPYTDReport === 'function') generateBPYTDReport();
+      } else {
+        if (typeof generateBPMonthlyReport === 'function') generateBPMonthlyReport();
+      }
+    }
+    window.refreshBrandProductV2024 = refreshBrandProductV2024;
+
+    // Computes a brand → products structure with FBM / FBA / Total
+    // metrics in the exact shape brand-product.js's renderBrandProductTable
+    // expects ({ brandName, products: [{ productName, skus, fbm, fba,
+    // total }], fbm, fba, total }). Same data source as the Profitability
+    // statement (v2024 Upstash transactions widened by 6-month dedup
+    // lookback, then derived per the existing pipeline).
+    //
+    // Why per-SKU here vs the statement's FBM/FBA-only summary: the
+    // brand-product table needs costs/income/fees/ads attributed to
+    // individual SKUs so we can roll them up into product-level rows
+    // (FBA + FBM versions of the same product collapse to one row by
+    // product name, with separate FBM / FBA columns).
+    async function _loadBrandProductV2024(startDate, endDate, brandFilter) {
+      if (!accessToken) throw new Error('Please sign in first');
+
+      const inputs = await _fetchV2024Inputs(startDate, endDate);
+      const { rows } = _deriveV2024Rows(
+        inputs.transactions, startDate, endDate, inputs.feeMappings || {}
+      );
+
+      // Build per-SKU lookups from the products catalog. Brands list
+      // honors the brandFilter; "all" lets every brand through.
+      const productByBrand = {}; // brand → { productName → { name, skus[] } }
+      const skuToProduct   = {}; // sku → { name, brand, fulfillment, cost }
+      for (const sku of Object.keys(inputs.products)) {
+        const p = inputs.products[sku];
+        const brand = (p.brand || '').trim();
+        if (!brand) continue;
+        if (brandFilter && brandFilter !== 'all' && brand !== brandFilter) continue;
+        const fulfillment = _isFbaProduct(p) ? 'FBA' : 'FBM';
+        const cost = Number(p.cost) || 0;
+        skuToProduct[sku] = { name: p.name || '', brand, fulfillment, cost };
+        if (!productByBrand[brand]) productByBrand[brand] = {};
+        const pname = p.name || '(unnamed)';
+        if (!productByBrand[brand][pname]) {
+          productByBrand[brand][pname] = { name: pname, skus: [] };
+        }
+        productByBrand[brand][pname].skus.push({ sku, fulfillmentType: fulfillment, cost });
+      }
+
+      // Walk derived rows once → per-SKU income / opex / productCosts.
+      // Income definition mirrors the statement's "FBM/FBA Sales + Returns
+      // + Other": principal + otherCharges + promotions. Refunds are
+      // already negative in the row's sale field so they net out
+      // automatically. OpEx is FBA fees + transaction fees (abs of
+      // negatives), matching extractProfitabilityMetrics' channel buckets.
+      const skuTotals = {}; // sku → { income, opex, productCosts }
+      for (const r of rows) {
+        if (!r.sku || !skuToProduct[r.sku]) continue;
+        if (r.type !== 'Order' && r.type !== 'Refund') continue;
+        if (!skuTotals[r.sku]) skuTotals[r.sku] = { income: 0, opex: 0, productCosts: 0 };
+        const income = (r.sale || 0) + (r.otherCharges || 0) + (r.promotions || 0);
+        const fees   = Math.abs(r.fbaFees || 0) + Math.abs(r.transactionFees || 0);
+        skuTotals[r.sku].income += income;
+        skuTotals[r.sku].opex   += fees;
+        if (r.type === 'Order') {
+          const cost = skuToProduct[r.sku].cost || 0;
+          skuTotals[r.sku].productCosts += cost * Math.abs(r.quantity || 1);
+        }
+      }
+
+      // FBM shipping costs: per-SKU when a SKU is on the row, else
+      // attributed to the brand's FBM aggregate (handled below).
+      const skuShipping = {};
+      let unattributedShipping = 0;
+      for (const s of (inputs.shippingRows || [])) {
+        const d = s.shipDate || '';
+        if (d && (d < startDate || d > endDate)) continue;
+        const cost = Number(s.cost) || 0;
+        if (cost <= 0) continue;
+        if (s.sku && skuToProduct[s.sku]) {
+          skuShipping[s.sku] = (skuShipping[s.sku] || 0) + cost;
+        } else {
+          unattributedShipping += cost;
+        }
+      }
+
+      // Per-SKU SP ad spend. Direct sku attribution wins; otherwise the
+      // campaign mapping splits cost across mapped SKUs proportional to
+      // their period sales (falls back to even split if none of the
+      // mapped SKUs sold in the period).
+      const skuAdSpend = {};
+      const inWin = (d) => d && d >= startDate && d <= endDate;
+      for (const ad of (inputs.spAdRows || [])) {
+        if (!inWin(ad.date)) continue;
+        const cost = Number(ad.cost) || 0;
+        if (cost <= 0) continue;
+        if (ad.sku && skuToProduct[ad.sku]) {
+          skuAdSpend[ad.sku] = (skuAdSpend[ad.sku] || 0) + cost;
+          continue;
+        }
+        const mapped = inputs.productCampaignToSkus?.[ad.campaign] || [];
+        const eligible = mapped.filter(s => skuToProduct[s]);
+        if (eligible.length === 0) continue;
+        // Split by period sales contribution; if no sales, even split.
+        let totalSales = 0;
+        for (const s of eligible) totalSales += (skuTotals[s]?.income || 0);
+        if (totalSales > 0) {
+          for (const s of eligible) {
+            const share = (skuTotals[s]?.income || 0) / totalSales;
+            if (share > 0) skuAdSpend[s] = (skuAdSpend[s] || 0) + cost * share;
+          }
+        } else {
+          const portion = cost / eligible.length;
+          for (const s of eligible) skuAdSpend[s] = (skuAdSpend[s] || 0) + portion;
+        }
+      }
+
+      // Build the brand list. Empty metric stub used when a channel has
+      // no SKUs (so renderBrandProductTable can still draw "--" cells).
+      const emptyMetrics = () =>
+        ({ income: 0, opex: 0, productCosts: 0, adSpend: 0, profit: 0, margin: 0 });
+
+      const brandData = {};
+      for (const [brand, productMap] of Object.entries(productByBrand)) {
+        const brandObj = {
+          brandName: brand,
+          products: [],
+          fbm: emptyMetrics(),
+          fba: emptyMetrics(),
+          total: emptyMetrics()
+        };
+
+        for (const product of Object.values(productMap)) {
+          const productObj = {
+            productName: product.name,
+            skus: product.skus,
+            fbm: emptyMetrics(),
+            fba: emptyMetrics(),
+            total: emptyMetrics()
+          };
+
+          for (const skuObj of product.skus) {
+            const t = skuTotals[skuObj.sku] || { income: 0, opex: 0, productCosts: 0 };
+            const ad = skuAdSpend[skuObj.sku] || 0;
+            const ship = skuShipping[skuObj.sku] || 0;
+            const ch = skuObj.fulfillmentType === 'FBA' ? 'fba' : 'fbm';
+            productObj[ch].income       += t.income;
+            productObj[ch].opex         += t.opex;
+            productObj[ch].productCosts += t.productCosts;
+            productObj[ch].adSpend      += ad;
+            // Shipping is FBM only — Amazon-fulfilled shipping is wrapped
+            // into FBA Fees on the SP-API side and already counted in opex.
+            if (ch === 'fbm') productObj[ch].opex += ship;
+          }
+
+          for (const ch of ['fbm', 'fba']) {
+            productObj[ch].profit = productObj[ch].income - productObj[ch].opex
+                                  - productObj[ch].productCosts - productObj[ch].adSpend;
+            productObj[ch].margin = productObj[ch].income > 0
+              ? (productObj[ch].profit / productObj[ch].income * 100) : 0;
+          }
+          productObj.total.income       = productObj.fbm.income + productObj.fba.income;
+          productObj.total.opex         = productObj.fbm.opex   + productObj.fba.opex;
+          productObj.total.productCosts = productObj.fbm.productCosts + productObj.fba.productCosts;
+          productObj.total.adSpend      = productObj.fbm.adSpend + productObj.fba.adSpend;
+          productObj.total.profit       = productObj.total.income - productObj.total.opex
+                                        - productObj.total.productCosts - productObj.total.adSpend;
+          productObj.total.margin       = productObj.total.income > 0
+            ? (productObj.total.profit / productObj.total.income * 100) : 0;
+
+          brandObj.products.push(productObj);
+
+          for (const ch of ['fbm', 'fba', 'total']) {
+            brandObj[ch].income       += productObj[ch].income;
+            brandObj[ch].opex         += productObj[ch].opex;
+            brandObj[ch].productCosts += productObj[ch].productCosts;
+            brandObj[ch].adSpend      += productObj[ch].adSpend;
+          }
+        }
+
+        // SB ad spend is brand-targeted; allocate by income ratio across
+        // FBM / FBA. If a brand had zero income in the period the SB spend
+        // attaches to FBM (the catch-all channel) so it doesn't disappear.
+        let sbBrandSpend = 0;
+        for (const ad of (inputs.sbAdRows || [])) {
+          if (!inWin(ad.date)) continue;
+          const mapped = inputs.brandCampaignToBrand?.[ad.campaign];
+          if (mapped !== brand) continue;
+          sbBrandSpend += Number(ad.cost) || 0;
+        }
+        if (sbBrandSpend > 0) {
+          const totalIncome = brandObj.fbm.income + brandObj.fba.income;
+          if (totalIncome > 0) {
+            const fbmRatio = brandObj.fbm.income / totalIncome;
+            brandObj.fbm.adSpend += sbBrandSpend * fbmRatio;
+            brandObj.fba.adSpend += sbBrandSpend * (1 - fbmRatio);
+          } else {
+            brandObj.fbm.adSpend += sbBrandSpend;
+          }
+          brandObj.total.adSpend += sbBrandSpend;
+        }
+
+        // Brand-level profit/margin (final, after SB ad spend layered on).
+        for (const ch of ['fbm', 'fba', 'total']) {
+          brandObj[ch].profit = brandObj[ch].income - brandObj[ch].opex
+                              - brandObj[ch].productCosts - brandObj[ch].adSpend;
+          brandObj[ch].margin = brandObj[ch].income > 0
+            ? (brandObj[ch].profit / brandObj[ch].income * 100) : 0;
+        }
+
+        brandData[brand] = brandObj;
+      }
+
+      // unattributedShipping is brand-agnostic — we don't show it in the
+      // brand/product table. The Profitability statement does include it
+      // (under FBM Shipping Costs), so the statement total is the source
+      // of truth for that piece. Logged here so a non-zero value surfaces
+      // in the console when reconciling.
+      if (unattributedShipping > 0) {
+        console.log(`[BP v2024] ${unattributedShipping.toFixed(2)} of shipping costs not attributable to a brand SKU; not shown in table.`);
+      }
+
+      return Object.values(brandData).sort((a, b) => a.brandName.localeCompare(b.brandName));
+    }
+    window._loadBrandProductV2024 = _loadBrandProductV2024;
 
     // Renders the financial statement plus any unmapped-data warnings.
     // The status strip (data-through / last-synced / dedup counters) was
