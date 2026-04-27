@@ -310,13 +310,14 @@
       const startMonth = startDate.slice(0, 7);
       const endMonth   = endDate.slice(0, 7);
 
-      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes, shipRes] = await Promise.all([
+      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes, feeMapRes, shipRes] = await Promise.all([
         fetch(`/api/transactions?action=get-range-v2024&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch('/api/products?action=get', { headers: authHeader }),
         fetch(`/api/adspend?action=get-range&type=sp&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch(`/api/adspend?action=get-range&type=sb&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
         fetch('/api/mappings?action=get&type=product', { headers: authHeader }),
         fetch('/api/mappings?action=get&type=brand',   { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=fee',     { headers: authHeader }),
         fetch(`/api/shipping?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader })
       ]);
       if (!txRes.ok)   throw new Error(`v2024 transactions fetch failed (${txRes.status})`);
@@ -328,6 +329,7 @@
       const sbAd       = sbAdRes.ok     ? await sbAdRes.json()    : { rows: [] };
       const prodMap    = prodMapRes.ok  ? await prodMapRes.json() : { mappings: {} };
       const brandMap   = brandMapRes.ok ? await brandMapRes.json() : { mappings: {} };
+      const feeMap     = feeMapRes.ok   ? await feeMapRes.json()  : { mappings: {} };
       const shipping   = shipRes.ok     ? await shipRes.json()    : { rows: [] };
 
       const products = {};
@@ -372,6 +374,7 @@
         shippingRows: shipping.rows || [],
         productCampaignToSkus,
         brandCampaignToBrand,
+        feeMappings: feeMap.mappings || {},
         lastSynced
       };
     }
@@ -382,8 +385,9 @@
     // functions / cache / renderer all work unchanged.
     async function _computeV2024Period(startDate, endDate) {
       const inputs = await _fetchV2024Inputs(startDate, endDate);
+      const feeMappings = inputs.feeMappings || {};
       const { rows, unmappedBreakdowns, dedupSkipped, transferSkipped } =
-        _deriveV2024Rows(inputs.transactions, startDate, endDate);
+        _deriveV2024Rows(inputs.transactions, startDate, endDate, feeMappings);
 
       const skuSales = _buildSkuSales(rows, inputs.products);
       const adSpend = _allocateAdSpend({
@@ -399,7 +403,7 @@
       });
       const shippingCosts = _sumShippingInRange(inputs.shippingRows, startDate, endDate);
 
-      const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts);
+      const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts, feeMappings);
       const metrics = extractProfitabilityMetrics(statement);
 
       return {
@@ -629,39 +633,6 @@
       container.innerHTML = syncLine + countLine + missingWarning + feeWarning + breakdownWarning + container.innerHTML;
     }
 
-    // v2024-specific: surface any breakdown leaf we walked past without a
-    // V2024_LEAF_HANDLER entry. If this ever shows non-zero, Amazon added
-    // a new breakdownType and the handler table needs an update.
-    function _renderUnmappedBreakdownWarning(unmapped) {
-      const fmt = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const entries = Object.entries(unmapped).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-      const rows = entries.map(([type, total]) => `
-        <tr>
-          <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(type)}</td>
-          <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(total)}</td>
-        </tr>
-      `).join('');
-      return `
-        <div style="background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem;">
-          <div style="font-weight: 600; color: var(--warning); margin-bottom: 0.5rem;">
-            ⚠ ${entries.length} unmapped v2024 breakdownType${entries.length === 1 ? '' : 's'} — silently dropped
-          </div>
-          <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-            These appeared in the listTransactions response but aren't in V2024_LEAF_HANDLER, so their amounts didn't make it into the statement. Likely means Amazon added a new breakdownType — extend the handler table to route them.
-          </div>
-          <table style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr>
-                <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">breakdownType</th>
-                <th style="text-align: right; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">Amount</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      `;
-    }
-
     // ─── TRANSACTION DERIVE — v2024 ──────────────────────────────────────
 
     // Route an Adjustment row to the right Expense line. Checks the four
@@ -785,21 +756,30 @@
     };
 
     // Walk a breakdown tree, calling `handle` for each node whose
-    // breakdownType is in V2024_LEAF_HANDLER. Recurses through unrecognized
-    // aggregator nodes to reach handlers underneath. Tracks unmapped leaves
-    // (non-aggregator nodes with no handler and a non-zero amount) for
-    // diagnostics.
-    function _v2024WalkAndRoute(breakdowns, handle, unmapped) {
+    // breakdownType is in V2024_LEAF_HANDLER OR in the user's feeMappings
+    // override. User mappings take a leaf with no built-in handler and treat
+    // it as kind='serviceFee' (so it emits a ServiceFee row that
+    // _buildStatement routes to the user-chosen line) — or kind='skip' if
+    // the user mapped to '_skip' (drop entirely). Recurses through
+    // unrecognized aggregator nodes to reach handlers underneath. Tracks
+    // truly-unmapped leaves (no built-in handler, no user mapping, no
+    // children, non-zero amount) for the editable warning block.
+    function _v2024WalkAndRoute(breakdowns, handle, unmapped, feeMappings) {
       for (const node of (breakdowns || [])) {
         const type = node?.breakdownType;
-        const handler = type ? V2024_LEAF_HANDLER[type] : null;
+        let handler = type ? V2024_LEAF_HANDLER[type] : null;
+        if (!handler && type && feeMappings && feeMappings[type]) {
+          handler = feeMappings[type] === '_skip'
+            ? { kind: 'skip' }
+            : { kind: 'serviceFee' };
+        }
         if (handler) {
           if (handler.kind !== 'skip') handle(type, node, handler);
           continue; // consume this node — don't descend further
         }
         // No handler. Recurse if there are children.
         if (Array.isArray(node?.breakdowns) && node.breakdowns.length > 0) {
-          _v2024WalkAndRoute(node.breakdowns, handle, unmapped);
+          _v2024WalkAndRoute(node.breakdowns, handle, unmapped, feeMappings);
         } else if (type && unmapped) {
           const amt = node?.breakdownAmount?.currencyAmount || 0;
           if (Math.abs(amt) > 0.005) {
@@ -823,7 +803,7 @@
       };
     }
 
-    function _deriveV2024Rows(transactions, startDate, endDate) {
+    function _deriveV2024Rows(transactions, startDate, endDate, feeMappings) {
       const rows = [];
       const unmappedBreakdowns = {}; // breakdownType → cumulative amount
       let dedupSkipped = 0;
@@ -887,7 +867,7 @@
                   _transactionStatus: tStatus
                 }));
               }
-            }, unmappedBreakdowns);
+            }, unmappedBreakdowns, feeMappings);
 
             rows.push(baseRow);
           }
@@ -915,7 +895,7 @@
                   _transactionStatus: tStatus
                 }));
               }
-            }, unmappedBreakdowns);
+            }, unmappedBreakdowns, feeMappings);
           }
         } else if (tType === 'Adjustment' || tType === 'FBAInventoryReimbursement') {
           // Item-level breakdowns when present, otherwise top-level. The
@@ -944,7 +924,7 @@
                   _transactionStatus: tStatus
                 }));
               }
-            }, unmappedBreakdowns);
+            }, unmappedBreakdowns, feeMappings);
           }
         }
         // Unknown transactionType → silently skip (would surface in probe)
@@ -1225,7 +1205,7 @@
       return { fba, fbm, unallocated, unallocatedProductCampaigns, unallocatedBrandCampaigns };
     }
 
-    function _buildStatement(rows, products, adSpend = null, shippingCosts = 0) {
+    function _buildStatement(rows, products, adSpend = null, shippingCosts = 0, feeMappings = {}) {
       const statement = {
         income: Object.fromEntries(STATEMENT_INCOME_LINES.map(k => [k, { debit: 0, credit: 0 }])),
         expenses: Object.fromEntries(STATEMENT_EXPENSE_LINES.map(k => [k, { debit: 0, credit: 0 }]))
@@ -1258,20 +1238,29 @@
       const unmappedServiceFeeTypes = new Map(); // feeType → running total
 
       for (const r of rows) {
-        // ServiceFee rows route by FeeType → Expense line. They don't
-        // depend on fulfillment or the Products catalog.
+        // ServiceFee rows route by FeeType → statement line. User mappings
+        // (from /api/mappings?type=fee) win over the hardcoded
+        // SERVICE_FEE_LINE_MAP so the user can fix categorization in-app
+        // without a code change. '_skip' drops the amount entirely (used
+        // for fees the user explicitly wants excluded).
         if (r.type === 'ServiceFee') {
-          const line = SERVICE_FEE_LINE_MAP[r.feeType];
+          const userLine = feeMappings && feeMappings[r.feeType];
+          if (userLine === '_skip') continue;
+          const line = userLine || SERVICE_FEE_LINE_MAP[r.feeType];
           if (!line) {
-            // Unknown FeeType: bucket into Other Expenses so the money
-            // isn't lost, but keep a running tally for a warning block.
+            // Unknown FeeType and no user mapping: bucket into Other
+            // Expenses so the money isn't lost, but keep a running tally
+            // for the editable warning block.
             add('Other Expenses', 'expenses', r.feeAmount);
             unmappedServiceFeeTypes.set(
               r.feeType || '(empty)',
               (unmappedServiceFeeTypes.get(r.feeType || '(empty)') || 0) + r.feeAmount
             );
           } else {
-            add(line, 'expenses', r.feeAmount);
+            // User-mapped destinations can be income or expense lines —
+            // pick the right section so add() doesn't undefined-crash.
+            const section = STATEMENT_INCOME_LINES.includes(line) ? 'income' : 'expenses';
+            add(line, section, r.feeAmount);
           }
           continue;
         }
@@ -1365,30 +1354,86 @@
 
 
     // ServiceFee FeeTypes we don't have a rule for get bucketed into
-    // "Other Expenses" and listed here so the user can decide where they
-    // should go and extend SERVICE_FEE_LINE_MAP. Sorted by absolute value
-    // descending so the financially-loudest ones surface first.
+    // "Other Expenses" and listed here as an editable warning. Each row
+    // has a destination dropdown + Save button — clicking Save POSTs the
+    // mapping to /api/mappings?type=fee, clears the cache, and re-runs
+    // the report. Mapped fees disappear from the warning on next render.
     function _renderUnmappedFeeWarning(unmapped) {
+      return _renderEditableFeeWarning(unmapped, {
+        title: 'unmapped ServiceFee FeeType',
+        intro: "These FeeTypes aren't recognized yet. Their amounts are bucketed into Other Expenses so nothing's lost. Pick a destination below and click Save — the mapping is stored, applied across all months, and re-applied on every report load.",
+        keyHeader: 'FeeType'
+      });
+    }
+
+    // Same UI as _renderUnmappedFeeWarning but for breakdown-tree leaves
+    // that have no V2024_LEAF_HANDLER entry. Listed here so the user can
+    // route them in-app instead of needing a code change.
+    function _renderUnmappedBreakdownWarning(unmapped) {
+      const entries = Object.entries(unmapped)
+        .map(([feeType, total]) => ({ feeType, total }))
+        .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+      return _renderEditableFeeWarning(entries, {
+        title: 'unmapped breakdownType',
+        intro: "These appeared in the listTransactions response but aren't in V2024_LEAF_HANDLER. Their amounts are NOT making it into the statement until you route them. Pick a destination below and click Save — the mapping persists across months.",
+        keyHeader: 'breakdownType'
+      });
+    }
+
+    // Shared editable warning renderer. Each row has a destination
+    // <select> populated with all income + expense lines plus a "Skip
+    // (net-zero)" option, and a Save button that calls saveFeeMapping.
+    function _renderEditableFeeWarning(entries, { title, intro, keyHeader }) {
       const fmt = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const rows = unmapped.map(u => `
-        <tr>
-          <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(u.feeType)}</td>
-          <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(u.total)}</td>
-        </tr>
-      `).join('');
+      // Build dropdown <option> markup once and reuse per row. Income
+      // lines come first since most fee categories that need rerouting
+      // are expense-side, but income destinations exist (e.g. the
+      // user might want to route a credit-style breakdown to FBM Other).
+      const incomeOpts = STATEMENT_INCOME_LINES
+        .map(line => `<option value="${_escape(line)}">${_escape(line)}</option>`).join('');
+      const expenseOpts = STATEMENT_EXPENSE_LINES
+        .map(line => `<option value="${_escape(line)}">${_escape(line)}</option>`).join('');
+      const optionsMarkup = `
+        <option value="">— pick a destination —</option>
+        <optgroup label="Income lines">${incomeOpts}</optgroup>
+        <optgroup label="Expense lines">${expenseOpts}</optgroup>
+        <option value="_skip">Skip (don't include in statement)</option>
+      `;
+
+      const rows = entries.map(u => {
+        const ft = _escape(u.feeType || '(empty)');
+        const ftAttr = (u.feeType || '').replace(/"/g, '&quot;');
+        return `
+          <tr>
+            <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${ft}</td>
+            <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(u.total)}</td>
+            <td style="padding: 0.5rem 0.75rem;">
+              <select class="fee-mapping-select" data-fee-type="${ftAttr}" style="padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem; min-width: 220px;">
+                ${optionsMarkup}
+              </select>
+            </td>
+            <td style="padding: 0.5rem 0.75rem;">
+              <button class="btn btn-secondary" onclick="saveFeeMapping(this)" data-fee-type="${ftAttr}" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Save</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
       return `
         <div style="background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem;">
           <div style="font-weight: 600; color: var(--warning); margin-bottom: 0.5rem;">
-            ⚠ ${unmapped.length} unmapped ServiceFee FeeType${unmapped.length === 1 ? '' : 's'} — routed to Other Expenses
+            ⚠ ${entries.length} ${title}${entries.length === 1 ? '' : 's'} — needs routing
           </div>
           <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-            These FeeTypes aren't in the SERVICE_FEE_LINE_MAP yet. Their amounts are summed into the Other Expenses line so nothing's lost; tell me where each one should route and I'll update the map.
+            ${intro}
           </div>
           <table style="width: 100%; border-collapse: collapse;">
             <thead>
               <tr>
-                <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">FeeType</th>
+                <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">${keyHeader}</th>
                 <th style="text-align: right; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">Amount</th>
+                <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">Map to</th>
+                <th style="background: var(--bg-primary);"></th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -1396,6 +1441,48 @@
         </div>
       `;
     }
+
+    // POST a single fee mapping, then clear the per-session report cache
+    // (so the new mapping is applied) and re-run whichever Overview tab
+    // is currently active. Called from the Save button on the editable
+    // warning rows; reads the dropdown that lives in the same row.
+    async function saveFeeMapping(button) {
+      const feeType = button?.dataset?.feeType;
+      if (!feeType) return;
+      const select = button.closest('tr')?.querySelector('select.fee-mapping-select');
+      if (!select) return;
+      const line = select.value;
+      if (!line) return; // user hit Save before picking a destination
+      if (!accessToken) return;
+
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/mappings?action=save-one&type=fee', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ feeType, line })
+        });
+        if (!res.ok) throw new Error(`Save failed (${res.status})`);
+        // The mapping is global, so a stale cached statement for any
+        // month wouldn't reflect it. Wipe the whole Overview cache and
+        // re-render whichever tab the user is on.
+        if (window._overviewReportCache) window._overviewReportCache.clear();
+        const activeTabId = document.querySelector('#overview-page .page-header .tabs .tab.active')?.id;
+        if (activeTabId === 'ytd-v2024-tab') generateYTDV2024Report();
+        else                                  generateMonthlyV2024Report();
+      } catch (err) {
+        console.error('Fee mapping save failed:', err);
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+    // Expose so inline onclick="saveFeeMapping(this)" can resolve it.
+    window.saveFeeMapping = saveFeeMapping;
 
     function _renderMissingSkuWarning(missing) {
       const rows = missing.map(m => `

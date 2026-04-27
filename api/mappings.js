@@ -1,24 +1,30 @@
 import { kv } from '@vercel/kv';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
-// Single endpoint serving both product and brand mappings via ?type=.
+// Single endpoint serving product, brand, and fee mappings via ?type=.
 //
-//   GET  ?action=get          &type=product|brand           — read full dict
-//   GET  ?action=last-updated &type=product|brand           — ISO timestamp
-//   POST ?action=save-one     &type=product|brand           — replace one campaign
-//   POST ?action=delete-one   &type=product|brand           — remove one campaign
+//   GET  ?action=get          &type=product|brand|fee       — read full dict
+//   GET  ?action=last-updated &type=product|brand|fee       — ISO timestamp
+//   POST ?action=save-one     &type=product|brand|fee       — replace one entry
+//   POST ?action=delete-one   &type=product|brand|fee       — remove one entry
 //   POST ?action=bulk-upsert  &type=product|brand           — merge a CSV-style array
 //   POST ?action=migrate      &type=product|brand           — one-time from Sheets
 //
 // KV layout:
 //   mappings:product           → { [campaign]: { brand: str, skus: string[] } }
 //   mappings:brand             → { [campaign]: string (brand) }
+//   mappings:fee               → { [feeType]: '<statement line>' | '_skip' }
+//                                  used by overview-upstash.js to override
+//                                  SERVICE_FEE_LINE_MAP / V2024_LEAF_HANDLER
+//                                  for fee/breakdown types Amazon adds. Save
+//                                  body is { feeType, line }; '_skip' means
+//                                  drop the amount entirely (net-zero).
 //   mappings:<type>:updated-at → ISO timestamp of most recent write
 export default async function handler(req, res) {
   const { action, type } = req.query;
   if (!action) return res.status(400).json({ error: 'Action parameter required' });
-  if (!type || !['product', 'brand'].includes(type)) {
-    return res.status(400).json({ error: 'type must be "product" or "brand"' });
+  if (!type || !['product', 'brand', 'fee'].includes(type)) {
+    return res.status(400).json({ error: 'type must be "product", "brand", or "fee"' });
   }
 
   if (req.method === 'OPTIONS') {
@@ -81,6 +87,22 @@ async function handleSaveOne(req, res, type) {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
 
+    // Fee mappings are keyed differently — by feeType (a Finances-API
+    // breakdownType / FeeType string) rather than campaign name. Body is
+    // { feeType, line } where line is one of the statement line names or
+    // '_skip' to drop the amount.
+    if (type === 'fee') {
+      const feeType = String(req.body?.feeType || '').trim();
+      if (!feeType) return res.status(400).json({ error: 'feeType required' });
+      const line = String(req.body?.line || '').trim();
+      const current = (await kv.get(kvKey(type))) || {};
+      if (!line) delete current[feeType];
+      else        current[feeType] = line;
+      await kv.set(kvKey(type), current);
+      await kv.set(`${kvKey(type)}:updated-at`, new Date().toISOString());
+      return res.status(200).json({ success: true, total: Object.keys(current).length });
+    }
+
     const campaign = String(req.body?.campaign || '').trim();
     if (!campaign) return res.status(400).json({ error: 'campaign required' });
 
@@ -112,11 +134,13 @@ async function handleDeleteOne(req, res, type) {
   try {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
-    const campaign = String(req.body?.campaign || '').trim();
-    if (!campaign) return res.status(400).json({ error: 'campaign required' });
+    // Fee mappings key by feeType; product/brand by campaign.
+    const keyField = type === 'fee' ? 'feeType' : 'campaign';
+    const key = String(req.body?.[keyField] || '').trim();
+    if (!key) return res.status(400).json({ error: `${keyField} required` });
     const current = (await kv.get(kvKey(type))) || {};
-    const existed = Object.prototype.hasOwnProperty.call(current, campaign);
-    delete current[campaign];
+    const existed = Object.prototype.hasOwnProperty.call(current, key);
+    delete current[key];
     await kv.set(kvKey(type), current);
     await kv.set(`${kvKey(type)}:updated-at`, new Date().toISOString());
     return res.status(200).json({ success: true, existed, total: Object.keys(current).length });
