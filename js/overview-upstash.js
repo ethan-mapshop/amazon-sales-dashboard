@@ -745,6 +745,362 @@
       }
     }
 
+    // ─── TRANSACTION DERIVE — v2024-06-19 ───────────────────────────────
+    //
+    // Walks the listTransactions response shape (Finances API v2024-06-19)
+    // and emits rows in the SAME shape _buildStatement already consumes for
+    // v0, plus a `fulfillment` field set from each item's ProductContext
+    // (AFN→FBA, MFN→FBM). _buildStatement honors that hint over the catalog
+    // lookup, so v2024 rows aren't subject to the catalog-shift bug.
+    //
+    // Dedup rule (validated via probe-v2024 against Feb 2026):
+    //   skip RELEASED transactions that carry a DEFERRED_TRANSACTION_ID
+    //   related identifier — those are settlement-side duplicates of a
+    //   DEFERRED_RELEASED record with the same dollars but later postedDate.
+    //
+    // Transfer transactions (bank disbursements) are dropped entirely —
+    // they're not P&L events.
+    //
+    // Breakdown handling: each transaction's items[].breakdowns is a nested
+    // tree. _v2024WalkAndRoute walks down until it hits a node whose
+    // breakdownType is in V2024_LEAF_HANDLER, then routes the amount to the
+    // appropriate row bucket (or emits a separate ServiceFee/Adjustment
+    // row). Aggregator nodes (Sales, Expenses, AmazonFees, etc.) have no
+    // handler and we recurse through them to find the leaves.
+
+    // Handler kinds:
+    //   item       — Order/Refund per-item bucket. Adds amount to one of
+    //                {sale, otherCharges, fbaFees, transactionFees, promotions}
+    //                on the Order/Refund row being built.
+    //   serviceFee — emit a ServiceFee row with feeType = breakdownType,
+    //                feeAmount = the leaf's currencyAmount.
+    //   adjustment — emit an Adjustment row with adjustmentType =
+    //                breakdownType, adjustmentAmount = the leaf's amount.
+    //   skip       — recognized but intentionally not added (e.g. taxes,
+    //                which net to zero for the seller).
+    //
+    // Anything not in this map AND not an aggregator we recurse through
+    // ends up in the unmappedBreakdowns diagnostic so we don't silently
+    // lose money on a future Amazon schema change.
+    const V2024_LEAF_HANDLER = {
+      // Item-level Order/Refund leaves
+      'OurPricePrincipal':         { kind: 'item', bucket: 'sale' },
+      'Shipping':                  { kind: 'item', bucket: 'otherCharges' },
+      'ShippingPrincipal':         { kind: 'item', bucket: 'otherCharges' },
+      'Promo':                     { kind: 'item', bucket: 'promotions' },
+      'PromoRebates':              { kind: 'item', bucket: 'promotions' },
+      'ShippingDiscount':          { kind: 'item', bucket: 'promotions' },
+      'Commission':                { kind: 'item', bucket: 'transactionFees' },
+      'VariableClosingFee':        { kind: 'item', bucket: 'transactionFees' },
+      'FixedClosingFee':           { kind: 'item', bucket: 'transactionFees' },
+      'RefundCommission':          { kind: 'item', bucket: 'transactionFees' },
+      'FBAPerUnitFulfillmentFee':  { kind: 'item', bucket: 'fbaFees' },
+      'FBAPerOrderFulfillmentFee': { kind: 'item', bucket: 'fbaFees' },
+      'FBAWeightBasedFee':         { kind: 'item', bucket: 'fbaFees' },
+
+      // ServiceFee leaves (names match v0 SERVICE_FEE_LINE_MAP keys so
+      // emitted rows route through the existing _buildStatement logic)
+      'FBADisposalFee':              { kind: 'serviceFee' },
+      'CustomerReturnHRRUnitFee':    { kind: 'serviceFee' },
+      'HRRNonApparelRollup':         { kind: 'serviceFee' },
+      'FBAStorageFee':               { kind: 'serviceFee' },
+      'FBALongTermStorageFee':       { kind: 'serviceFee' },
+      'LongTermStorageFee':          { kind: 'serviceFee' },
+      'StorageBillingFee':           { kind: 'serviceFee' },
+      'FBAInboundTransportationFee': { kind: 'serviceFee' },
+      'InboundTransportationFee':    { kind: 'serviceFee' },
+
+      // Adjustment / Reimbursement leaves — names match v0 adjustment maps
+      'COMPENSATED_CLAWBACK':         { kind: 'adjustment' },
+      'FBAInventoryReimbursement':    { kind: 'adjustment' },
+      'FBAReversedReimbursement':     { kind: 'adjustment' },
+      'WAREHOUSE_LOST':               { kind: 'adjustment' },
+      'MISSING_FROM_INBOUND':         { kind: 'adjustment' },
+      'MISSING_FROM_INBOUND_CLAWBACK': { kind: 'adjustment' },
+      'PostageBilling_Postage':                 { kind: 'adjustment' },
+      'PostageBilling_FuelSurcharge':           { kind: 'adjustment' },
+      'PostageBilling_Other':                   { kind: 'adjustment' },
+      'PostageBilling_PostageAdjustment':       { kind: 'adjustment' },
+      'CarrierPackagingCharge':                 { kind: 'adjustment' },
+      'CustomerPackagingCharge':                { kind: 'adjustment' },
+      'ReturnPostageBilling_Tracking':          { kind: 'adjustment' },
+      'ReturnPostageBilling_Postage':           { kind: 'adjustment' },
+      'ReturnPostageBilling_TransactionFee':    { kind: 'adjustment' },
+      'ReturnPostageBilling_FuelSurcharge':     { kind: 'adjustment' },
+      'ReturnPostageBilling_OversizeSurcharge': { kind: 'adjustment' },
+      'ReturnPostageBilling_DeliveryAreaSurcharge': { kind: 'adjustment' },
+      'ShippingChargeback':                     { kind: 'adjustment' },
+      'ShippingHB':                             { kind: 'adjustment' },
+      'ShippingServiceChargebacks':             { kind: 'adjustment' },
+      'RestockingDeductionPrincipal':           { kind: 'adjustment' },
+      'ReturnShippingDeductionPrincipal':       { kind: 'adjustment' },
+
+      // Tax types — net-zero for seller, explicitly skipped (don't recurse,
+      // don't track as unmapped)
+      'OurPriceTax':                          { kind: 'skip' },
+      'ShippingTax':                          { kind: 'skip' },
+      'MarketplaceFacilitatorTax-Principal':  { kind: 'skip' },
+      'MarketplaceFacilitatorTax-Shipping':   { kind: 'skip' },
+      'MarketplaceFacilitatorTax-Other':      { kind: 'skip' },
+      'MarketplaceFacilitatorVAT-Principal':  { kind: 'skip' },
+      'MarketplaceFacilitatorVAT-Shipping':   { kind: 'skip' },
+      'MarketplaceFacilitatorVAT-Other':      { kind: 'skip' },
+
+      // Fallback — Amazon's catch-all "Other" bucket maps to Other Expenses
+      'Other': { kind: 'adjustment' }
+    };
+
+    function _v2024RidValue(t, name) {
+      const found = (t.relatedIdentifiers || []).find(r => r?.relatedIdentifierName === name);
+      return found?.relatedIdentifierValue || '';
+    }
+    function _v2024HasDeferredAncestor(t) {
+      return (t.relatedIdentifiers || []).some(r => r?.relatedIdentifierName === 'DEFERRED_TRANSACTION_ID');
+    }
+    function _v2024FindContext(item, contextType) {
+      return (item?.contexts || []).find(c => c?.contextType === contextType) || null;
+    }
+    function _v2024NormalizeFulfillment(fn) {
+      const s = String(fn || '').trim().toUpperCase();
+      if (s === 'AFN') return 'FBA';
+      if (s === 'MFN') return 'FBM';
+      return '';
+    }
+
+    // Walk a breakdown tree, calling `handle` for each node whose
+    // breakdownType is in V2024_LEAF_HANDLER. Recurses through unrecognized
+    // aggregator nodes to reach handlers underneath. Tracks unmapped leaves
+    // (non-aggregator nodes with no handler and a non-zero amount) for
+    // diagnostics.
+    function _v2024WalkAndRoute(breakdowns, handle, unmapped) {
+      for (const node of (breakdowns || [])) {
+        const type = node?.breakdownType;
+        const handler = type ? V2024_LEAF_HANDLER[type] : null;
+        if (handler) {
+          if (handler.kind !== 'skip') handle(type, node, handler);
+          continue; // consume this node — don't descend further
+        }
+        // No handler. Recurse if there are children.
+        if (Array.isArray(node?.breakdowns) && node.breakdowns.length > 0) {
+          _v2024WalkAndRoute(node.breakdowns, handle, unmapped);
+        } else if (type && unmapped) {
+          const amt = node?.breakdownAmount?.currencyAmount || 0;
+          if (Math.abs(amt) > 0.005) {
+            unmapped[type] = (unmapped[type] || 0) + amt;
+          }
+        }
+      }
+    }
+
+    // Empty-shaped row template so every emitted row has every field the
+    // existing _buildStatement / CSV-export code expects.
+    function _v2024BlankRow(extra) {
+      return {
+        type: '', orderId: '', date: '', sku: '', qty: 0,
+        fulfillment: '',
+        sale: 0, otherCharges: 0, fbaFees: 0, transactionFees: 0, promotions: 0,
+        feeType: '', feeAmount: 0,
+        adjustmentType: '', adjustmentAmount: 0,
+        _src: 'v2024', _transactionId: '', _transactionStatus: '',
+        ...(extra || {})
+      };
+    }
+
+    function _deriveV2024Rows(transactions, startDate, endDate) {
+      const rows = [];
+      const unmappedBreakdowns = {}; // breakdownType → cumulative amount
+      let dedupSkipped = 0;
+      let transferSkipped = 0;
+
+      for (const t of (transactions || [])) {
+        // Dedup: a RELEASED transaction with a DEFERRED_TRANSACTION_ID is a
+        // settlement-side duplicate of a DEFERRED_RELEASED record we'll
+        // count separately. Skip it.
+        if (t.transactionStatus === 'RELEASED' && _v2024HasDeferredAncestor(t)) {
+          dedupSkipped++;
+          continue;
+        }
+
+        // Transfers are bank disbursements — not P&L.
+        if (t.transactionType === 'Transfer') {
+          transferSkipped++;
+          continue;
+        }
+
+        const date = (t.postedDate || '').substring(0, 10);
+        if (date && (date < startDate || date > endDate)) continue;
+
+        const orderId = _v2024RidValue(t, 'ORDER_ID');
+        const tType = t.transactionType || '';
+        const tStatus = t.transactionStatus || '';
+
+        if (tType === 'Shipment' || tType === 'Refund') {
+          const isRefund = tType === 'Refund';
+          for (const item of (t.items || [])) {
+            const ctx = _v2024FindContext(item, 'ProductContext');
+            const sku = _normalizeSku(ctx?.sku);
+            const qty = (parseInt(ctx?.quantityShipped, 10) || 0) * (isRefund ? -1 : +1);
+            const fulfillment = _v2024NormalizeFulfillment(ctx?.fulfillmentNetwork);
+
+            const baseRow = _v2024BlankRow({
+              type: isRefund ? 'Refund' : 'Order',
+              orderId, date, sku, qty, fulfillment,
+              _transactionId: t.transactionId || '',
+              _transactionStatus: tStatus
+            });
+
+            _v2024WalkAndRoute(item.breakdowns, (type, node, handler) => {
+              const amt = node?.breakdownAmount?.currencyAmount || 0;
+              if (handler.kind === 'item') {
+                baseRow[handler.bucket] += amt;
+              } else if (handler.kind === 'serviceFee') {
+                rows.push(_v2024BlankRow({
+                  type: 'ServiceFee',
+                  orderId, date,
+                  feeType: type, feeAmount: amt,
+                  _transactionId: t.transactionId || '',
+                  _transactionStatus: tStatus
+                }));
+              } else if (handler.kind === 'adjustment') {
+                rows.push(_v2024BlankRow({
+                  type: 'Adjustment',
+                  orderId, date, sku, fulfillment,
+                  adjustmentType: type, adjustmentAmount: amt,
+                  _transactionId: t.transactionId || '',
+                  _transactionStatus: tStatus
+                }));
+              }
+            }, unmappedBreakdowns);
+
+            rows.push(baseRow);
+          }
+        } else if (tType === 'ServiceFee') {
+          // Per-item walk; if the transaction has no items (rare), fall
+          // back to the top-level breakdowns so nothing is lost.
+          const sources = (t.items && t.items.length > 0) ? t.items : [{ breakdowns: t.breakdowns || [] }];
+          for (const item of sources) {
+            _v2024WalkAndRoute(item.breakdowns, (type, node, handler) => {
+              const amt = node?.breakdownAmount?.currencyAmount || 0;
+              if (handler.kind === 'serviceFee' || handler.kind === 'item') {
+                rows.push(_v2024BlankRow({
+                  type: 'ServiceFee',
+                  orderId, date,
+                  feeType: type, feeAmount: amt,
+                  _transactionId: t.transactionId || '',
+                  _transactionStatus: tStatus
+                }));
+              } else if (handler.kind === 'adjustment') {
+                rows.push(_v2024BlankRow({
+                  type: 'Adjustment',
+                  orderId, date,
+                  adjustmentType: type, adjustmentAmount: amt,
+                  _transactionId: t.transactionId || '',
+                  _transactionStatus: tStatus
+                }));
+              }
+            }, unmappedBreakdowns);
+          }
+        } else if (tType === 'Adjustment' || tType === 'FBAInventoryReimbursement') {
+          // Item-level breakdowns when present, otherwise top-level. The
+          // FBAInventoryReimbursement transactions in the Feb sample had
+          // empty item.breakdowns and the actual data at the top level.
+          const hasItemBreakdowns = (t.items || []).some(
+            i => Array.isArray(i.breakdowns) && i.breakdowns.length > 0
+          );
+          const sources = hasItemBreakdowns
+            ? t.items
+            : [{ contexts: [], breakdowns: t.breakdowns || [] }];
+          for (const item of sources) {
+            const ctx = _v2024FindContext(item, 'ProductContext');
+            const itemSku = _normalizeSku(ctx?.sku);
+            const itemFulfillment = _v2024NormalizeFulfillment(ctx?.fulfillmentNetwork);
+            _v2024WalkAndRoute(item.breakdowns, (type, node, handler) => {
+              const amt = node?.breakdownAmount?.currencyAmount || 0;
+              if (handler.kind === 'adjustment' || handler.kind === 'serviceFee') {
+                rows.push(_v2024BlankRow({
+                  type: 'Adjustment',
+                  orderId, date,
+                  sku: itemSku,
+                  fulfillment: itemFulfillment,
+                  adjustmentType: type, adjustmentAmount: amt,
+                  _transactionId: t.transactionId || '',
+                  _transactionStatus: tStatus
+                }));
+              }
+            }, unmappedBreakdowns);
+          }
+        }
+        // Unknown transactionType → silently skip (would surface in probe)
+      }
+
+      return { rows, unmappedBreakdowns, dedupSkipped, transferSkipped };
+    }
+
+    // ─── CONSOLE VALIDATION HELPER ──────────────────────────────────────
+    // Paste `await compareV2024('2026-02')` (or any month) into the
+    // browser DevTools console while signed in. Fetches v2024 raw from
+    // KV, runs _deriveV2024Rows, builds a statement, and console.logs
+    // total counts + per-line FBM/FBA totals so you can sanity-check
+    // against the existing v0 Monthly Upstash report or the Sheets data.
+    // No UI changes — pure validation utility until we wire a tab.
+    async function compareV2024(month) {
+      if (!accessToken) { console.error('Sign in first'); return; }
+      if (!/^\d{4}-\d{2}$/.test(month)) {
+        console.error('month must be YYYY-MM');
+        return;
+      }
+      const [y, m] = month.split('-').map(Number);
+      const startDate = `${month}-01`;
+      const endDate = _ymd(new Date(y, m, 0));
+
+      const res = await fetch(`/api/transactions?action=get-v2024&month=${month}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!res.ok) {
+        console.error('get-v2024 failed', res.status, await res.text());
+        return;
+      }
+      const data = await res.json();
+      const transactions = data.transactions || [];
+      console.log(`v2024 raw: ${transactions.length} transactions stored for ${month}`);
+
+      const { rows, unmappedBreakdowns, dedupSkipped, transferSkipped } =
+        _deriveV2024Rows(transactions, startDate, endDate);
+      console.log(`v2024 derived: ${rows.length} rows · ${dedupSkipped} dedup-skipped · ${transferSkipped} transfers-skipped`);
+
+      // Roll up totals without touching the catalog — purely from rows.
+      const totals = {
+        FBA: { sale: 0, returns: 0, other: 0, txFees: 0, fbaFees: 0, promotions: 0 },
+        FBM: { sale: 0, returns: 0, other: 0, txFees: 0, fbaFees: 0, promotions: 0 },
+        none: { sale: 0, returns: 0, other: 0, txFees: 0, fbaFees: 0, promotions: 0 },
+        serviceFees: 0, adjustments: 0
+      };
+      for (const r of rows) {
+        if (r.type === 'Order' || r.type === 'Refund') {
+          const bucket = totals[r.fulfillment || 'none'];
+          if (r.type === 'Order') bucket.sale    += r.sale;
+          else                     bucket.returns += r.sale;
+          bucket.other      += r.otherCharges;
+          bucket.txFees     += r.transactionFees;
+          bucket.fbaFees    += r.fbaFees;
+          bucket.promotions += r.promotions;
+        } else if (r.type === 'ServiceFee') {
+          totals.serviceFees += r.feeAmount;
+        } else if (r.type === 'Adjustment') {
+          totals.adjustments += r.adjustmentAmount;
+        }
+      }
+      console.table(totals);
+      if (Object.keys(unmappedBreakdowns).length > 0) {
+        console.warn('Unmapped breakdownTypes — may indicate schema drift:', unmappedBreakdowns);
+      }
+      return { rows, totals, unmappedBreakdowns, dedupSkipped, transferSkipped };
+    }
+    // Expose on window so it's callable from DevTools.
+    window.compareV2024 = compareV2024;
+
+    // ─── TRANSACTION DERIVE — v0 LEGACY (kept while v2024 is being validated)
+
     // Charge lists live under `ItemChargeList` on Orders and
     // `ItemChargeAdjustmentList` on Refunds. Same shape, different name.
     function _chargeList(item) {
@@ -1107,17 +1463,34 @@
         }
 
         const prod = products[r.sku];
-        if (!prod) {
-          if (!missing.has(r.sku)) missing.set(r.sku, new Set());
-          missing.get(r.sku).add(r.orderId);
-          continue; // Can't categorize without knowing fulfillment.
+
+        // v2024 rows arrive with `fulfillment` already set from the API's
+        // ProductContext (AFN→FBA, MFN→FBM). Trust that hint when present;
+        // it's authoritative per-transaction and avoids the catalog-shift
+        // bug where a SKU's current fulfillment differs from its at-order
+        // fulfillment. Fall back to catalog lookup for v0 rows.
+        let prefix;
+        if (r.fulfillment === 'FBA' || r.fulfillment === 'FBM') {
+          prefix = r.fulfillment;
+          // Still flag missing-from-catalog so product cost (below) can
+          // surface the gap. Don't `continue` — the API knows fulfillment.
+          if (!prod) {
+            if (!missing.has(r.sku)) missing.set(r.sku, new Set());
+            missing.get(r.sku).add(r.orderId);
+          }
+        } else {
+          if (!prod) {
+            if (!missing.has(r.sku)) missing.set(r.sku, new Set());
+            missing.get(r.sku).add(r.orderId);
+            continue; // Can't categorize without knowing fulfillment.
+          }
+          // Accept common spellings of the fulfillment value rather than
+          // relying on one exact string. Seen in the wild: "Amazon", "AFN",
+          // "FBA", sometimes lower/title-cased, sometimes with whitespace.
+          const f = String(prod.fulfillment || '').trim().toLowerCase();
+          const isFba = f === 'amazon' || f === 'afn' || f === 'fba';
+          prefix = isFba ? 'FBA' : 'FBM';
         }
-        // Accept common spellings of the fulfillment value rather than
-        // relying on one exact string. Seen in the wild: "Amazon", "AFN",
-        // "FBA", sometimes lower/title-cased, sometimes with whitespace.
-        const f = String(prod.fulfillment || '').trim().toLowerCase();
-        const isFba = f === 'amazon' || f === 'afn' || f === 'fba';
-        const prefix = isFba ? 'FBA' : 'FBM';
 
         // Sale routing depends on event type: Orders go to Sales,
         // Refunds go to Returns. Everything else routes the same way
@@ -1130,12 +1503,16 @@
         add('FBA Fees', 'expenses', r.fbaFees);
 
         // Product cost = quantity × unit cost. Positive qty on a shipment
-        // is a sold unit — debit to the channel's Product Costs line.
-        const unitCost = parseFloat(prod.cost) || 0;
-        if (unitCost > 0 && r.qty !== 0) {
-          const cost = unitCost * r.qty;
-          if (cost > 0) statement.expenses[`${prefix} Product Costs`].debit += cost;
-          else if (cost < 0) statement.expenses[`${prefix} Product Costs`].credit += Math.abs(cost);
+        // is a sold unit — debit to the channel's Product Costs line. If
+        // the SKU isn't in the catalog (v2024 path may pass through with a
+        // fulfillment hint but no catalog match), skip product cost.
+        if (prod) {
+          const unitCost = parseFloat(prod.cost) || 0;
+          if (unitCost > 0 && r.qty !== 0) {
+            const cost = unitCost * r.qty;
+            if (cost > 0) statement.expenses[`${prefix} Product Costs`].debit += cost;
+            else if (cost < 0) statement.expenses[`${prefix} Product Costs`].credit += Math.abs(cost);
+          }
         }
       }
 
