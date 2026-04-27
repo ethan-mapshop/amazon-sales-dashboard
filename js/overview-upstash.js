@@ -122,6 +122,12 @@
     let _v2024MonthsSet = null;
     let _v2024MonthsPromise = null;
 
+    // Same pattern for the Sponsored-Products and Sponsored-Brands ad
+    // spend months index — used to populate the "Most Recent Ad Spend
+    // Data" label at the top of the page. Lazy-loaded.
+    let _adSpendMonthsSet = null;
+    let _adSpendMonthsPromise = null;
+
 
     function _hideAllOverviewViews() {
       ['monthly-v2024-view', 'ytd-v2024-view']
@@ -143,26 +149,50 @@
         _monthlyV2024AutoLoaded = true;
         setMonthlyV2024Date('lastMonth');
       }
-      _ensureV2024Months().then(() => _refreshV2024NavButtons());
+      _ensureV2024Months().then(() => {
+        _populateV2024YearDropdowns();
+        _refreshV2024NavButtons();
+        _updateOverviewDataLabels();
+      });
+      _ensureAdSpendMonths().then(_updateOverviewDataLabels);
       _refreshV2024NavButtons();
     }
 
     function _initMonthlyV2024Dropdowns() {
-      const yearSel = document.getElementById('monthly-v2024-year-select');
-      if (yearSel && yearSel.options.length === 0) {
-        const currentYear = new Date().getFullYear();
-        for (let y = currentYear; y >= currentYear - 5; y--) {
-          const o = document.createElement('option');
-          o.value = y; o.textContent = y;
-          yearSel.appendChild(o);
-        }
-        yearSel.value = currentYear;
-      }
+      // Year dropdown is populated by _populateV2024YearDropdowns once
+      // _ensureV2024Months resolves so it only lists years that actually
+      // have synced data. Until then it stays empty;
+      // setMonthlyV2024Date('lastMonth') still works because
+      // _setSelectByValue inserts the option if missing.
       const monthSel = document.getElementById('monthly-v2024-month-select');
       if (monthSel && !monthSel.value) {
         const now = new Date();
         const lastMonth = now.getMonth() - 1;
         monthSel.value = lastMonth >= 0 ? lastMonth : 11;
+      }
+    }
+
+    // Replaces the year-dropdown options on both Monthly and YTD v2024 tabs
+    // with the distinct years present in _v2024MonthsSet (descending —
+    // newest first). Preserves the current selection if still valid;
+    // otherwise picks the most recent year. Called from showMonthlyV2024 /
+    // showYTDV2024 once the months index resolves.
+    function _populateV2024YearDropdowns() {
+      if (!_v2024MonthsSet || _v2024MonthsSet.size === 0) return;
+      const years = [...new Set([..._v2024MonthsSet].map(ym => ym.split('-')[0]))]
+        .sort((a, b) => b.localeCompare(a));
+      for (const selectId of ['monthly-v2024-year-select', 'ytd-v2024-year-select']) {
+        const sel = document.getElementById(selectId);
+        if (!sel) continue;
+        const cur = sel.value;
+        sel.innerHTML = '';
+        for (const y of years) {
+          const o = document.createElement('option');
+          o.value = y; o.textContent = y;
+          sel.appendChild(o);
+        }
+        if (years.includes(cur))      sel.value = cur;
+        else if (years.length > 0)    sel.value = years[0];
       }
     }
 
@@ -217,6 +247,53 @@
         }
       })();
       return _v2024MonthsPromise;
+    }
+
+    // Lazy-loads the union of synced Sponsored-Products and Sponsored-Brands
+    // ad-spend month buckets. Used to populate the page-level "Most Recent
+    // Ad Spend Data" label.
+    async function _ensureAdSpendMonths() {
+      if (_adSpendMonthsSet) return _adSpendMonthsSet;
+      if (_adSpendMonthsPromise) return _adSpendMonthsPromise;
+      if (!accessToken) return null;
+      _adSpendMonthsPromise = (async () => {
+        try {
+          const headers = { Authorization: `Bearer ${accessToken}` };
+          const [spRes, sbRes] = await Promise.all([
+            fetch('/api/adspend?action=get-months&type=sp', { headers }),
+            fetch('/api/adspend?action=get-months&type=sb', { headers })
+          ]);
+          const spMonths = spRes.ok ? ((await spRes.json()).months || []) : [];
+          const sbMonths = sbRes.ok ? ((await sbRes.json()).months || []) : [];
+          _adSpendMonthsSet = new Set([...spMonths, ...sbMonths]);
+          return _adSpendMonthsSet;
+        } catch {
+          return null;
+        } finally {
+          _adSpendMonthsPromise = null;
+        }
+      })();
+      return _adSpendMonthsPromise;
+    }
+
+    // Updates the page-level "Most Recent Transaction Data" / "Most Recent
+    // Ad Spend Data" labels at the top of the Profitability Overview. Uses
+    // the OVERALL latest synced month (not just the months in the current
+    // view's range) so the labels reflect data freshness regardless of
+    // which tab/period the user is currently looking at.
+    function _updateOverviewDataLabels() {
+      const txEl = document.getElementById('overview-latest-transaction');
+      const adEl = document.getElementById('overview-latest-adspend');
+      if (txEl) {
+        const latest = (_v2024MonthsSet && _v2024MonthsSet.size > 0)
+          ? [..._v2024MonthsSet].sort().pop() : null;
+        txEl.textContent = latest ? _formatYYYYMM(latest) : '—';
+      }
+      if (adEl) {
+        const latest = (_adSpendMonthsSet && _adSpendMonthsSet.size > 0)
+          ? [..._adSpendMonthsSet].sort().pop() : null;
+        adEl.textContent = latest ? _formatYYYYMM(latest) : '—';
+      }
     }
 
     function _v2024HasMonth(year, month) {
@@ -517,21 +594,18 @@
         _ytdV2024AutoLoaded = true;
         setYTDV2024Year('thisYear');
       }
-      _ensureV2024Months().then(() => _refreshV2024NavButtons());
+      _ensureV2024Months().then(() => {
+        _populateV2024YearDropdowns();
+        _refreshV2024NavButtons();
+        _updateOverviewDataLabels();
+      });
+      _ensureAdSpendMonths().then(_updateOverviewDataLabels);
       _refreshV2024NavButtons();
     }
 
     function _initYTDV2024Dropdown() {
-      const yearSel = document.getElementById('ytd-v2024-year-select');
-      if (yearSel && yearSel.options.length === 0) {
-        const currentYear = new Date().getFullYear();
-        for (let y = currentYear; y >= currentYear - 5; y--) {
-          const o = document.createElement('option');
-          o.value = y; o.textContent = y;
-          yearSel.appendChild(o);
-        }
-        yearSel.value = currentYear;
-      }
+      // Populated by _populateV2024YearDropdowns after _ensureV2024Months
+      // resolves so the list reflects actually-synced years.
     }
 
     // Same semantics as setYTDUpstashYear: thisYear/lastYear are absolute
@@ -1602,8 +1676,12 @@
       if (window._overviewReportCache) window._overviewReportCache.clear();
       _v2024MonthsSet = null;
       _v2024MonthsPromise = null;
-      await _ensureV2024Months();
+      _adSpendMonthsSet = null;
+      _adSpendMonthsPromise = null;
+      await Promise.all([_ensureV2024Months(), _ensureAdSpendMonths()]);
+      _populateV2024YearDropdowns();
       _refreshV2024NavButtons();
+      _updateOverviewDataLabels();
       const activeTabId = document.querySelector('#overview-page .page-header .tabs .tab.active')?.id;
       if (activeTabId === 'ytd-v2024-tab') generateYTDV2024Report();
       else                                  generateMonthlyV2024Report();
