@@ -112,10 +112,11 @@
       }
       
       if (pageName === 'overview') {
-        showMonthly(); // Default to Monthly view
-        if (accessToken) {
-          generateMonthlyReport(); // Auto-load last month's data
-        }
+        // showMonthly() auto-loads the report itself via the first-view
+        // flag — calling generateMonthlyReport() here too would double-fire
+        // the 4-period × 7-sheet Google Sheets fan-out and trip the 429
+        // rate limit.
+        showMonthly();
       }
 
       if (pageName === 'catalog' && accessToken) {

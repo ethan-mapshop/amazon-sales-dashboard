@@ -65,13 +65,12 @@
           }, 100);
         }
       } else {
-        // Default to Overview Monthly
+        // Default to Overview Monthly. showMonthly() handles the auto-load
+        // itself via the first-view flag (gated on accessToken), so we
+        // don't need a separate generateMonthlyReport() call here. Calling
+        // it again would double-fire the 4-period × 7-sheet Sheets fan-out
+        // and trip Google's 429 rate limit.
         showMonthly();
-        setTimeout(() => {
-          if (accessToken) {
-            generateMonthlyReport();
-          }
-        }, 100);
       }
     });
     
