@@ -76,6 +76,14 @@
     // user's recent selection sticks.
     let _monthlyUpstashAutoLoaded = false;
     let _ytdUpstashAutoLoaded = false;
+    let _monthlyV2024AutoLoaded = false;
+
+    // Same months-with-data pattern as _upstashMonthsSet but populated from
+    // the v2024 sync's separate index (transactions:v2024:index). Used by
+    // _refreshV2024NavButtons to disable Prev/Next when the target month
+    // has no synced v2024 data yet.
+    let _v2024MonthsSet = null;
+    let _v2024MonthsPromise = null;
 
     // Months-with-data set, populated lazily from /api/transactions?action=
     // get-months. Used to disable the Prev/Next buttons when the target
@@ -164,7 +172,7 @@
     }
 
     function _hideAllOverviewViews() {
-      ['ytd-view', 'monthly-view', 'ytd-upstash-view', 'monthly-upstash-view']
+      ['ytd-view', 'monthly-view', 'ytd-upstash-view', 'monthly-upstash-view', 'monthly-v2024-view']
         .forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -202,6 +210,116 @@
       }
       _ensureUpstashMonths().then(() => _refreshUpstashNavButtons());
       _refreshUpstashNavButtons();
+    }
+
+    function showMonthlyV2024() {
+      _hideAllOverviewViews();
+      document.getElementById('monthly-v2024-view').style.display = 'block';
+      document.getElementById('monthly-v2024-tab').classList.add('active');
+      _initMonthlyV2024Dropdowns();
+      if (!_monthlyV2024AutoLoaded && accessToken) {
+        _monthlyV2024AutoLoaded = true;
+        setMonthlyV2024Date('lastMonth');
+      }
+      _ensureV2024Months().then(() => _refreshV2024NavButtons());
+      _refreshV2024NavButtons();
+    }
+
+    function _initMonthlyV2024Dropdowns() {
+      const yearSel = document.getElementById('monthly-v2024-year-select');
+      if (yearSel && yearSel.options.length === 0) {
+        const currentYear = new Date().getFullYear();
+        for (let y = currentYear; y >= currentYear - 5; y--) {
+          const o = document.createElement('option');
+          o.value = y; o.textContent = y;
+          yearSel.appendChild(o);
+        }
+        yearSel.value = currentYear;
+      }
+      const monthSel = document.getElementById('monthly-v2024-month-select');
+      if (monthSel && !monthSel.value) {
+        const now = new Date();
+        const lastMonth = now.getMonth() - 1;
+        monthSel.value = lastMonth >= 0 ? lastMonth : 11;
+      }
+    }
+
+    // Same semantics as setMonthlyUpstashDate.
+    function setMonthlyV2024Date(preset) {
+      const today = new Date();
+      const monthSel = document.getElementById('monthly-v2024-month-select');
+      const yearSel  = document.getElementById('monthly-v2024-year-select');
+      const curMonth = parseInt(monthSel.value, 10);
+      const curYear  = parseInt(yearSel.value, 10);
+
+      if (preset === 'lastMonth') {
+        const d = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        monthSel.value = d.getMonth();
+        _setSelectByValueUpstash(yearSel, d.getFullYear());
+      } else if (preset === 'thisMonth') {
+        monthSel.value = today.getMonth();
+        _setSelectByValueUpstash(yearSel, today.getFullYear());
+      } else if (preset === 'prevMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
+        const d = new Date(curYear, curMonth - 1, 1);
+        monthSel.value = d.getMonth();
+        _setSelectByValueUpstash(yearSel, d.getFullYear());
+      } else if (preset === 'nextMonth' && Number.isFinite(curMonth) && Number.isFinite(curYear)) {
+        const d = new Date(curYear, curMonth + 1, 1);
+        monthSel.value = d.getMonth();
+        _setSelectByValueUpstash(yearSel, d.getFullYear());
+      }
+
+      _refreshV2024NavButtons();
+      generateMonthlyV2024Report();
+    }
+
+    // Lazy-load the v2024 months-with-data index. Mirrors _ensureUpstashMonths
+    // but hits get-months-v2024.
+    async function _ensureV2024Months() {
+      if (_v2024MonthsSet) return _v2024MonthsSet;
+      if (_v2024MonthsPromise) return _v2024MonthsPromise;
+      if (!accessToken) return null;
+      _v2024MonthsPromise = (async () => {
+        try {
+          const res = await fetch('/api/transactions?action=get-months-v2024', {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          _v2024MonthsSet = new Set(Array.isArray(data.months) ? data.months : []);
+          return _v2024MonthsSet;
+        } catch {
+          return null;
+        } finally {
+          _v2024MonthsPromise = null;
+        }
+      })();
+      return _v2024MonthsPromise;
+    }
+
+    function _v2024HasMonth(year, month) {
+      if (!_v2024MonthsSet) return true; // unknown → don't block
+      const ym = `${year}-${String(month + 1).padStart(2, '0')}`;
+      return _v2024MonthsSet.has(ym);
+    }
+
+    function _refreshV2024NavButtons() {
+      const mSel = document.getElementById('monthly-v2024-month-select');
+      const ySel = document.getElementById('monthly-v2024-year-select');
+      const mPrev = document.getElementById('monthly-v2024-prev-btn');
+      const mNext = document.getElementById('monthly-v2024-next-btn');
+      if (!mSel || !ySel || !mPrev || !mNext) return;
+      const m = parseInt(mSel.value, 10);
+      const y = parseInt(ySel.value, 10);
+      if (Number.isFinite(m) && Number.isFinite(y)) {
+        const prev = new Date(y, m - 1, 1);
+        const next = new Date(y, m + 1, 1);
+        mPrev.disabled = !_v2024HasMonth(prev.getFullYear(), prev.getMonth());
+        mNext.disabled = !_v2024HasMonth(next.getFullYear(), next.getMonth());
+      } else {
+        mPrev.disabled = false;
+        mNext.disabled = false;
+      }
     }
 
     function _initMonthlyUpstashDropdowns() {
@@ -584,6 +702,239 @@
         brandCampaignToBrand,
         lastSynced
       };
+    }
+
+    // Same as _fetchUpstashInputs but the transactions fetch hits
+    // get-range-v2024 (returning { transactions: [...] } instead of
+    // { pages: [...] }). Everything else — products, ad spend, mappings,
+    // shipping — is identical, so the ad allocator and shipping summer
+    // continue to work without changes.
+    async function _fetchV2024Inputs(startDate, endDate) {
+      const authHeader = { Authorization: `Bearer ${accessToken}` };
+      const startMonth = startDate.slice(0, 7);
+      const endMonth   = endDate.slice(0, 7);
+
+      const [txRes, prodRes, spAdRes, sbAdRes, prodMapRes, brandMapRes, shipRes] = await Promise.all([
+        fetch(`/api/transactions?action=get-range-v2024&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch('/api/products?action=get', { headers: authHeader }),
+        fetch(`/api/adspend?action=get-range&type=sp&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch(`/api/adspend?action=get-range&type=sb&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=product', { headers: authHeader }),
+        fetch('/api/mappings?action=get&type=brand',   { headers: authHeader }),
+        fetch(`/api/shipping?action=get-range&startMonth=${startMonth}&endMonth=${endMonth}`, { headers: authHeader })
+      ]);
+      if (!txRes.ok)   throw new Error(`v2024 transactions fetch failed (${txRes.status})`);
+      if (!prodRes.ok) throw new Error(`Products fetch failed (${prodRes.status})`);
+
+      const tx         = await txRes.json();
+      const prod       = await prodRes.json();
+      const spAd       = spAdRes.ok     ? await spAdRes.json()    : { rows: [] };
+      const sbAd       = sbAdRes.ok     ? await sbAdRes.json()    : { rows: [] };
+      const prodMap    = prodMapRes.ok  ? await prodMapRes.json() : { mappings: {} };
+      const brandMap   = brandMapRes.ok ? await brandMapRes.json() : { mappings: {} };
+      const shipping   = shipRes.ok     ? await shipRes.json()    : { rows: [] };
+
+      const products = {};
+      const brandToSkus = {};
+      for (const p of (prod.products || [])) {
+        if (!p?.sku) continue;
+        products[p.sku] = p;
+        const brand = (p.brand || '').trim();
+        if (brand) {
+          if (!brandToSkus[brand]) brandToSkus[brand] = [];
+          brandToSkus[brand].push(p.sku);
+        }
+      }
+
+      const productCampaignToSkus = {};
+      for (const [campaign, data] of Object.entries(prodMap.mappings || {})) {
+        if (Array.isArray(data?.skus) && data.skus.length > 0) {
+          productCampaignToSkus[campaign] = data.skus.slice();
+        }
+      }
+      const brandCampaignToBrand = {};
+      for (const [campaign, brand] of Object.entries(brandMap.mappings || {})) {
+        if (brand) brandCampaignToBrand[campaign] = brand;
+      }
+
+      let lastSynced = null;
+      try {
+        const months = Array.isArray(tx.months) ? tx.months : [];
+        if (months.length > 0) {
+          const latest = months[months.length - 1];
+          const lsRes = await fetch(`/api/transactions?action=get-v2024&month=${latest}`, { headers: authHeader });
+          if (lsRes.ok) lastSynced = (await lsRes.json()).lastSynced || null;
+        }
+      } catch { /* non-fatal */ }
+
+      return {
+        transactions: tx.transactions || [],
+        products,
+        brandToSkus,
+        spAdRows: spAd.rows || [],
+        sbAdRows: sbAd.rows || [],
+        shippingRows: shipping.rows || [],
+        productCampaignToSkus,
+        brandCampaignToBrand,
+        lastSynced
+      };
+    }
+
+    // v2024 analog of _computeUpstashPeriod. Same downstream pipeline
+    // (statement build → metrics extract) — only the input fetch and the
+    // derivation differ. Returns the same bundle shape so generate
+    // functions / cache / renderer all work unchanged.
+    async function _computeV2024Period(startDate, endDate) {
+      const inputs = await _fetchV2024Inputs(startDate, endDate);
+      const { rows, unmappedBreakdowns, dedupSkipped, transferSkipped } =
+        _deriveV2024Rows(inputs.transactions, startDate, endDate);
+
+      const skuSales = _buildSkuSales(rows, inputs.products);
+      const adSpend = _allocateAdSpend({
+        spAdRows: inputs.spAdRows,
+        sbAdRows: inputs.sbAdRows,
+        products: inputs.products,
+        brandToSkus: inputs.brandToSkus,
+        productCampaignToSkus: inputs.productCampaignToSkus,
+        brandCampaignToBrand: inputs.brandCampaignToBrand,
+        skuSales,
+        startDate,
+        endDate
+      });
+      const shippingCosts = _sumShippingInRange(inputs.shippingRows, startDate, endDate);
+
+      const { statement, missingSkus, unmappedFees } = _buildStatement(rows, inputs.products, adSpend, shippingCosts);
+      const metrics = extractProfitabilityMetrics(statement);
+
+      return {
+        statement, missingSkus, unmappedFees, rows,
+        lastSynced: inputs.lastSynced,
+        adSpend, shippingCosts, metrics,
+        // v2024-only diagnostics (rendered in the warning area below the
+        // statement so a schema drift doesn't get swallowed silently)
+        unmappedBreakdowns, dedupSkipped, transferSkipped
+      };
+    }
+
+    async function generateMonthlyV2024Report() {
+      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
+      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
+      if (isNaN(month) || isNaN(year)) return;
+
+      const container = document.getElementById('monthly-v2024-content');
+      if (!container) return;
+      if (!accessToken) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Please sign in</div>';
+        return;
+      }
+
+      const cacheKey = `monthly-v2024|${year}|${month}`;
+      const cached = window._overviewReportCache && window._overviewReportCache.get(cacheKey);
+      if (cached) {
+        container.innerHTML = cached;
+        return;
+      }
+
+      _refreshV2024NavButtons();
+
+      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+
+      try {
+        // Mirrors generateMonthlyUpstashReport: current + previous (MoM) +
+        // YoY pulled in parallel, comparisons computed on the metrics, then
+        // current period rendered with comparisons.
+        const startDate = _ymd(new Date(year, month, 1));
+        const endDate   = _ymd(new Date(year, month + 1, 0));
+        const prevStart = _ymd(new Date(year, month - 1, 1));
+        const prevEnd   = _ymd(new Date(year, month, 0));
+        const yoyStart  = _ymd(new Date(year - 1, month, 1));
+        const yoyEnd    = _ymd(new Date(year - 1, month + 1, 0));
+
+        const [current, prev, yoy] = await Promise.all([
+          _computeV2024Period(startDate, endDate),
+          _computeV2024Period(prevStart, prevEnd),
+          _computeV2024Period(yoyStart, yoyEnd)
+        ]);
+
+        const comparisons = calculateComparisons(current.metrics, prev.metrics, yoy.metrics);
+        _renderV2024Statement(container, {
+          statement: current.statement,
+          missingSkus: current.missingSkus,
+          unmappedFees: current.unmappedFees,
+          unmappedBreakdowns: current.unmappedBreakdowns,
+          dedupSkipped: current.dedupSkipped,
+          transferSkipped: current.transferSkipped,
+          rows: current.rows,
+          lastSynced: current.lastSynced,
+          startDate, endDate,
+          adSpend: current.adSpend,
+          shippingCosts: current.shippingCosts,
+          comparisons
+        });
+
+        if (window._overviewReportCache) window._overviewReportCache.set(cacheKey, container.innerHTML);
+      } catch (err) {
+        console.error('v2024 monthly overview failed:', err);
+        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+      }
+    }
+
+    // Same as _renderUpstashStatement but adds a v2024-specific diagnostic
+    // strip showing dedup-skipped count, transfer-skipped count, and any
+    // unmapped breakdownTypes (signals an Amazon schema change).
+    function _renderV2024Statement(container, opts) {
+      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, dedupSkipped, transferSkipped, rows, lastSynced, startDate, endDate, comparisons } = opts;
+      renderFinancialStatement(statement, startDate, endDate, container, comparisons || null);
+
+      const syncLine = lastSynced
+        ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Last synced (v2024): ${_formatSyncTime(lastSynced)}</div>`
+        : '';
+      const countLine = `
+        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          ${rows.length.toLocaleString()} derived rows from Finances v2024-06-19 listTransactions
+          · ${dedupSkipped} dedup-skipped (RELEASED with deferred ancestor)
+          · ${transferSkipped} disbursement transfers skipped
+        </div>
+      `;
+      const missingWarning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
+      const feeWarning     = unmappedFees && unmappedFees.length > 0 ? _renderUnmappedFeeWarning(unmappedFees) : '';
+      const breakdownWarning = unmappedBreakdowns && Object.keys(unmappedBreakdowns).length > 0
+        ? _renderUnmappedBreakdownWarning(unmappedBreakdowns)
+        : '';
+      container.innerHTML = syncLine + countLine + missingWarning + feeWarning + breakdownWarning + container.innerHTML;
+    }
+
+    // v2024-specific: surface any breakdown leaf we walked past without a
+    // V2024_LEAF_HANDLER entry. If this ever shows non-zero, Amazon added
+    // a new breakdownType and the handler table needs an update.
+    function _renderUnmappedBreakdownWarning(unmapped) {
+      const fmt = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const entries = Object.entries(unmapped).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+      const rows = entries.map(([type, total]) => `
+        <tr>
+          <td style="padding: 0.5rem 0.75rem; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${_escape(type)}</td>
+          <td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.85rem;">${fmt(total)}</td>
+        </tr>
+      `).join('');
+      return `
+        <div style="background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem;">
+          <div style="font-weight: 600; color: var(--warning); margin-bottom: 0.5rem;">
+            ⚠ ${entries.length} unmapped v2024 breakdownType${entries.length === 1 ? '' : 's'} — silently dropped
+          </div>
+          <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+            These appeared in the listTransactions response but aren't in V2024_LEAF_HANDLER, so their amounts didn't make it into the statement. Likely means Amazon added a new breakdownType — extend the handler table to route them.
+          </div>
+          <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr>
+                <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">breakdownType</th>
+                <th style="text-align: right; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
     }
 
     // ─── TRANSACTION DERIVE ─────────────────────────────────────────────
@@ -1729,7 +2080,13 @@
       }
     }
 
-    function _renderSkuDiff(container, { startDate, endDate, sheetsTotal, upstashTotal, totalDiff, diffs }) {
+    function _renderSkuDiff(container, { startDate, endDate, sheetsTotal, upstashTotal, totalDiff, diffs, backLabel, rightSideLabel }) {
+      // Default to the original Upstash labels for backward compatibility
+      // with showMonthlyUpstashSkuDiff. Callers can override to point the
+      // Back button at a different generator and/or rename the right-hand
+      // dataset (e.g. "v2024" instead of "Upstash").
+      const backCall = backLabel || 'generateMonthlyUpstashReport()';
+      const rightLabel = rightSideLabel || 'Upstash';
       const fmt = (n) => {
         const abs = Math.abs(n);
         const s = '$' + abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1773,28 +2130,28 @@
 
       container.innerHTML = `
         <div style="margin-bottom: 1rem;">
-          <button class="btn btn-secondary" onclick="generateMonthlyUpstashReport()" style="padding: 0.5rem 1rem;">← Back to report</button>
+          <button class="btn btn-secondary" onclick="${backCall}" style="padding: 0.5rem 1rem;">← Back to report</button>
         </div>
         <div style="margin-bottom: 1rem; font-weight: 600;">
-          Per-SKU Sheets vs Upstash comparison · ${startDate} → ${endDate}
+          Per-SKU Sheets vs ${rightLabel} comparison · ${startDate} → ${endDate}
         </div>
         <div style="display: flex; gap: 2rem; margin-bottom: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.9rem;">
           <div><span style="color: var(--text-secondary);">Sheets Orders total:</span> ${fmt(sheetsTotal)}</div>
-          <div><span style="color: var(--text-secondary);">Upstash Orders total:</span> ${fmt(upstashTotal)}</div>
-          <div><span style="color: var(--text-secondary);">Diff (Upstash − Sheets):</span> <span style="color: ${diffColor(totalDiff)};">${fmt(totalDiff)}</span></div>
+          <div><span style="color: var(--text-secondary);">${rightLabel} Orders total:</span> ${fmt(upstashTotal)}</div>
+          <div><span style="color: var(--text-secondary);">Diff (${rightLabel} − Sheets):</span> <span style="color: ${diffColor(totalDiff)};">${fmt(totalDiff)}</span></div>
         </div>
         <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">
-          Showing ${filtered.length} of ${diffs.length} SKUs that have a non-zero order diff (≥ $0.01) or a fulfillment mismatch. Rows with amber fulfillment cells had a different fulfillment recorded on March orders than the current Products catalog.
+          Showing ${filtered.length} of ${diffs.length} SKUs that have a non-zero order diff (≥ $0.01) or a fulfillment mismatch. Rows with amber fulfillment cells had a different fulfillment recorded on the order's date than the current Products catalog.
         </div>
         <table style="width: 100%; border-collapse: collapse;">
           <thead>
             <tr>
               <th style="${thStyle}">SKU</th>
               <th style="${thRight}">Sheets Orders</th>
-              <th style="${thRight}">Upstash Orders</th>
+              <th style="${thRight}">${rightLabel} Orders</th>
               <th style="${thRight}">Diff</th>
               <th style="${thRight}">Sheets Refunds</th>
-              <th style="${thRight}">Upstash Refunds</th>
+              <th style="${thRight}">${rightLabel} Refunds</th>
               <th style="${thStyle}">Sheets Fulfillment</th>
               <th style="${thStyle}">Catalog Fulfillment</th>
             </tr>
@@ -1903,6 +2260,227 @@
     }
 
     // Flatten raw pages → one row per atomic charge/fee for the Detail CSV.
+    // v2024 Compare-to-Sheets. Same shape as showMonthlyUpstashSkuDiff but
+    // sources the right side from _fetchV2024Inputs + _deriveV2024Rows so
+    // deferred B2B Invoiced Orders are correctly included in the dollar
+    // totals. Renders via the same _renderSkuDiff helper, just with a
+    // different "Back to report" target.
+    async function showMonthlyV2024SkuDiff() {
+      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
+      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
+      if (isNaN(month) || isNaN(year)) return;
+
+      const container = document.getElementById('monthly-v2024-content');
+      if (!container) return;
+      if (!accessToken) {
+        container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to run the Sheets-vs-v2024 comparison</div>';
+        return;
+      }
+
+      const startDate = _ymd(new Date(year, month, 1));
+      const endDate   = _ymd(new Date(year, month + 1, 0));
+      container.innerHTML = `<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Comparing Sheets vs v2024 for ${startDate} → ${endDate}…</div>`;
+
+      try {
+        const [sheetsInputs, v2024Inputs] = await Promise.all([
+          _fetchOverviewInputsFromSheets(),
+          _fetchV2024Inputs(startDate, endDate)
+        ]);
+
+        // Sheets aggregation — identical to the Upstash variant.
+        const sheetsRows = sheetsInputs.transactionsData.values || [];
+        const headers = sheetsRows[0] || [];
+        const idx = (needle) => headers.findIndex(h => String(h || '').toLowerCase() === needle);
+        const dateIdx        = headers.findIndex(h => String(h || '').toLowerCase().includes('date'));
+        const typeIdx        = idx('type');
+        const skuIdx         = idx('sku');
+        const fulfillmentIdx = idx('fulfillment');
+        const salesIdx       = idx('product sales');
+
+        const sheetsPerSku = Object.create(null);
+        for (let i = 1; i < sheetsRows.length; i++) {
+          const row = sheetsRows[i] || [];
+          const dateStr = String(row[dateIdx] || '').substring(0, 10);
+          if (!dateStr || dateStr < startDate || dateStr > endDate) continue;
+          const type = String(row[typeIdx] || '').trim();
+          const sku = _normalizeSku(row[skuIdx]);
+          if (!sku) continue;
+          const fulfillment = String(row[fulfillmentIdx] || '').trim();
+          const amount = parseFloat(row[salesIdx]) || 0;
+          let bucket = sheetsPerSku[sku];
+          if (!bucket) bucket = sheetsPerSku[sku] = { order: 0, refund: 0, fulfillment: '' };
+          if (type === 'Order')       bucket.order  += amount;
+          else if (type === 'Refund') bucket.refund += amount;
+          if (fulfillment && !bucket.fulfillment) bucket.fulfillment = fulfillment;
+        }
+
+        // v2024 aggregation — sourced from listTransactions + dedup-aware
+        // derivation, so deferred B2B sales are included.
+        const { rows } = _deriveV2024Rows(v2024Inputs.transactions, startDate, endDate);
+        const v2024PerSku = Object.create(null);
+        for (const r of rows) {
+          if (!r.sku || (r.type !== 'Order' && r.type !== 'Refund')) continue;
+          let bucket = v2024PerSku[r.sku];
+          if (!bucket) bucket = v2024PerSku[r.sku] = { order: 0, refund: 0 };
+          if (r.type === 'Order') bucket.order  += r.sale;
+          else                     bucket.refund += r.sale;
+        }
+
+        const skus = new Set([...Object.keys(sheetsPerSku), ...Object.keys(v2024PerSku)]);
+        const diffs = [];
+        let sheetsTotal = 0, v2024Total = 0;
+        for (const sku of skus) {
+          const s = sheetsPerSku[sku] || { order: 0, refund: 0, fulfillment: '' };
+          const u = v2024PerSku[sku]  || { order: 0, refund: 0 };
+          const prod = v2024Inputs.products[sku];
+          let catalogFulfillment;
+          if (!prod) catalogFulfillment = '(not in catalog)';
+          else if (!String(prod.fulfillment || '').trim()) catalogFulfillment = '(blank)';
+          else catalogFulfillment = String(prod.fulfillment).trim();
+
+          sheetsTotal += s.order;
+          v2024Total  += u.order;
+          diffs.push({
+            sku,
+            sheetsOrder:  s.order,
+            upstashOrder: u.order,
+            orderDiff:    u.order - s.order,
+            sheetsRefund:  s.refund,
+            upstashRefund: u.refund,
+            sheetsFulfillment: s.fulfillment,
+            catalogFulfillment
+          });
+        }
+        diffs.sort((a, b) => Math.abs(b.orderDiff) - Math.abs(a.orderDiff));
+
+        // Reuse the Upstash renderer — its column header says "Upstash" but
+        // the user already knows this is the v2024 view; rather than fork
+        // the renderer, point its "Back" button to the v2024 generator.
+        _renderSkuDiff(container, {
+          startDate, endDate,
+          sheetsTotal, upstashTotal: v2024Total,
+          totalDiff: v2024Total - sheetsTotal,
+          diffs,
+          backLabel: 'generateMonthlyV2024Report()',
+          rightSideLabel: 'v2024'
+        });
+      } catch (err) {
+        console.error('v2024 SKU diff failed:', err);
+        container.innerHTML = `<div style="padding: 2rem; color: var(--error);">Error: ${err.message}</div>`;
+      }
+    }
+
+    async function exportMonthlyV2024CSV() {
+      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
+      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
+      if (isNaN(month) || isNaN(year)) return;
+      const startDate = _ymd(new Date(year, month, 1));
+      const endDate   = _ymd(new Date(year, month + 1, 0));
+      if (!accessToken) return;
+      try {
+        const inputs = await _fetchV2024Inputs(startDate, endDate);
+        const { rows } = _deriveV2024Rows(inputs.transactions, startDate, endDate);
+        if (rows.length === 0) {
+          _v2024ExportNotice('No v2024 transactions in range — sync via /api/transactions?action=sync-v2024&month=YYYY-MM first.');
+          return;
+        }
+        const headers = [
+          'type', 'order id', 'date', 'sku', 'qty', 'fulfillment',
+          'sale', 'other charges', 'fba fees', 'transaction fees', 'promotions',
+          'fee type', 'fee amount',
+          'adjustment type', 'adjustment amount',
+          'transaction id', 'transaction status'
+        ];
+        const lines = [headers.map(_csvCell).join(',')];
+        for (const r of rows) {
+          lines.push([
+            r.type, r.orderId, r.date, r.sku, r.qty, r.fulfillment || '',
+            _round2(r.sale), _round2(r.otherCharges),
+            _round2(r.fbaFees), _round2(r.transactionFees), _round2(r.promotions),
+            r.feeType || '',
+            r.feeAmount != null ? _round2(r.feeAmount) : '',
+            r.adjustmentType || '',
+            r.adjustmentAmount != null ? _round2(r.adjustmentAmount) : '',
+            r._transactionId || '',
+            r._transactionStatus || ''
+          ].map(_csvCell).join(','));
+        }
+        const filename = `transactions-v2024-derived-${year}-${String(month + 1).padStart(2, '0')}.csv`;
+        _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), filename);
+      } catch (err) {
+        console.error('v2024 CSV export failed:', err);
+        _v2024ExportNotice(`Export failed: ${err.message}`);
+      }
+    }
+
+    // Detail CSV: one row per top-level transaction (no breakdown walking)
+    // so the user can scroll the raw v2024 shape and verify against the
+    // Amazon Payment Report's row count / total amounts.
+    async function exportMonthlyV2024DetailCSV() {
+      const month = parseInt(document.getElementById('monthly-v2024-month-select').value, 10);
+      const year  = parseInt(document.getElementById('monthly-v2024-year-select').value, 10);
+      if (isNaN(month) || isNaN(year)) return;
+      const yyyyMM = `${year}-${String(month + 1).padStart(2, '0')}`;
+      if (!accessToken) return;
+      try {
+        const res = await fetch(`/api/transactions?action=get-v2024&month=${yyyyMM}`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+        const data = await res.json();
+        const transactions = data.transactions || [];
+        if (transactions.length === 0) {
+          _v2024ExportNotice('No v2024 transactions found — sync via /api/transactions?action=sync-v2024&month=YYYY-MM first.');
+          return;
+        }
+        const HEADERS = [
+          'transaction_id', 'transaction_type', 'transaction_status',
+          'posted_date', 'description', 'total_amount', 'account_type',
+          'order_id', 'shipment_id', 'settlement_id', 'deferred_transaction_id',
+          'deferral_reason', 'maturity_date', 'item_count'
+        ];
+        const lines = [HEADERS.map(_csvCell).join(',')];
+        for (const t of transactions) {
+          const rid = (name) => (t.relatedIdentifiers || []).find(r => r?.relatedIdentifierName === name)?.relatedIdentifierValue || '';
+          const deferred = (t.contexts || []).find(c => c?.contextType === 'DeferredContext') || {};
+          lines.push([
+            t.transactionId || '',
+            t.transactionType || '',
+            t.transactionStatus || '',
+            t.postedDate || '',
+            t.description || '',
+            t.totalAmount?.currencyAmount ?? '',
+            t.sellingPartnerMetadata?.accountType || '',
+            rid('ORDER_ID'),
+            rid('SHIPMENT_ID'),
+            rid('SETTLEMENT_ID'),
+            rid('DEFERRED_TRANSACTION_ID'),
+            deferred.deferralReason || '',
+            deferred.maturityDate || '',
+            Array.isArray(t.items) ? t.items.length : 0
+          ].map(_csvCell).join(','));
+        }
+        _download(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' }), `transactions-v2024-detail-${yyyyMM}.csv`);
+      } catch (err) {
+        console.error('v2024 detail CSV export failed:', err);
+        _v2024ExportNotice(`Export failed: ${err.message}`);
+      }
+    }
+
+    // Inline-banner version of an export-failure / no-data message. Drops a
+    // dismissible warning banner above the current statement instead of an
+    // alert popup — auto-removes after 8s.
+    function _v2024ExportNotice(message) {
+      const container = document.getElementById('monthly-v2024-content');
+      if (!container) return;
+      const banner = document.createElement('div');
+      banner.style.cssText = 'background: var(--bg-secondary); border: 1px solid var(--warning); border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; color: var(--warning); font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center;';
+      banner.innerHTML = `<span>⚠ ${_escape(message)}</span><button style="background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1rem; padding: 0 0.5rem;">×</button>`;
+      banner.querySelector('button').addEventListener('click', () => banner.remove());
+      container.prepend(banner);
+      setTimeout(() => banner.remove(), 8000);
+    }
+
     function _flattenRawPages(pages) {
       const rows = [];
       for (const page of pages) {

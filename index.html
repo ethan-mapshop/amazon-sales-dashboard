@@ -605,6 +605,9 @@
             <button id="ytd-upstash-tab" class="tab" onclick="showYTDUpstash()">
               Year-to-Date Profitability &mdash; Upstash
             </button>
+            <button id="monthly-v2024-tab" class="tab" onclick="showMonthlyV2024()">
+              Monthly Profitability &mdash; v2024
+            </button>
           </div>
         </div>
 
@@ -722,6 +725,45 @@
             <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
               <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
               <div style="font-size: 1.125rem;">Select a year to view Year-to-Date profitability (from Upstash)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly View — v2024 -->
+        <div id="monthly-v2024-view" style="display: none;">
+          <div style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Month:</label>
+              <select id="monthly-v2024-month-select" onchange="generateMonthlyV2024Report()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 140px;">
+                <option value="0">January</option>
+                <option value="1">February</option>
+                <option value="2">March</option>
+                <option value="3">April</option>
+                <option value="4">May</option>
+                <option value="5">June</option>
+                <option value="6">July</option>
+                <option value="7">August</option>
+                <option value="8">September</option>
+                <option value="9">October</option>
+                <option value="10">November</option>
+                <option value="11">December</option>
+              </select>
+              <label style="font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary);">Year:</label>
+              <select id="monthly-v2024-year-select" onchange="generateMonthlyV2024Report()" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; width: auto; min-width: 120px;">
+              </select>
+              <button id="monthly-v2024-prev-btn" class="btn" onclick="setMonthlyV2024Date('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
+              <button id="monthly-v2024-next-btn" class="btn" onclick="setMonthlyV2024Date('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
+              <button class="btn" onclick="setMonthlyV2024Date('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
+              <button class="btn btn-secondary" onclick="showMonthlyV2024SkuDiff()" style="padding: 0.5rem 1rem; margin-left: auto;">Compare to Sheets</button>
+              <button class="btn btn-secondary" onclick="exportMonthlyV2024CSV()" style="padding: 0.5rem 1rem;">Export CSV</button>
+              <button class="btn btn-secondary" onclick="exportMonthlyV2024DetailCSV()" style="padding: 0.5rem 1rem;">Export Detail CSV</button>
+            </div>
+          </div>
+
+          <div id="monthly-v2024-content">
+            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">
+              <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📊</div>
+              <div style="font-size: 1.125rem;">Select a month and year to view monthly profitability (Finances v2024-06-19)</div>
             </div>
           </div>
         </div>
