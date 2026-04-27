@@ -294,12 +294,14 @@
     }
 
     // Updates the page-level "Most Recent Transaction Data" / "Most Recent
-    // Ad Spend Data" labels at the top of the Profitability Overview. Uses
-    // the absolute latest postedDate (across all synced data, not just
-    // the currently-viewed range) formatted as M/D/YY — e.g. "3/31/26".
+    // Ad Spend Data" / "Next Cron Job" labels at the top of the
+    // Profitability Overview. Uses the absolute latest postedDate (across
+    // all synced data, not just the currently-viewed range) formatted as
+    // M/D/YY — e.g. "3/31/26".
     function _updateOverviewDataLabels() {
       const txEl = document.getElementById('overview-latest-transaction');
       const adEl = document.getElementById('overview-latest-adspend');
+      const cronEl = document.getElementById('overview-next-cron');
       if (txEl) {
         txEl.textContent = _v2024LatestPostedDate
           ? _formatMDY(_v2024LatestPostedDate) : '—';
@@ -308,6 +310,31 @@
         adEl.textContent = _adSpendLatestPostedDate
           ? _formatMDY(_adSpendLatestPostedDate) : '—';
       }
+      if (cronEl) {
+        cronEl.textContent = _formatMDY(_nextCronDateISO());
+      }
+    }
+
+    // Returns the next date (as YYYY-MM-DD) on which the v2024
+    // transactions + ad spend cron will run. The Vercel cron is
+    // configured for the 3rd of every month (UTC) — that gives Amazon
+    // a couple of days after month-end to settle deferred transactions
+    // before we pull. If today is before the 3rd of this month, the
+    // next run is the 3rd of this month; otherwise it rolls to the
+    // 3rd of next month.
+    const CRON_DAY_OF_MONTH = 3;
+    function _nextCronDateISO() {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth();
+      const d = now.getDate();
+      const target = (d < CRON_DAY_OF_MONTH)
+        ? new Date(y, m, CRON_DAY_OF_MONTH)
+        : new Date(y, m + 1, CRON_DAY_OF_MONTH);
+      const yy = target.getFullYear();
+      const mm = String(target.getMonth() + 1).padStart(2, '0');
+      const dd = String(target.getDate()).padStart(2, '0');
+      return `${yy}-${mm}-${dd}`;
     }
 
     // ISO date or "YYYY-MM-DD" → "M/D/YY" (e.g. "2026-03-31T..." → "3/31/26").
@@ -741,36 +768,20 @@
       }
     }
 
-    // Same as _renderUpstashStatement but adds a v2024-specific diagnostic
-    // strip showing dedup-skipped count, transfer-skipped count, and any
-    // unmapped breakdownTypes (signals an Amazon schema change).
+    // Renders the financial statement plus any unmapped-data warnings.
+    // The status strip (data-through / last-synced / dedup counters) was
+    // removed — the page-header labels at the top of the Overview now
+    // surface the same freshness information.
     function _renderV2024Statement(container, opts) {
-      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped, rows, lastSynced, latestSyncedMonth, startDate, endDate, comparisons } = opts;
+      const { statement, missingSkus, unmappedFees, unmappedBreakdowns, startDate, endDate, comparisons } = opts;
       renderFinancialStatement(statement, startDate, endDate, container, comparisons || null);
 
-      // Data status strip — always rendered, even if some fields are null,
-      // so the user can tell at a glance what's loaded and how fresh it is.
-      // "Data through" = the latest YYYY-MM in the queried range that has
-      // synced transactions; "Last synced" = ISO timestamp of that month's
-      // most recent sync. Both fall back to "—" if unknown.
-      const dataThrough = latestSyncedMonth ? _formatYYYYMM(latestSyncedMonth) : '—';
-      const lastSyncedDisplay = lastSynced ? _formatSyncTime(lastSynced) : '—';
-      const statusStrip = `
-        <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          <span><strong style="color: var(--text-primary);">Data through:</strong> ${_escape(dataThrough)}</span>
-          <span><strong style="color: var(--text-primary);">Last synced:</strong> ${_escape(lastSyncedDisplay)}</span>
-          <span><strong style="color: var(--text-primary);">Derived rows:</strong> ${rows.length.toLocaleString()}</span>
-          <span title="Release-side companion records skipped because their deferred-side parent (the invoice-date record) is preferred for invoice-date allocation. Grouped by SHIPMENT_ID/REFUND_ID across the 6-month lookback window.">Dedup-skipped: ${dedupSkipped}</span>
-          <span title="Records pulled in via the lookback window that fall outside the requested date range — used for cross-month dedup visibility but not rendered.">Lookback-only: ${outOfWindowSkipped || 0}</span>
-          <span title="Disbursement transfers (bank payouts) — not P&amp;L events">Transfers skipped: ${transferSkipped}</span>
-        </div>
-      `;
       const missingWarning = missingSkus.length > 0 ? _renderMissingSkuWarning(missingSkus) : '';
       const feeWarning     = unmappedFees && unmappedFees.length > 0 ? _renderUnmappedFeeWarning(unmappedFees) : '';
       const breakdownWarning = unmappedBreakdowns && Object.keys(unmappedBreakdowns).length > 0
         ? _renderUnmappedBreakdownWarning(unmappedBreakdowns)
         : '';
-      container.innerHTML = statusStrip + missingWarning + feeWarning + breakdownWarning + container.innerHTML;
+      container.innerHTML = missingWarning + feeWarning + breakdownWarning + container.innerHTML;
     }
 
     // YYYY-MM → "Mon YYYY" (e.g. "2025-08" → "Aug 2025"). Used in the data-

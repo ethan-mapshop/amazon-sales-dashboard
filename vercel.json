@@ -7,6 +7,18 @@
     {
       "path": "/api/sessions?action=sync",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/transactions?action=sync-v2024",
+      "schedule": "0 10 3 * *"
+    },
+    {
+      "path": "/api/adspend?action=sync-request",
+      "schedule": "10 10 3 * *"
+    },
+    {
+      "path": "/api/adspend?action=sync-collect",
+      "schedule": "0 12 3 * *"
     }
   ],
   "functions": {
