@@ -1,3 +1,8 @@
+    // Upload-page configs. Transactions / shipping / ad-spend types
+    // were removed once those data sources moved to API-driven syncs
+    // (SP-API + ShipStation + Amazon Ads API on the monthly cron).
+    // The remaining three types still flow through the upload page
+    // because they're user-edited rather than pulled from an API.
     const SHEET_CONFIGS = {
       products: {
         sheetName: 'Products',
@@ -5,34 +10,6 @@
         requiredColumns: ['sku'],
         skipRows: 0,
         allowUpdates: true
-      },
-      transactions: {
-        sheetName: 'Transactions',
-        uniqueKey: 'order id',
-        requiredColumns: ['order id'],
-        skipRows: 7,
-        allowUpdates: false
-      },
-      shipping: {
-        sheetName: 'ShippingCosts',
-        uniqueKey: 'Order #',
-        requiredColumns: ['Order #'],
-        skipRows: 0,
-        allowUpdates: false
-      },
-      productads: {
-        sheetName: 'ProductAdSpend',
-        uniqueKey: null,
-        requiredColumns: ['Campaign Name'],
-        skipRows: 0,
-        allowUpdates: false
-      },
-      brandads: {
-        sheetName: 'BrandAdSpend',
-        uniqueKey: null,
-        requiredColumns: ['Campaign Name'],
-        skipRows: 0,
-        allowUpdates: false
       },
       productadmapping: {
         sheetName: 'ProductAdMapping',

@@ -52,90 +52,57 @@
     }
     
     async function loadProducts() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`;
-      const response = await fetch(url, {
+      // Pulls the products list from the Upstash catalog (same source
+      // every other dashboard page uses). The Campaign Mapping page
+      // shows every product regardless of `type` — variations and
+      // children all need to be pickable as ad-mapping targets.
+      const response = await fetch('/api/products?action=get', {
         headers: { 'Authorization': `Bearer ${accessToken}` }
       });
-      
+
       if (!response.ok) throw new Error('Failed to load products');
-      
+
       const data = await response.json();
-      const rows = data.values || [];
-      
-      if (rows.length > 1) {
-        const headers = rows[0];
-        const skuIndex = headers.indexOf('sku');
-        const brandIndex = headers.indexOf('brand');
-        const nameIndex = headers.indexOf('name');
-        
-        products = [];
-        brands = new Set();
-        
-        for (let i = 1; i < rows.length; i++) {
-          const sku = rows[i][skuIndex];
-          const brand = rows[i][brandIndex];
-          const name = rows[i][nameIndex];
-          
-          if (sku) {
-            products.push({ sku, brand, name });
-          }
-          if (brand) {
-            brands.add(brand);
-          }
-        }
-        
-        brands = Array.from(brands).sort();
+      const list = Array.isArray(data.products) ? data.products : [];
+
+      products = [];
+      const brandSet = new Set();
+      for (const p of list) {
+        if (!p?.sku) continue;
+        products.push({ sku: p.sku, brand: p.brand || '', name: p.name || '' });
+        if (p.brand) brandSet.add(p.brand);
       }
+      brands = Array.from(brandSet).sort();
     }
-    
+
+    // Walks the SP / SB ad-spend rows in Upstash and pulls out every
+    // distinct campaign name ever seen. Replaces the old "read the
+    // ProductAdSpend / BrandAdSpend tabs from Sheets" approach. We use
+    // a deliberately wide month range (2020-01 → 2099-12) so the API's
+    // index filter returns every synced month — adding new months
+    // doesn't require touching this code.
+    async function _loadAdSpendCampaigns(type) {
+      const url = `/api/adspend?action=get-range&type=${type}&startMonth=2020-01&endMonth=2099-12`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (!response.ok) throw new Error(`Failed to load ${type} campaigns`);
+      const data = await response.json();
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      const set = new Set();
+      for (const r of rows) {
+        const c = (r?.campaign || '').toString().trim();
+        if (c) set.add(c);
+      }
+      return Array.from(set).sort();
+    }
+
     async function loadProductCampaigns() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ProductAdSpend`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      
-      if (!response.ok) throw new Error('Failed to load product campaigns');
-      
-      const data = await response.json();
-      const rows = data.values || [];
-      
-      if (rows.length > 1) {
-        const headers = rows[0];
-        const campaignIndex = headers.indexOf('Campaign Name');
-        
-        const campaignSet = new Set();
-        for (let i = 1; i < rows.length; i++) {
-          const campaign = rows[i][campaignIndex];
-          if (campaign) campaignSet.add(campaign);
-        }
-        
-        campaigns.product = Array.from(campaignSet).sort();
-      }
+      campaigns.product = await _loadAdSpendCampaigns('sp');
     }
-    
+
     async function loadBrandCampaigns() {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/BrandAdSpend`;
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      
-      if (!response.ok) throw new Error('Failed to load brand campaigns');
-      
-      const data = await response.json();
-      const rows = data.values || [];
-      
-      if (rows.length > 1) {
-        const headers = rows[0];
-        const campaignIndex = headers.indexOf('Campaign Name');
-        
-        const campaignSet = new Set();
-        for (let i = 1; i < rows.length; i++) {
-          const campaign = rows[i][campaignIndex];
-          if (campaign) campaignSet.add(campaign);
-        }
-        
-        campaigns.brand = Array.from(campaignSet).sort();
-      }
+      campaigns.brand = await _loadAdSpendCampaigns('sb');
     }
     
     // Mappings now live in Upstash. The local shape (mappings.product /

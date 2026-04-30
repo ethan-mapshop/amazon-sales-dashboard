@@ -27,41 +27,47 @@
           window._svMonthlySummary = summaryData.summary || null;
         }
         
-        // Load products (Child + Non-Variable only)
-        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
+        // Load products from the Upstash catalog. Sales & Volume needs
+        // sellable units, so the Child/Non-Variable filter (parents
+        // are display rollups whose own ASINs don't actually sell on
+        // Amazon) is preserved exactly as before — only the data
+        // source changed.
+        const productsResponse = await fetch('/api/products?action=get', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        
-        const productsData = await productsResponse.json();
-        
-        if (productsData.values && productsData.values.length > 0) {
-          svAllProducts = productsData.values
-            .filter(row => {
-              const asin = row[5];
-              const productType = row[6] || '';
-              return asin && 
-                     asin.toUpperCase() !== 'N/A' && 
-                     (productType === 'Child' || productType === 'Non-Variable');
-            })
-            .map(row => ({
-              sku: row[0],
-              name: row[1] || row[0],
-              brand: row[2] || 'Unknown',
-              asin: row[5],
-              productType: row[6] || ''
-            }));
-          
-          // Populate brand dropdown
-          const brands = [...new Set(svAllProducts.map(p => p.brand))].sort();
-          const brandSelect = document.getElementById('sv-brand-filter');
-          brandSelect.innerHTML = '<option value="">All Brands</option>';
-          brands.forEach(brand => {
-            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
-          });
-          
-          // Populate products
-          filterSVProducts();
+        if (!productsResponse.ok) {
+          console.error('Failed to load products from Upstash:', productsResponse.status);
+          return;
         }
+        const productsPayload = await productsResponse.json();
+        const products = Array.isArray(productsPayload.products) ? productsPayload.products : [];
+
+        svAllProducts = products
+          .filter(p => {
+            const asin = (p.asin || '').toString().trim();
+            const productType = (p.type || '').toString().trim();
+            return asin
+                && asin.toUpperCase() !== 'N/A'
+                && (productType === 'Child' || productType === 'Non-Variable');
+          })
+          .map(p => ({
+            sku: p.sku,
+            name: p.name || p.sku,
+            brand: p.brand || 'Unknown',
+            asin: p.asin,
+            productType: p.type || ''
+          }));
+
+        // Populate brand dropdown
+        const brands = [...new Set(svAllProducts.map(p => p.brand))].sort();
+        const brandSelect = document.getElementById('sv-brand-filter');
+        brandSelect.innerHTML = '<option value="">All Brands</option>';
+        brands.forEach(brand => {
+          brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
+        });
+
+        // Populate products
+        filterSVProducts();
         
         // Render data
         renderSalesVolumeData();

@@ -98,14 +98,17 @@
         </div>
       </div>
 
-      <!-- Upload Card with Tabs -->
+      <!-- Upload Card with Tabs.
+           Transactions / Shipping / Product Ads / Brand Ads tabs
+           were removed once those data types moved to API-driven syncs
+           (SP-API for transactions, ShipStation for shipping, Amazon
+           Ads API for ad spend) running on the monthly cron in
+           vercel.json — no manual CSV upload is needed for them
+           anymore. Products and the two ad-mapping tabs remain because
+           they're still user-edited rather than pulled from an API. -->
       <div class="card">
         <div class="tabs">
           <button class="tab active" data-tab="products">Products</button>
-          <button class="tab" data-tab="transactions">Transactions</button>
-          <button class="tab" data-tab="shipping">Shipping</button>
-          <button class="tab" data-tab="productads">Product Ads</button>
-          <button class="tab" data-tab="brandads">Brand Ads</button>
           <button class="tab" data-tab="productadmapping">Product Ad Map</button>
           <button class="tab" data-tab="brandadmapping">Brand Ad Map</button>
         </div>
@@ -125,74 +128,6 @@
             <button class="btn btn-primary process-btn" data-type="products" disabled>Process & Upload</button>
           </div>
           <div class="status-message" data-type="products"></div>
-        </div>
-
-        <!-- Transactions Tab -->
-        <div class="tab-content" id="transactions-content">
-          <div class="upload-zone disabled" data-type="transactions" data-sheet="Transactions">
-            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
-            <div class="upload-icon">💰</div>
-            <div class="upload-text">Upload Transaction Report</div>
-            <div class="upload-hint">Sign in to enable • Skips first 7 rows, prevents duplicates</div>
-          </div>
-          <div class="file-info" data-type="transactions"></div>
-          <div class="preview-table" data-type="transactions" style="display: none;"></div>
-          <div class="button-group">
-            <button class="btn btn-secondary clear-btn" data-type="transactions" style="display: none;">Clear</button>
-            <button class="btn btn-primary process-btn" data-type="transactions" disabled>Process & Upload</button>
-          </div>
-          <div class="status-message" data-type="transactions"></div>
-        </div>
-
-        <!-- Shipping Tab -->
-        <div class="tab-content" id="shipping-content">
-          <div class="upload-zone disabled" data-type="shipping" data-sheet="ShippingCosts">
-            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
-            <div class="upload-icon">📮</div>
-            <div class="upload-text">Upload Shipping Costs</div>
-            <div class="upload-hint">Sign in to enable • Prevents duplicate Order #s</div>
-          </div>
-          <div class="file-info" data-type="shipping"></div>
-          <div class="preview-table" data-type="shipping" style="display: none;"></div>
-          <div class="button-group">
-            <button class="btn btn-secondary clear-btn" data-type="shipping" style="display: none;">Clear</button>
-            <button class="btn btn-primary process-btn" data-type="shipping" disabled>Process & Upload</button>
-          </div>
-          <div class="status-message" data-type="shipping"></div>
-        </div>
-
-        <!-- Product Ads Tab -->
-        <div class="tab-content" id="productads-content">
-          <div class="upload-zone disabled" data-type="productads" data-sheet="ProductAdSpend">
-            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
-            <div class="upload-icon">📊</div>
-            <div class="upload-text">Upload Product Ad Spend</div>
-            <div class="upload-hint">Sign in to enable • Appends all data</div>
-          </div>
-          <div class="file-info" data-type="productads"></div>
-          <div class="preview-table" data-type="productads" style="display: none;"></div>
-          <div class="button-group">
-            <button class="btn btn-secondary clear-btn" data-type="productads" style="display: none;">Clear</button>
-            <button class="btn btn-primary process-btn" data-type="productads" disabled>Process & Upload</button>
-          </div>
-          <div class="status-message" data-type="productads"></div>
-        </div>
-
-        <!-- Brand Ads Tab -->
-        <div class="tab-content" id="brandads-content">
-          <div class="upload-zone disabled" data-type="brandads" data-sheet="BrandAdSpend">
-            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
-            <div class="upload-icon">🎯</div>
-            <div class="upload-text">Upload Brand Ad Spend</div>
-            <div class="upload-hint">Sign in to enable • Appends all data</div>
-          </div>
-          <div class="file-info" data-type="brandads"></div>
-          <div class="preview-table" data-type="brandads" style="display: none;"></div>
-          <div class="button-group">
-            <button class="btn btn-secondary clear-btn" data-type="brandads" style="display: none;">Clear</button>
-            <button class="btn btn-primary process-btn" data-type="brandads" disabled>Process & Upload</button>
-          </div>
-          <div class="status-message" data-type="brandads"></div>
         </div>
 
         <!-- Product Ad Mapping Tab -->

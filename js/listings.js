@@ -386,63 +386,6 @@
     }
     window.deleteChangeLogEntry = deleteChangeLogEntry;
 
-    // One-time backfill: pull every row from the legacy
-    // ListingChangeLog tab in the Sheet and replace Upstash contents.
-    // Idempotent (safe to re-run, but destructive — it overwrites
-    // whatever's currently in Upstash). Server uses the user's bearer
-    // token to read the Sheet, so anyone running it must have read
-    // access on the Sheet.
-    async function migrateChangeLogFromSheets() {
-      const feedback = document.getElementById('changelog-save-feedback');
-      const showMsg = (kind, msg) => {
-        feedback.style.display = 'block';
-        feedback.style.padding = '1rem';
-        feedback.style.borderRadius = '6px';
-        if (kind === 'error') {
-          feedback.style.background = 'rgba(239, 68, 68, 0.1)';
-          feedback.style.border = '1px solid var(--error)';
-          feedback.style.color = 'var(--error)';
-        } else {
-          feedback.style.background = 'rgba(6, 214, 160, 0.1)';
-          feedback.style.border = '1px solid var(--success)';
-          feedback.style.color = 'var(--success)';
-        }
-        feedback.textContent = msg;
-      };
-
-      if (!accessToken) { showMsg('error', '⚠ Please sign in first'); return; }
-      if (typeof SPREADSHEET_ID === 'undefined' || !SPREADSHEET_ID) {
-        showMsg('error', '⚠ SPREADSHEET_ID is not set');
-        return;
-      }
-
-      showMsg('success', '⏳ Importing from Google Sheet…');
-      try {
-        const res = await fetch('/api/changelog?action=migrate-from-sheets', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ spreadsheetId: SPREADSHEET_ID })
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          showMsg('error', '⚠ Import failed: ' + (err.error || res.status));
-          return;
-        }
-        const data = await res.json();
-        showMsg('success',
-          `✓ Imported ${data.imported} entries from Sheets${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}.`);
-        setTimeout(() => { feedback.style.display = 'none'; }, 6000);
-        loadChangeLog();
-      } catch (err) {
-        console.error('Migrate failed:', err);
-        showMsg('error', '⚠ Import failed: ' + err.message);
-      }
-    }
-    window.migrateChangeLogFromSheets = migrateChangeLogFromSheets;
-    
     // ──────── Bulk upload ──────────────────────────────────────────────
     //
     // Flow: user opens the modal → drops a file (or clicks the zone to

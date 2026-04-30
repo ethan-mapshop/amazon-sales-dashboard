@@ -267,21 +267,20 @@
     
     async function processUpload(type) {
       const data = uploadedData[type];
-      const sheetConfig = SHEET_CONFIGS[type];
 
       if (!data || !accessToken) return;
-      // These types live in Upstash now and don't need SPREADSHEET_ID; every
-      // other type still uploads to Sheets and needs it.
-      const UPSTASH_TYPES = new Set(['products', 'productadmapping', 'brandadmapping']);
-      if (!UPSTASH_TYPES.has(type) && !SPREADSHEET_ID) return;
+      // Three remaining upload types — all Upstash-backed. Transactions,
+      // shipping, and ad spend used to flow through here too but moved
+      // to API-driven syncs (SP-API, ShipStation, Amazon Ads) running
+      // on the monthly cron.
+      if (!['products', 'productadmapping', 'brandadmapping'].includes(type)) return;
 
       const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
       btn.innerHTML = 'Processing<span class="loading"></span>';
       hideStatus(type);
 
-      // Products bypass the Sheets path entirely and upsert into Upstash via
-      // /api/products. Same update-or-add-by-SKU semantics as before.
+      // Products → /api/products (upsert by SKU).
       if (type === 'products') {
         try {
           const res = await fetch('/api/products?action=bulk-upsert', {
@@ -309,9 +308,9 @@
         return;
       }
 
-      // ProductAdMapping / BrandAdMapping uploads also go to Upstash via
-      // /api/mappings. The API groups flat CSV rows by Campaign Name, merges
-      // SKUs (for product mappings), and upserts into the KV dict.
+      // ProductAdMapping / BrandAdMapping → /api/mappings (the API
+      // groups flat CSV rows by Campaign Name, merges SKUs for product
+      // mappings, and upserts into the KV dict).
       if (type === 'productadmapping' || type === 'brandadmapping') {
         const mapType = type === 'productadmapping' ? 'product' : 'brand';
         try {
@@ -330,6 +329,13 @@
           showStatus(type, 'success',
             `✓ Success! Added ${result.addedCount}, updated ${result.updatedCount} (${result.total} total ${mapType} mappings)`
           );
+          // If the user is currently looking at the Campaign Mapping
+          // page, refresh its tables so the new mappings show up
+          // without a manual reload.
+          const mappingPage = document.getElementById('mapping-page');
+          if (mappingPage && mappingPage.classList.contains('active')) {
+            setTimeout(() => loadMappingData(), 1000);
+          }
         } catch (err) {
           console.error('Mapping upload failed:', err);
           showStatus(type, 'error', `✗ ${err.message}`);
@@ -338,164 +344,6 @@
           btn.innerHTML = 'Process';
         }
         return;
-      }
-
-      try {
-        const spreadsheetId = SPREADSHEET_ID;
-        const sheetName = sheetConfig.sheetName;
-        
-        // Get existing data
-        const getUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}`;
-        const getResponse = await fetch(getUrl, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        
-        if (!getResponse.ok) throw new Error(`Failed to read ${sheetName} sheet`);
-        
-        const existingSheet = await getResponse.json();
-        const existingRows = existingSheet.values || [];
-        
-        if (existingRows.length === 0) throw new Error(`${sheetName} sheet appears empty`);
-        
-        const headers = existingRows[0];
-        
-        let addedCount = 0;
-        let updatedCount = 0;
-        let skippedCount = 0;
-        
-        if (sheetConfig.allowUpdates && sheetConfig.uniqueKey) {
-          // Products: update or add
-          const keyIndex = headers.indexOf(sheetConfig.uniqueKey);
-          if (keyIndex === -1) throw new Error(`${sheetConfig.uniqueKey} column not found`);
-          
-          const keyToRowIndex = {};
-          for (let i = 1; i < existingRows.length; i++) {
-            const key = existingRows[i][keyIndex];
-            if (key) keyToRowIndex[key] = i;
-          }
-          
-          const updates = [];
-          const newRows = [];
-          
-          data.forEach(item => {
-            const key = item[sheetConfig.uniqueKey];
-            const rowData = headers.map(h => item[h] || '');
-            
-            if (keyToRowIndex[key] !== undefined) {
-              const rowIndex = keyToRowIndex[key];
-              updates.push({
-                range: `${sheetName}!A${rowIndex + 1}:${String.fromCharCode(65 + headers.length - 1)}${rowIndex + 1}`,
-                values: [rowData]
-              });
-              updatedCount++;
-            } else {
-              newRows.push(rowData);
-              addedCount++;
-            }
-          });
-          
-          if (updates.length > 0) {
-            const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
-            await fetch(updateUrl, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                valueInputOption: 'RAW',
-                data: updates
-              })
-            });
-          }
-          
-          if (newRows.length > 0) {
-            const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
-            await fetch(appendUrl, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ values: newRows })
-            });
-          }
-          
-          showStatus(type, 'success', 
-            `✓ Success! Added ${addedCount}, updated ${updatedCount} (${data.length} total)`
-          );
-          
-        } else if (sheetConfig.uniqueKey) {
-          // Transactions/Shipping: check duplicates, append new
-          const keyIndex = headers.findIndex(h => h.includes(sheetConfig.uniqueKey));
-          if (keyIndex === -1) throw new Error(`${sheetConfig.uniqueKey} column not found`);
-          
-          const existingKeys = new Set();
-          for (let i = 1; i < existingRows.length; i++) {
-            const key = existingRows[i][keyIndex];
-            if (key) existingKeys.add(key);
-          }
-          
-          const newData = data.filter(item => {
-            const key = item[sheetConfig.uniqueKey];
-            if (existingKeys.has(key)) {
-              skippedCount++;
-              return false;
-            }
-            return true;
-          });
-          
-          if (newData.length === 0) {
-            showStatus(type, 'error', `All ${data.length} items already exist`);
-            return;
-          }
-          
-          const newRows = newData.map(item => headers.map(h => item[h] || ''));
-          
-          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
-          await fetch(appendUrl, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: newRows })
-          });
-          
-          const msg = skippedCount > 0
-            ? `✓ Success! Added ${newData.length} (skipped ${skippedCount} duplicates)`
-            : `✓ Success! Added ${newData.length} items`;
-          
-          showStatus(type, 'success', msg);
-          
-        } else {
-          // Ad spend & mappings: just append everything
-          const newRows = data.map(item => headers.map(h => item[h] || ''));
-          
-          const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${sheetName}:append?valueInputOption=RAW`;
-          await fetch(appendUrl, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: newRows })
-          });
-          
-          showStatus(type, 'success', `✓ Success! Added ${data.length} items`);
-        }
-        
-        // Reload mapping data if we're on mapping page and uploaded mapping data
-        if ((type === 'productadmapping' || type === 'brandadmapping') && 
-            document.getElementById('mapping-page').classList.contains('active')) {
-          setTimeout(() => loadMappingData(), 1000);
-        }
-        
-      } catch (error) {
-        showStatus(type, 'error', `Error: ${error.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Process & Upload';
       }
     }
     
