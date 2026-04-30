@@ -422,7 +422,20 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
-    
+
+    /* Larger standalone spinner for in-content loading states (e.g.
+       Individual Change Analysis while charts are being rendered).
+       The smaller .loading variant above is for inline button states. */
+    .spinner {
+      display: inline-block;
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
     .preview-table {
       margin-top: 1.5rem;
       overflow-x: auto;

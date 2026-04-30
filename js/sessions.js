@@ -163,13 +163,83 @@
           // Populate products (all initially)
           filterSessionProducts();
         }
-        
-        // Show charts section
-        document.getElementById('session-charts').style.display = 'block';
-        
+
+        // Auto-select the most recent change-log entry so the user
+        // lands on a populated analysis instead of empty selectors.
+        // Silent no-op if the change log is empty or the latest entry's
+        // ASIN isn't in the products catalog.
+        await _autoLoadLatestChange();
+
       } catch (error) {
         console.error('Error loading session data:', error);
       }
+    }
+
+    // Walks the most-recent change-log entry through the three
+    // dropdowns: brand → product → change → render. Each step waits
+    // for any async work the next step depends on (filterSessionChanges
+    // fetches the change log; the other steps are synchronous DOM
+    // updates).
+    async function _autoLoadLatestChange() {
+      try {
+        const res = await fetch('/api/changelog?action=get', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        if (entries.length === 0) return;
+
+        // API returns newest-first.
+        const latest = entries[0];
+        const targetAsin = (latest.asin || '').toUpperCase();
+        const product = allProducts.find(p => (p.asin || '').toUpperCase() === targetAsin);
+        if (!product) {
+          console.warn(`Auto-load: ASIN ${latest.asin} from latest change-log entry isn't in the products catalog; skipping.`);
+          return;
+        }
+
+        const brandSelect   = document.getElementById('session-brand-filter');
+        const productSelect = document.getElementById('session-product-filter');
+        const changeSelect  = document.getElementById('session-change-filter');
+
+        // Set brand → repopulates the product dropdown for that brand.
+        brandSelect.value = product.brand;
+        filterSessionProducts();
+
+        // Set product → fetches + populates the change dropdown.
+        productSelect.value = product.asin;
+        await filterSessionChanges();
+
+        // Pick the most-recent change for that ASIN (already first in
+        // the list since filterSessionChanges sorts newest-first) and
+        // trigger the chart render.
+        if (changeSelect.options.length > 1) {
+          changeSelect.value = '0';
+          renderSessionCharts();
+        }
+      } catch (err) {
+        console.error('Auto-load latest change failed:', err);
+      }
+    }
+
+    // Loader helpers for the Individual Change Analysis section. The
+    // chart instantiation (Chart.js) is fast on small datasets but
+    // perceptible on larger ones — show a spinner while it runs so the
+    // UI doesn't feel frozen.
+    function _showSessionChartsLoader() {
+      const container = document.getElementById('session-charts');
+      const loader    = document.getElementById('session-charts-loader');
+      const body      = document.getElementById('session-charts-body');
+      if (container) container.style.display = 'block';
+      if (loader)    loader.style.display = 'block';
+      if (body)      body.style.display = 'none';
+    }
+    function _hideSessionChartsLoader() {
+      const loader = document.getElementById('session-charts-loader');
+      const body   = document.getElementById('session-charts-body');
+      if (loader) loader.style.display = 'none';
+      if (body)   body.style.display = 'block';
     }
     
     function filterSessionProducts() {
@@ -247,11 +317,20 @@
     async function renderSessionCharts() {
       const selectedASIN = document.getElementById('session-product-filter').value;
       const changeIndex = document.getElementById('session-change-filter').value;
-      
+
       if (!selectedASIN || changeIndex === '') {
         return;
       }
-      
+
+      // Show the spinner, then yield a couple of frames so the browser
+      // actually paints it before we start the (synchronous) chart
+      // instantiation work below. Without the rAF dance the spinner
+      // never renders — the main thread blocks straight through to
+      // the final paint.
+      _showSessionChartsLoader();
+      await new Promise(r => requestAnimationFrame(r));
+      await new Promise(r => requestAnimationFrame(r));
+
       // Get selected change
       const change = window.sessionChanges[changeIndex];
       const changeDate = new Date(change.date);
@@ -462,8 +541,10 @@
           }
         }
       });
+
+      _hideSessionChartsLoader();
     }
-    
+
     async function getChangeLogDates(asin) {
       try {
         const response = await fetch('/api/changelog?action=get', {

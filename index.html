@@ -1138,7 +1138,7 @@
 
         <!-- Export Section -->
         <div class="card card-flat" style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Change Analysis</h3>
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Bulk Export Change Analysis</h3>
           
           <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
             <div>
@@ -1208,6 +1208,16 @@
           </div>
 
           <div id="session-charts" style="display: none;">
+            <!-- Loader — shown while renderSessionCharts is doing its
+                 work (chart instantiation can be perceptible). The
+                 actual content sits in #session-charts-body which is
+                 toggled inversely. -->
+            <div id="session-charts-loader" style="display: none; padding: 4rem; text-align: center;">
+              <div class="spinner"></div>
+              <div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading analysis…</div>
+            </div>
+
+            <div id="session-charts-body">
             <!-- Summary stats — flat grid, no card chrome. Each cell
                  has its own heading so the visual grouping reads
                  without a background. Matches Sales & Volume's flat
@@ -1277,6 +1287,7 @@
                 <canvas id="pageviews-chart"></canvas>
               </div>
             </div>
+            </div><!-- /session-charts-body -->
           </div>
         </div>
 
