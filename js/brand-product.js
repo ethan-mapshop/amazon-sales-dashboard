@@ -549,7 +549,7 @@
           </div>
         </div>
         
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+        <div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: flex-start;">
           <!-- LEFT SIDE: Traditional Statement -->
           <div>
             <!-- Income Section -->
