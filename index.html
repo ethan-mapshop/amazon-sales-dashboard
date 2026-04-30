@@ -1010,20 +1010,23 @@
     </div>
     <!-- LISTING OPTIMIZATION PAGE (PHASE 4) -->
     <div id="listing-page" class="page">
-      <h2 class="section-title" style="margin-bottom: 1rem;">Listing Optimization</h2>
-      
-      <!-- Sub-tabs -->
-      <div class="tabs" style="margin-bottom: 2rem;">
-        <button class="tab active" onclick="showListingTab('changelog')">Change Log</button>
-        <button class="tab" onclick="showListingTab('keywords')">Keyword Tracker</button>
-        <button class="tab" onclick="showListingTab('sessions')">Session & CVR</button>
+      <div class="page-header">
+        <div class="page-header-top">
+          <h2 class="section-title">Listing Optimization</h2>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="tabs">
+          <button class="tab active" id="listing-tab-changelog" onclick="showListingTab('changelog')">Change Log</button>
+          <button class="tab" id="listing-tab-sessions" onclick="showListingTab('sessions')">Session &amp; CVR</button>
+        </div>
       </div>
-      
+
       <!-- Change Log Tab -->
       <div id="changelog-tab" class="listing-tab active">
-        <div class="card" style="margin-bottom: 2rem;">
+        <div class="card card-flat" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Log Listing Change</h3>
-          
+
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
@@ -1031,20 +1034,20 @@
                 <option value="">All Brands</option>
               </select>
             </div>
-            
+
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
               <select id="changelog-product" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
                 <option value="">Select Product...</option>
               </select>
             </div>
-            
+
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Date Changed</label>
               <input type="date" id="changelog-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
             </div>
           </div>
-          
+
           <div style="margin-bottom: 1.5rem;">
             <label style="display: block; margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-secondary);">What Changed</label>
             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem;">
@@ -1074,7 +1077,7 @@
               </label>
             </div>
           </div>
-          
+
           <div style="margin-bottom: 1.5rem;">
             <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Notes</label>
             <textarea id="changelog-notes" maxlength="500" placeholder="Add notes about this change..." style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-height: 100px; resize: vertical; font-family: inherit;"></textarea>
@@ -1082,7 +1085,7 @@
               <span id="changelog-notes-count">0</span>/500 characters
             </div>
           </div>
-          
+
           <div style="display: flex; gap: 1rem; align-items: center;">
             <button class="btn btn-primary" onclick="saveChangeLog()" style="width: auto;">
               Save Change Log Entry
@@ -1090,16 +1093,13 @@
             <button class="btn btn-secondary" onclick="openBulkUpload()" style="width: auto;">
               📤 Bulk Upload
             </button>
-            <button class="btn btn-secondary" onclick="migrateChangeLogFromSheets()" style="width: auto; margin-left: auto;" title="One-time: pull existing entries from the legacy Google Sheet (ListingChangeLog tab) into Upstash. Overwrites any current Upstash data.">
-              ⤴ Import from Sheets
-            </button>
           </div>
 
           <div id="changelog-save-feedback" style="margin-top: 1rem; display: none;"></div>
         </div>
-        
+
         <!-- Change Log Table -->
-        <div class="card">
+        <div class="card card-flat">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
             <h3 style="font-size: 1.125rem; font-weight: 600;">Change History</h3>
             <input type="text" id="changelog-search" placeholder="Search changes..." style="padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); width: 300px;">
@@ -1111,135 +1111,21 @@
           </div>
         </div>
       </div>
-      
-      <!-- Keyword Tracker Tab -->
-      <div id="keywords-tab" class="listing-tab" style="display: none;">
-        <div class="card" style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Upload Brand Analytics Report</h3>
-          
-          <div style="background: var(--bg-secondary); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; border-left: 3px solid var(--accent-blue);">
-            <div style="font-weight: 600; margin-bottom: 0.5rem;">Search Query Performance Report</div>
-            <div style="font-size: 0.875rem; color: var(--text-secondary); line-height: 1.6;">
-              Download from Amazon Brand Analytics → Search Query Performance<br>
-              Report must include: Search Query, Search Frequency Rank, Click Share, Conversion Share, and ASIN columns
-            </div>
-          </div>
-          
-          <div style="display: grid; grid-template-columns: 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
-            <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select CSV File</label>
-              <input type="file" id="keyword-file" accept=".csv" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-            </div>
-            <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Quarter</label>
-              <select id="keyword-quarter" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-                <option value="">Select...</option>
-                <option value="Q1-2025">Q1 2025</option>
-                <option value="Q2-2025">Q2 2025</option>
-                <option value="Q3-2025">Q3 2025</option>
-                <option value="Q4-2025">Q4 2025</option>
-                <option value="Q1-2026">Q1 2026</option>
-                <option value="Q2-2026">Q2 2026</option>
-                <option value="Q3-2026">Q3 2026</option>
-                <option value="Q4-2026">Q4 2026</option>
-              </select>
-            </div>
-          </div>
-          
-          <button class="btn btn-primary" onclick="uploadKeywordData()" style="width: auto;">
-            Upload & Process
-          </button>
-          
-          <div id="keyword-upload-feedback" style="margin-top: 1rem; display: none;"></div>
-        </div>
-        
-        <!-- Keyword Views -->
-        <div id="keyword-views" style="display: none;">
-          <div class="tabs" style="margin-bottom: 1.5rem;">
-            <button class="tab active" onclick="showKeywordView('top')">Top Keywords</button>
-            <button class="tab" onclick="showKeywordView('by-asin')">By ASIN</button>
-            <button class="tab" onclick="showKeywordView('opportunity')">Opportunity Gap</button>
-          </div>
-          
-          <!-- Top Keywords View -->
-          <div id="keyword-top-view" class="keyword-view active">
-            <div class="card">
-              <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Top Keywords (Your ASINs Have Clicks)</h3>
-              <div id="keyword-top-table"></div>
-            </div>
-          </div>
-          
-          <!-- By ASIN View -->
-          <div id="keyword-by-asin-view" class="keyword-view" style="display: none;">
-            <div class="card">
-              <div style="margin-bottom: 1.5rem;">
-                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select ASIN</label>
-                <select id="keyword-asin-filter" onchange="filterKeywordsByASIN()" style="width: 300px; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-                  <option value="">Select ASIN...</option>
-                </select>
-              </div>
-              <div id="keyword-by-asin-table"></div>
-            </div>
-          </div>
-          
-          <!-- Opportunity Gap View -->
-          <div id="keyword-opportunity-view" class="keyword-view" style="display: none;">
-            <div class="card">
-              <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Opportunity Gap (Volume >100, Zero Purchases)</h3>
-              <div id="keyword-opportunity-table"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-      
+
       <!-- Session & CVR Tab -->
       <div id="sessions-tab" class="listing-tab" style="display: none;">
-        <!-- Fetch Data Section -->
-        <div class="card" style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Fetch Session & CVR Data</h3>
-          
-          <div style="padding: 0.75rem; background: var(--bg-secondary); border-radius: 6px; margin-bottom: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
-            ℹ️ Amazon data has a 48-hour delay. Data from 2 days ago is the most recent available.
-          </div>
-          
-          <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-secondary); border-radius: 6px;">
-            <span style="font-size: 0.875rem; color: var(--text-secondary);">Latest data in database:</span>
-            <span id="latest-session-date" style="font-weight: 600; color: var(--text-primary);">Loading...</span>
-          </div>
-          
-          <div style="display: grid; grid-template-columns: 300px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
-            <div>
-              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Manual Data Fetch</label>
-              <input type="date" id="session-fetch-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-            </div>
-            <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
-              Fetch Data
-            </button>
-          </div>
-          
-          <div style="border-top: 1px solid var(--border); margin: 1.5rem 0; padding-top: 1.5rem;">
-            <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Backfill Historical Data</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; align-items: end;">
-              <div>
-                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill Start Date</label>
-                <input type="date" id="backfill-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-              </div>
-              <div>
-                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill End Date</label>
-                <input type="date" id="backfill-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-              </div>
-              <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
-                Run Backfill
-              </button>
-            </div>
-          </div>
-          
-          <div id="session-fetch-feedback" style="display: none;"></div>
-          <div id="backfill-progress" style="margin-top: 1rem; max-height: 300px; overflow-y: auto; display: none; padding: 1rem; background: var(--bg-secondary); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem;"></div>
+        <!-- Data freshness blurb — sits directly under the page header,
+             matches the header-data-blurb style used on Profitability
+             Overview and Sales & Volume. -->
+        <div class="header-data-blurb" style="margin-bottom: 2rem;">
+          <span>ℹ️</span>
+          <span>Amazon data has a 48-hour delay. Data from 2 days ago is the most recent available.</span>
+          <span class="blurb-sep">|</span>
+          <span>Latest data in database: <strong id="latest-session-date">Loading...</strong></span>
         </div>
-        
+
         <!-- Export Section -->
-        <div class="card" style="margin-bottom: 2rem;">
+        <div class="card card-flat" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Change Analysis</h3>
           
           <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
@@ -1372,9 +1258,47 @@
             </div>
           </div>
         </div>
+
+        <!-- Fetch Data Section — moved to the bottom of the tab. The
+             freshness blurb at the top of the tab already tells the
+             user when the latest data is from, so the manual fetch +
+             backfill controls don't need to lead the page. -->
+        <div class="card card-flat" style="margin-top: 2rem;">
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Fetch Session &amp; CVR Data</h3>
+
+          <div style="display: grid; grid-template-columns: 300px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Manual Data Fetch</label>
+              <input type="date" id="session-fetch-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+            </div>
+            <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
+              Fetch Data
+            </button>
+          </div>
+
+          <div style="border-top: 1px solid var(--border); margin: 1.5rem 0; padding-top: 1.5rem;">
+            <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Backfill Historical Data</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; align-items: end;">
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill Start Date</label>
+                <input type="date" id="backfill-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              </div>
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill End Date</label>
+                <input type="date" id="backfill-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              </div>
+              <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
+                Run Backfill
+              </button>
+            </div>
+          </div>
+
+          <div id="session-fetch-feedback" style="display: none;"></div>
+          <div id="backfill-progress" style="margin-top: 1rem; max-height: 300px; overflow-y: auto; display: none; padding: 1rem; background: var(--bg-secondary); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem;"></div>
+        </div>
       </div>
     </div>
-    
+
     <!-- Bulk Upload Modal -->
     <div id="bulk-upload-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
       <div style="background: var(--bg-card); border-radius: 8px; padding: 2rem; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
