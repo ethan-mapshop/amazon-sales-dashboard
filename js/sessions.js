@@ -211,37 +211,34 @@
       }
       
       try {
-        // Fetch Change Log from Google Sheets
-        const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`, {
+        // Fetch Change Log from the Upstash-backed API. ASIN match is
+        // case-insensitive — change-log entries are stored uppercase
+        // server-side, so uppercase the selected ASIN before comparing.
+        const response = await fetch('/api/changelog?action=get', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        
         const data = await response.json();
-        
-        if (data.values && data.values.length > 0) {
-          // Filter changes for this ASIN
-          // Column structure: Date | Product | ASIN | Changes | Notes
-          const changes = data.values
-            .filter(row => row[2] === selectedASIN) // Match ASIN
-            .map(row => ({
-              date: row[0],
-              product: row[1],
-              asin: row[2],
-              changes: row[3],
-              notes: row[4]
-            }))
-            .sort((a, b) => b.date.localeCompare(a.date)); // Most recent first
-          
-          // Populate change dropdown
-          changeSelect.innerHTML = '<option value="">Select Change...</option>';
-          changes.forEach((change, index) => {
-            changeSelect.innerHTML += `<option value="${index}" data-date="${change.date}">${change.date} - ${change.changes}</option>`;
-          });
-          
-          // Store changes for later use
-          window.sessionChanges = changes;
-        }
-        
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        const targetAsin = String(selectedASIN || '').toUpperCase();
+
+        const changes = entries
+          .filter(e => (e.asin || '').toUpperCase() === targetAsin)
+          .map(e => ({
+            date: e.date,
+            product: e.productName,
+            asin: e.asin,
+            changes: e.changes,
+            notes: e.notes
+          }))
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+        // Populate change dropdown
+        changeSelect.innerHTML = '<option value="">Select Change...</option>';
+        changes.forEach((change, index) => {
+          changeSelect.innerHTML += `<option value="${index}" data-date="${change.date}">${change.date} - ${change.changes}</option>`;
+        });
+
+        window.sessionChanges = changes;
       } catch (error) {
         console.error('Error loading changes:', error);
       }
@@ -469,26 +466,16 @@
     
     async function getChangeLogDates(asin) {
       try {
-        const response = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:C`,
-          {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }
-        );
-        
+        const response = await fetch('/api/changelog?action=get', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!response.ok) return [];
         const data = await response.json();
-        
-        if (!data.values) {
-          return [];
-        }
-        
-        // Filter for this ASIN and extract dates
-        const dates = data.values
-          .filter(row => row[2] === asin) // Column C is ASIN
-          .map(row => row[0]); // Column A is date
-        
-        return dates;
-        
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        const targetAsin = String(asin || '').toUpperCase();
+        return entries
+          .filter(e => (e.asin || '').toUpperCase() === targetAsin)
+          .map(e => e.date);
       } catch (error) {
         console.error('Error loading change log dates:', error);
         return [];
@@ -613,31 +600,35 @@
       showFeedback(feedback, 'info', 'Generating export...');
       
       try {
-        // Fetch change log data
-        const changeLogResponse = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`,
-          { headers: { 'Authorization': `Bearer ${accessToken}` } }
-        );
+        // Fetch change log data from the Upstash-backed API.
+        const changeLogResponse = await fetch('/api/changelog?action=get', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!changeLogResponse.ok) {
+          throw new Error(`Change log fetch failed (${changeLogResponse.status})`);
+        }
         const changeLogData = await changeLogResponse.json();
-        
-        if (!changeLogData.values) {
+        const entries = Array.isArray(changeLogData.entries) ? changeLogData.entries : [];
+
+        if (entries.length === 0) {
           throw new Error('No change log data found');
         }
-        
-        // Filter changes by date range and brand
-        const changes = changeLogData.values
-          .map(row => ({
-            date: row[0],
-            product: row[1],
-            asin: row[2],
-            changes: row[3],
-            notes: row[4]
+
+        // Filter changes by date range and brand. ASIN match against
+        // allProducts is case-insensitive since the catalog and the
+        // change log can each have their own casing conventions.
+        const changes = entries
+          .map(e => ({
+            date: e.date,
+            product: e.productName,
+            asin: e.asin,
+            changes: e.changes,
+            notes: e.notes
           }))
           .filter(change => {
             if (change.date < startDate || change.date > endDate) return false;
-            
-            // Find product brand
-            const product = allProducts.find(p => p.asin === change.asin);
+            const target = (change.asin || '').toUpperCase();
+            const product = allProducts.find(p => (p.asin || '').toUpperCase() === target);
             return product && selectedBrands.includes(product.brand);
           });
         
