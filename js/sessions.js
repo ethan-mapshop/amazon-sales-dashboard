@@ -461,7 +461,16 @@
       if (sessionsChart) sessionsChart.destroy();
       if (cvrChart) cvrChart.destroy();
       if (pageviewsChart) pageviewsChart.destroy();
-      
+
+      // Reveal the charts body before instantiating Chart.js so the
+      // canvas elements have non-zero layout dimensions when Chart.js
+      // measures them. Creating responsive charts inside a
+      // display:none ancestor leaves them stuck at 0×0 forever (the
+      // bug that made the summary numbers fill but the graphs stay
+      // blank). One rAF for layout to settle after the display flip.
+      _hideSessionChartsLoader();
+      await new Promise(r => requestAnimationFrame(r));
+
       // Create Sessions chart
       const sessionsCtx = document.getElementById('sessions-chart').getContext('2d');
       sessionsChart = new Chart(sessionsCtx, {
@@ -565,8 +574,8 @@
           }
         }
       });
-
-      _hideSessionChartsLoader();
+      // (loader was hidden above before chart instantiation; nothing
+      // more to do here.)
     }
 
     async function getChangeLogDates(asin) {

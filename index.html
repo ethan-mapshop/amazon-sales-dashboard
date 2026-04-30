@@ -1075,15 +1075,17 @@
         <div class="card card-flat" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Bulk Export Change Analysis</h3>
           
-          <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+          <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin-bottom: 1rem;">
+            <!-- Brand dropdown — fixed width, just enough for "All brands
+                 selected" without truncation. -->
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Select Brands</label>
               <div style="position: relative;">
-                <button id="brand-dropdown-btn" onclick="toggleBrandDropdown(event)" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); text-align: left; display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                <button id="brand-dropdown-btn" onclick="toggleBrandDropdown(event)" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); text-align: left; display: flex; justify-content: space-between; align-items: center; cursor: pointer; width: 220px; gap: 0.5rem;">
                   <span id="brand-dropdown-label">All brands selected</span>
                   <span>▼</span>
                 </button>
-                <div id="brand-dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; right: 0; margin-top: 0.25rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; max-height: 250px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <div id="brand-dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; min-width: 220px; margin-top: 0.25rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; max-height: 250px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                   <div style="margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border);">
                     <button onclick="selectAllBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-blue); color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Select All</button>
                     <button onclick="selectNoBrands()" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">Select None</button>
@@ -1094,15 +1096,13 @@
                 </div>
               </div>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
-              <div>
-                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change Start Date</label>
-                <input type="date" id="export-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-              </div>
-              <div>
-                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change End Date</label>
-                <input type="date" id="export-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
-              </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change Start Date</label>
+              <input type="date" id="export-start-date" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change End Date</label>
+              <input type="date" id="export-end-date" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
             </div>
             <button class="btn btn-primary" onclick="exportChangeAnalysis()" style="height: fit-content;">
               Export to CSV
@@ -1153,11 +1153,11 @@
             </div>
 
             <div id="session-charts-body">
-            <!-- Summary stats — flat grid, no card chrome. Each cell
-                 has its own heading so the visual grouping reads
-                 without a background. Matches Sales & Volume's flat
-                 stat presentation. -->
-            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 2rem; margin-bottom: 2rem;">
+            <!-- Summary stats — flat row, no card chrome and no grid
+                 stretch. Each cell sits at the natural width of its
+                 contents with a 3rem gap between them. Wraps to a new
+                 line on narrow viewports. -->
+            <div style="display: flex; flex-wrap: wrap; gap: 3rem; margin-bottom: 2rem;">
               <div>
                 <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Sessions/Day</div>
                 <div style="display: flex; flex-direction: column; gap: 0.25rem;">
@@ -1233,10 +1233,10 @@
         <div class="card card-flat" style="margin-top: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Fetch Session &amp; CVR Data</h3>
 
-          <div style="display: grid; grid-template-columns: 300px 200px; gap: 1rem; margin-bottom: 1rem; align-items: end;">
+          <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin-bottom: 1rem;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Manual Data Fetch</label>
-              <input type="date" id="session-fetch-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              <input type="date" id="session-fetch-date" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
             </div>
             <button class="btn btn-primary" onclick="fetchSessionData()" style="height: fit-content;">
               Fetch Data
@@ -1245,14 +1245,14 @@
 
           <div style="border-top: 1px solid var(--border); margin: 1.5rem 0; padding-top: 1.5rem;">
             <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Backfill Historical Data</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 200px; gap: 1rem; align-items: end;">
+            <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: end;">
               <div>
                 <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill Start Date</label>
-                <input type="date" id="backfill-start-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+                <input type="date" id="backfill-start-date" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
               </div>
               <div>
                 <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Backfill End Date</label>
-                <input type="date" id="backfill-end-date" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+                <input type="date" id="backfill-end-date" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
               </div>
               <button class="btn btn-secondary" onclick="backfillSessions()" style="height: fit-content;">
                 Run Backfill
