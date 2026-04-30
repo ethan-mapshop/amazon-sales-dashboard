@@ -555,7 +555,7 @@
             <!-- Income Section -->
             <div style="margin-bottom: 2rem;">
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--success);">Income</h3>
-              <table class="table-fill">
+              <table>
                 <thead>
                   <tr>
                     <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
@@ -593,7 +593,7 @@
             <!-- Expenses Section -->
             <div>
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: var(--error);">Expenses</h3>
-              <table class="table-fill">
+              <table>
                 <thead>
                   <tr>
                     <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); width: 50%;">Category</th>
@@ -634,7 +634,7 @@
             <!-- FBM Profitability -->
             <div style="margin-bottom: 2rem;">
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">FBM Profitability</h3>
-              <table class="table-fill">
+              <table>
                 <thead>
                   <tr>
                     <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
@@ -687,7 +687,7 @@
             <!-- FBA Profitability -->
             <div style="margin-bottom: 2rem;">
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">FBA Profitability</h3>
-              <table class="table-fill">
+              <table>
                 <thead>
                   <tr>
                     <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
@@ -740,7 +740,7 @@
             <!-- Total Profitability -->
             <div>
               <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Total Profitability</h3>
-              <table class="table-fill">
+              <table>
                 <thead>
                   <tr>
                     <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); ${comparisons ? (comparisons.fbm.income.mom !== undefined ? 'width: 46%;' : 'width: 50%;') : 'width: 50%;'}">Category</th>
