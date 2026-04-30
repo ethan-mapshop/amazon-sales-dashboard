@@ -139,187 +139,143 @@
     });
     
     async function saveChangeLog() {
-      if (!accessToken) {
-        alert('Please sign in to save changes');
-        return;
-      }
-      
+      const formFeedback = document.getElementById('changelog-save-feedback');
+      const showFormError = (msg) => {
+        formFeedback.style.display = 'block';
+        formFeedback.style.padding = '1rem';
+        formFeedback.style.background = 'rgba(239, 68, 68, 0.1)';
+        formFeedback.style.border = '1px solid var(--error)';
+        formFeedback.style.borderRadius = '6px';
+        formFeedback.style.color = 'var(--error)';
+        formFeedback.textContent = msg;
+      };
+
+      if (!accessToken) { showFormError('⚠ Please sign in to save changes'); return; }
+
       const productSelect = document.getElementById('changelog-product');
       const asin = productSelect.value;
       const date = document.getElementById('changelog-date').value;
       const notes = document.getElementById('changelog-notes').value.trim();
-      
-      if (!asin) {
-        alert('Please select a product');
-        return;
-      }
-      
-      if (!date) {
-        alert('Please select a date');
-        return;
-      }
-      
-      // Get checked changes
+
+      if (!asin) { showFormError('⚠ Please select a product'); return; }
+      if (!date) { showFormError('⚠ Please select a date'); return; }
+
       const checkboxes = document.querySelectorAll('#changelog-tab input[type="checkbox"]:checked');
       const changes = Array.from(checkboxes).map(cb => cb.value);
-      
-      if (changes.length === 0) {
-        alert('Please select at least one change type');
-        return;
-      }
-      
+      if (changes.length === 0) { showFormError('⚠ Please select at least one change type'); return; }
+
       try {
-        // Get product name from selected option
         const productName = productSelect.options[productSelect.selectedIndex].getAttribute('data-name');
-        
-        // Append to ListingChangeLog sheet
-        const response = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A:E:append?valueInputOption=USER_ENTERED`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              values: [[
-                date,
-                productName,
-                asin,
-                changes.join(', '),
-                notes
-              ]]
-            })
-          }
-        );
-        
-        if (response.ok) {
-          // Show success message
-          const feedback = document.getElementById('changelog-save-feedback');
-          feedback.style.display = 'block';
-          feedback.style.padding = '1rem';
-          feedback.style.background = 'rgba(6, 214, 160, 0.1)';
-          feedback.style.border = '1px solid var(--success)';
-          feedback.style.borderRadius = '6px';
-          feedback.style.color = 'var(--success)';
-          feedback.textContent = '✓ Change log entry saved successfully!';
-          
-          setTimeout(() => {
-            feedback.style.display = 'none';
-          }, 5000);
-          
+        // POST to the Upstash-backed change-log API. Per-Sheet share
+        // permissions no longer matter — anyone signed into the
+        // dashboard with a valid Google token can write.
+        const res = await fetch('/api/changelog?action=add', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            date,
+            productName,
+            asin,
+            changes: changes.join(', '),
+            notes
+          })
+        });
+
+        if (res.ok) {
+          formFeedback.style.display = 'block';
+          formFeedback.style.padding = '1rem';
+          formFeedback.style.background = 'rgba(6, 214, 160, 0.1)';
+          formFeedback.style.border = '1px solid var(--success)';
+          formFeedback.style.borderRadius = '6px';
+          formFeedback.style.color = 'var(--success)';
+          formFeedback.textContent = '✓ Change log entry saved successfully!';
+          setTimeout(() => { formFeedback.style.display = 'none'; }, 5000);
+
           // Clear form
           document.getElementById('changelog-brand').value = '';
           document.getElementById('changelog-product').value = '';
-          filterChangeLogProducts(); // Reset product list
+          filterChangeLogProducts();
           document.getElementById('changelog-date').valueAsDate = new Date();
           document.getElementById('changelog-notes').value = '';
           document.querySelectorAll('#changelog-tab input[type="checkbox"]').forEach(cb => cb.checked = false);
           document.getElementById('changelog-notes-count').textContent = '0';
-          
-          // Reload table
+
           loadChangeLog();
         } else {
-          alert('Failed to save change log entry');
+          const err = await res.json().catch(() => ({}));
+          showFormError('⚠ Failed to save: ' + (err.error || res.status));
         }
       } catch (error) {
         console.error('Error saving change log:', error);
-        alert('Error saving change log: ' + error.message);
+        showFormError('⚠ Error saving change log: ' + error.message);
       }
     }
     
     async function loadChangeLog() {
       if (!accessToken) return;
-      
+
       try {
-        const response = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A2:E`,
-          {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          }
-        );
-        
-        const data = await response.json();
+        const res = await fetch('/api/changelog?action=get', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
         const tableDiv = document.getElementById('changelog-table');
-        
-        if (!data.values || data.values.length === 0) {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+
+        if (entries.length === 0) {
           tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No changes logged yet. Add your first entry above.</div>';
+          changeLogData = [];
           return;
         }
-        
-        // Sort by date descending
-        const rows = data.values.sort((a, b) => new Date(b[0]) - new Date(a[0]));
-        
-        let html = '<table style="width: 100%; border-collapse: collapse;">';
-        html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
-        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Date</th>';
-        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
-        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">ASIN</th>';
-        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
-        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
-        html += '</tr></thead><tbody>';
-        
-        rows.forEach(row => {
-          html += '<tr style="border-bottom: 1px solid var(--border);">';
-          html += `<td style="padding: 0.75rem;">${row[0] || ''}</td>`;
-          html += `<td style="padding: 0.75rem;">${row[1] || ''}</td>`;
-          html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${row[2] || ''}</td>`;
-          html += `<td style="padding: 0.75rem;">${row[3] || ''}</td>`;
-          html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${row[4] || ''}</td>`;
-          html += '</tr>';
-        });
-        
-        html += '</tbody></table>';
-        tableDiv.innerHTML = html;
-        
-        // Setup search functionality
-        setupChangeLogSearch(rows);
+
+        // Already sorted newest-first by the API.
+        renderChangeLogTable(entries);
+        setupChangeLogSearch(entries);
       } catch (error) {
         console.error('Error loading change log:', error);
         document.getElementById('changelog-table').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--error);">Error loading change log</div>';
       }
     }
-    
+
     // Search functionality for change log
     let changeLogData = [];
-    
-    function setupChangeLogSearch(rows) {
-      changeLogData = rows;
-      
+
+    function setupChangeLogSearch(entries) {
+      changeLogData = entries;
       const searchInput = document.getElementById('changelog-search');
       if (searchInput) {
         searchInput.addEventListener('input', filterChangeLog);
       }
     }
-    
+
     function filterChangeLog() {
       const searchTerm = document.getElementById('changelog-search').value.toLowerCase();
-      const tableDiv = document.getElementById('changelog-table');
-      
       if (!searchTerm) {
-        // Show all if search is empty
         renderChangeLogTable(changeLogData);
         return;
       }
-      
-      // Filter rows
-      const filtered = changeLogData.filter(row => {
-        return row.some(cell => 
-          cell && cell.toString().toLowerCase().includes(searchTerm)
-        );
-      });
-      
+      const filtered = changeLogData.filter(e =>
+        ['date', 'productName', 'asin', 'changes', 'notes']
+          .some(k => (e?.[k] || '').toString().toLowerCase().includes(searchTerm))
+      );
       renderChangeLogTable(filtered);
     }
-    
-    function renderChangeLogTable(rows) {
+
+    function renderChangeLogTable(entries) {
       const tableDiv = document.getElementById('changelog-table');
-      
-      if (rows.length === 0) {
+      if (!entries || entries.length === 0) {
         tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No matching changes found.</div>';
         return;
       }
-      
+
+      // The Delete column gets a small × button per row. Wired via
+      // `data-id` + a single delegated click handler installed on the
+      // table container (see below). Avoids per-row inline onclick so
+      // we don't have to escape ids.
       let html = '<table style="width: 100%; border-collapse: collapse;">';
       html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Date</th>';
@@ -327,21 +283,121 @@
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">ASIN</th>';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
+      html += '<th style="text-align: center; padding: 0.75rem; font-weight: 600; width: 1%;"></th>';
       html += '</tr></thead><tbody>';
-      
-      rows.forEach(row => {
+
+      const esc = (v) => (v == null ? '' : String(v))
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+      entries.forEach(e => {
         html += '<tr style="border-bottom: 1px solid var(--border);">';
-        html += `<td style="padding: 0.75rem;">${row[0] || ''}</td>`;
-        html += `<td style="padding: 0.75rem;">${row[1] || ''}</td>`;
-        html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${row[2] || ''}</td>`;
-        html += `<td style="padding: 0.75rem;">${row[3] || ''}</td>`;
-        html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${row[4] || ''}</td>`;
+        html += `<td style="padding: 0.75rem;">${esc(e.date)}</td>`;
+        html += `<td style="padding: 0.75rem;">${esc(e.productName)}</td>`;
+        html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${esc(e.asin)}</td>`;
+        html += `<td style="padding: 0.75rem;">${esc(e.changes)}</td>`;
+        html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${esc(e.notes)}</td>`;
+        html += `<td style="padding: 0.75rem; text-align: center;">`
+              + `<button class="changelog-delete-btn" data-id="${esc(e.id)}" title="Delete this entry" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.1rem; padding: 0 0.25rem;">×</button>`
+              + `</td>`;
         html += '</tr>';
       });
-      
+
       html += '</tbody></table>';
       tableDiv.innerHTML = html;
+
+      // Single delegated handler for the row delete buttons.
+      tableDiv.querySelectorAll('.changelog-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => deleteChangeLogEntry(btn.getAttribute('data-id'), btn));
+      });
     }
+
+    // Soft delete UX: button shrinks to "Deleting…" so the user has
+    // visual feedback even on slow networks. No popup/confirm — per
+    // project preference. If the user mis-clicks, they re-add the row.
+    async function deleteChangeLogEntry(id, btn) {
+      if (!id || !accessToken) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '…';
+      }
+      try {
+        const res = await fetch('/api/changelog?action=delete', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ id })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await loadChangeLog();
+      } catch (err) {
+        console.error('Delete failed:', err);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '×';
+        }
+      }
+    }
+    window.deleteChangeLogEntry = deleteChangeLogEntry;
+
+    // One-time backfill: pull every row from the legacy
+    // ListingChangeLog tab in the Sheet and replace Upstash contents.
+    // Idempotent (safe to re-run, but destructive — it overwrites
+    // whatever's currently in Upstash). Server uses the user's bearer
+    // token to read the Sheet, so anyone running it must have read
+    // access on the Sheet.
+    async function migrateChangeLogFromSheets() {
+      const feedback = document.getElementById('changelog-save-feedback');
+      const showMsg = (kind, msg) => {
+        feedback.style.display = 'block';
+        feedback.style.padding = '1rem';
+        feedback.style.borderRadius = '6px';
+        if (kind === 'error') {
+          feedback.style.background = 'rgba(239, 68, 68, 0.1)';
+          feedback.style.border = '1px solid var(--error)';
+          feedback.style.color = 'var(--error)';
+        } else {
+          feedback.style.background = 'rgba(6, 214, 160, 0.1)';
+          feedback.style.border = '1px solid var(--success)';
+          feedback.style.color = 'var(--success)';
+        }
+        feedback.textContent = msg;
+      };
+
+      if (!accessToken) { showMsg('error', '⚠ Please sign in first'); return; }
+      if (typeof SPREADSHEET_ID === 'undefined' || !SPREADSHEET_ID) {
+        showMsg('error', '⚠ SPREADSHEET_ID is not set');
+        return;
+      }
+
+      showMsg('success', '⏳ Importing from Google Sheet…');
+      try {
+        const res = await fetch('/api/changelog?action=migrate-from-sheets', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ spreadsheetId: SPREADSHEET_ID })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showMsg('error', '⚠ Import failed: ' + (err.error || res.status));
+          return;
+        }
+        const data = await res.json();
+        showMsg('success',
+          `✓ Imported ${data.imported} entries from Sheets${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}.`);
+        setTimeout(() => { feedback.style.display = 'none'; }, 6000);
+        loadChangeLog();
+      } catch (err) {
+        console.error('Migrate failed:', err);
+        showMsg('error', '⚠ Import failed: ' + err.message);
+      }
+    }
+    window.migrateChangeLogFromSheets = migrateChangeLogFromSheets;
     
     // ──────── Bulk upload ──────────────────────────────────────────────
     //
@@ -606,28 +662,35 @@
           return;
         }
 
-        // Append to the ListingChangeLog Sheet — the change log itself
-        // still lives in Sheets; only the ASIN lookup moved to Upstash.
-        const response = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ListingChangeLog!A:E:append?valueInputOption=USER_ENTERED`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ values: uploadRows })
-          }
-        );
+        // POST to the Upstash-backed change-log API. uploadRows is in
+        // [date, productName, asin, changes, notes] tuple form from the
+        // earlier processing — re-shape into the API's named-field
+        // entries for the bulk-add call.
+        const entries = uploadRows.map(([date, productName, asin, changes, notes]) =>
+          ({ date, productName, asin, changes, notes }));
+
+        const response = await fetch('/api/changelog?action=bulk-add', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ entries })
+        });
 
         if (response.ok) {
-          _showBulkUploadFeedback('success', `✓ Successfully uploaded ${uploadRows.length} change(s)!`);
+          const result = await response.json().catch(() => ({}));
+          const added = result.added ?? uploadRows.length;
+          const rejected = result.rejectedCount || 0;
+          const tail = rejected > 0 ? ` (${rejected} rejected by server)` : '';
+          _showBulkUploadFeedback('success', `✓ Successfully uploaded ${added} change(s)!${tail}`);
           setTimeout(() => {
             loadChangeLog();
             closeBulkUpload();
           }, 2000);
         } else {
-          throw new Error(`Upload failed (${response.status})`);
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || `Upload failed (${response.status})`);
         }
       } catch (error) {
         console.error('Bulk upload error:', error);

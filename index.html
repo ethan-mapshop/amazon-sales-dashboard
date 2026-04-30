@@ -1090,8 +1090,11 @@
             <button class="btn btn-secondary" onclick="openBulkUpload()" style="width: auto;">
               📤 Bulk Upload
             </button>
+            <button class="btn btn-secondary" onclick="migrateChangeLogFromSheets()" style="width: auto; margin-left: auto;" title="One-time: pull existing entries from the legacy Google Sheet (ListingChangeLog tab) into Upstash. Overwrites any current Upstash data.">
+              ⤴ Import from Sheets
+            </button>
           </div>
-          
+
           <div id="changelog-save-feedback" style="margin-top: 1rem; display: none;"></div>
         </div>
         
