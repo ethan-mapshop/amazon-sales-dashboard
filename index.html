@@ -1385,15 +1385,23 @@
           <div style="font-size: 0.875rem; color: var(--text-secondary); line-height: 1.6;">
             Columns must be:<br>
             <code style="background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 3px; font-family: 'Roboto Mono', monospace;">Date | ASIN | Changes | Notes</code><br><br>
-            • <strong>Date:</strong> YYYY-MM-DD format<br>
-            • <strong>ASIN:</strong> Must match products in your Products sheet<br>
+            • <strong>Date:</strong> any common format — auto-converted to YYYY-MM-DD (e.g. 4/30/26, Apr 30 2026, 2026-04-30)<br>
+            • <strong>ASIN:</strong> Must match a product in the Upstash catalog<br>
             • <strong>Changes:</strong> Comma-separated if multiple (e.g., "Title, Bullet Points")<br>
             • <strong>Notes:</strong> Optional text
           </div>
         </div>
-        
-        <input type="file" id="bulk-upload-file" accept=".csv" style="margin-bottom: 1rem; width: 100%;">
-        
+
+        <!-- Combined drop zone + click-to-pick. The hidden file input is
+             triggered by either the labeled button or any file dropped
+             onto the zone. Drop styling is toggled in listings.js. -->
+        <div id="bulk-upload-dropzone" style="border: 2px dashed var(--border); border-radius: 8px; padding: 2rem; text-align: center; margin-bottom: 1rem; cursor: pointer; transition: border-color 0.15s, background 0.15s;">
+          <div style="font-size: 2rem; opacity: 0.4; margin-bottom: 0.5rem;">⬆</div>
+          <div style="font-weight: 600; margin-bottom: 0.25rem;">Drop a CSV here, or click to choose a file</div>
+          <div id="bulk-upload-filename" style="font-size: 0.875rem; color: var(--text-secondary);">No file selected</div>
+          <input type="file" id="bulk-upload-file" accept=".csv,text/csv" style="display: none;">
+        </div>
+
         <div id="bulk-upload-preview" style="margin-bottom: 1rem; max-height: 300px; overflow-y: auto;"></div>
         
         <div style="display: flex; gap: 1rem;">
