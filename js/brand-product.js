@@ -148,7 +148,7 @@
       }
       
       const container = document.getElementById('bp-ytd-content');
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      container.innerHTML = '<div style="padding: 4rem; text-align: center;"><div class="spinner"></div><div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading data…</div></div>';
       
       try {
         const today = new Date();
@@ -192,7 +192,7 @@
       }
       
       const container = document.getElementById('bp-monthly-content');
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      container.innerHTML = '<div style="padding: 4rem; text-align: center;"><div class="spinner"></div><div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading data…</div></div>';
       
       try {
         const startDate = new Date(year, month, 1).toISOString().split('T')[0];

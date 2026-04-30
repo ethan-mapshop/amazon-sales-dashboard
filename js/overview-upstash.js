@@ -596,7 +596,7 @@
 
       _refreshV2024NavButtons();
 
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      container.innerHTML = '<div style="padding: 4rem; text-align: center;"><div class="spinner"></div><div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading data…</div></div>';
 
       try {
         // Mirrors generateMonthlyUpstashReport: current + previous (MoM) +
@@ -706,7 +706,7 @@
 
       _refreshV2024NavButtons();
 
-      container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Loading data...</div>';
+      container.innerHTML = '<div style="padding: 4rem; text-align: center;"><div class="spinner"></div><div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading data…</div></div>';
 
       try {
         // Same date logic as generateYTDUpstashReport: current year runs
@@ -831,13 +831,14 @@
     async function _loadV2024Charts() {
       const container = document.getElementById('charts-v2024-content');
       if (!container) return;
-      if (!accessToken) {
-        container.style.opacity = '0.4';
-        return;
-      }
-      // Soft loading state — dim the charts while we work but keep the
-      // existing rendering in place so a refresh doesn't flash empty.
-      container.style.opacity = '0.5';
+      if (!accessToken) return;
+
+      const loader = document.getElementById('charts-v2024-loader');
+      const body   = document.getElementById('charts-v2024-body');
+      // Show spinner, hide canvas grid. Same loader/body inverse-toggle
+      // pattern as Session & CVR.
+      if (loader) loader.style.display = 'block';
+      if (body)   body.style.display = 'none';
 
       try {
         const months = _build12MonthWindow();
@@ -875,17 +876,27 @@
 
         _chartsV2024MonthlyData = monthlyData;
         _populateV2024BrandFilter(monthlyData);
+
+        // Reveal the canvas grid before instantiating Chart.js so the
+        // canvases have non-zero dimensions when Chart.js measures
+        // them — same fix as the Session & CVR charts.
+        if (loader) loader.style.display = 'none';
+        if (body)   body.style.display = 'block';
+        await new Promise(r => requestAnimationFrame(r));
+
         _renderV2024Charts(monthlyData);
       } catch (err) {
         console.error('v2024 charts load failed:', err);
-        // Keep stale charts visible; an inline message at the top tells
-        // the user to refresh. No popup per project preference.
+        // No popup per project preference — surface inline above the
+        // (still-hidden) body, then reveal it. If charts had loaded
+        // previously they're now gone since body was hidden during
+        // load; that's acceptable on a hard error.
         const note = document.createElement('div');
         note.style.cssText = 'padding: 1rem; color: var(--error); margin-bottom: 1rem;';
         note.textContent = `Charts load failed: ${err.message}`;
         container.prepend(note);
-      } finally {
-        container.style.opacity = '1';
+        if (loader) loader.style.display = 'none';
+        if (body)   body.style.display = 'block';
       }
     }
 

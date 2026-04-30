@@ -6,7 +6,17 @@
     
     async function loadSalesVolumeData() {
       if (!accessToken) return;
-      
+
+      // Show the spinner from the moment the page is opened — covers
+      // the entire orders + products fetch + render pipeline so the
+      // user sees activity instead of an empty page during the
+      // initial load. Loader/body inverse-toggle, same pattern as
+      // Session & CVR.
+      const svLoader = document.getElementById('sv-monthly-loader');
+      const svBody   = document.getElementById('sv-monthly-body');
+      if (svLoader) svLoader.style.display = 'block';
+      if (svBody)   svBody.style.display = 'none';
+
       try {
         // Try summary cache first (fast single KV read for Monthly Overview)
         // Always load full orders too so PCI tab has individual records
@@ -66,9 +76,18 @@
           brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
         });
 
-        // Populate products
+        // Populate products (the body is still hidden but the DOM
+        // elements exist, so getElementById works fine).
         filterSVProducts();
-        
+
+        // Reveal the body before rendering — Chart.js needs the
+        // canvases laid out (non-zero dimensions) when it instantiates
+        // them, otherwise it latches onto 0×0 forever (same bug we
+        // hit on Session & CVR).
+        if (svLoader) svLoader.style.display = 'none';
+        if (svBody)   svBody.style.display = 'block';
+        await new Promise(r => requestAnimationFrame(r));
+
         // Render data
         renderSalesVolumeData();
 
@@ -77,9 +96,14 @@
 
         // Pre-load PCI data in background so it's ready when tab is clicked
         initPCI();
-        
+
       } catch (error) {
         console.error('Error loading sales & volume data:', error);
+        // Reveal the body even on failure so the user isn't stuck on
+        // the spinner — the page may have stale content or empty
+        // dropdowns, but that's a clearer state than a stuck loader.
+        if (svLoader) svLoader.style.display = 'none';
+        if (svBody)   svBody.style.display = 'block';
       }
     }
     

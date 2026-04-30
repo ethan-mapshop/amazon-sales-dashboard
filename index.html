@@ -187,6 +187,17 @@
       <!-- MONTHLY OVERVIEW SUB-TAB -->
       <div id="sv-monthly" class="sv-subtab">
 
+      <!-- Loader (toggled by loadSalesVolumeData). Sibling body wraps
+           the actual filters / tables / charts so we can show the
+           spinner alone during the initial fetch and reveal the body
+           when data is ready. -->
+      <div id="sv-monthly-loader" style="display: none; padding: 4rem; text-align: center;">
+        <div class="spinner"></div>
+        <div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading data…</div>
+      </div>
+
+      <div id="sv-monthly-body">
+
       <!-- Filters -->
       <div class="card card-flat" style="margin-bottom: 2rem;">
         <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
@@ -361,6 +372,7 @@
         <div id="backfill-log" style="display: none; margin-top: 1.5rem; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-family: 'Roboto Mono', monospace; font-size: 0.8rem; max-height: 250px; overflow-y: auto; line-height: 1.8;"></div>
       </div>
 
+      </div><!-- /sv-monthly-body -->
       </div><!-- /sv-monthly -->
 
       <!-- PRICE CHANGE IMPACTS SUB-TAB -->
@@ -568,7 +580,7 @@
               <button id="monthly-v2024-prev-btn" class="btn" onclick="setMonthlyV2024Date('prevMonth')" style="padding: 0.5rem 1rem;">◀ Previous</button>
               <button id="monthly-v2024-next-btn" class="btn" onclick="setMonthlyV2024Date('nextMonth')" style="padding: 0.5rem 1rem;">Next ▶</button>
               <button class="btn" onclick="setMonthlyV2024Date('lastMonth')" style="padding: 0.5rem 1rem;">Last Month</button>
-              <button class="btn btn-secondary" onclick="refreshV2024Report()" style="padding: 0.5rem 1rem; margin-left: auto;" title="Re-fetch transactions, products, mappings, and ad spend; clear the cached statement.">↻ Refresh</button>
+              <button class="btn btn-secondary" onclick="refreshV2024Report()" style="padding: 0.5rem 1rem;" title="Re-fetch transactions, products, mappings, and ad spend; clear the cached statement.">↻ Refresh</button>
             </div>
           </div>
 
@@ -590,7 +602,7 @@
               <button id="ytd-v2024-prev-btn" class="btn" onclick="setYTDV2024Year('prevYear')" style="padding: 0.5rem 1rem;">◀ Previous</button>
               <button id="ytd-v2024-next-btn" class="btn" onclick="setYTDV2024Year('nextYear')" style="padding: 0.5rem 1rem;">Next ▶</button>
               <button class="btn" onclick="setYTDV2024Year('thisYear')" style="padding: 0.5rem 1rem;">This Year</button>
-              <button class="btn btn-secondary" onclick="refreshV2024Report()" style="padding: 0.5rem 1rem; margin-left: auto;" title="Re-fetch transactions, products, mappings, and ad spend; clear the cached statement.">↻ Refresh</button>
+              <button class="btn btn-secondary" onclick="refreshV2024Report()" style="padding: 0.5rem 1rem;" title="Re-fetch transactions, products, mappings, and ad spend; clear the cached statement.">↻ Refresh</button>
             </div>
           </div>
 
@@ -612,6 +624,15 @@
           </div>
 
           <div id="charts-v2024-content">
+            <!-- Loader (toggled by _loadV2024Charts). The body sibling
+                 below holds the canvas grid; both flip inversely so
+                 charts get instantiated against laid-out canvases. -->
+            <div id="charts-v2024-loader" style="display: none; padding: 4rem; text-align: center;">
+              <div class="spinner"></div>
+              <div style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Loading data…</div>
+            </div>
+
+            <div id="charts-v2024-body">
             <!-- Overall -->
             <div style="margin-bottom: 3rem;">
               <h3 style="margin-bottom: 1.5rem; color: var(--text-primary);">Overall Performance</h3>
@@ -664,6 +685,7 @@
                 </div>
               </div>
             </div>
+            </div><!-- /charts-v2024-body -->
           </div>
         </div>
 
@@ -1047,8 +1069,8 @@
 
         <!-- Change Log Table -->
         <div class="card card-flat">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h3 style="font-size: 1.125rem; font-weight: 600;">Change History</h3>
+          <div style="display: flex; gap: 1.5rem; align-items: center; margin-bottom: 1.5rem;">
+            <h3 style="font-size: 1.125rem; font-weight: 600; margin: 0;">Change History</h3>
             <input type="text" id="changelog-search" placeholder="Search changes..." style="padding: 0.5rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); width: 300px;">
           </div>
           <div id="changelog-table" style="overflow-x: auto;">
