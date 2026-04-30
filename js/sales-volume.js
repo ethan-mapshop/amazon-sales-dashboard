@@ -577,7 +577,7 @@
       // Render table (Revenue + Units only, no Margin/Profit)
       let html = `
         <div style="overflow-x: auto;">
-          <table class="data-table" style="width:100%; font-family:'Roboto Mono',monospace; font-size:0.85rem;">
+          <table class="data-table" style="font-family:'Roboto Mono',monospace; font-size:0.85rem;">
             <thead>
               <tr>
                 <th colspan="6" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Price Change</th>

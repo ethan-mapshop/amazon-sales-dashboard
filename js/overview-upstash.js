@@ -2269,7 +2269,7 @@
           <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
             ${intro}
           </div>
-          <table style="width: 100%; border-collapse: collapse;">
+          <table style="border-collapse: collapse;">
             <thead>
               <tr>
                 <th style="text-align: left;  padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">${keyHeader}</th>
@@ -2366,7 +2366,7 @@
           <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
             These rows were skipped — add them to the catalog (with a fulfillment and cost) and reload to include them in the statement.
           </div>
-          <table style="width: 100%; border-collapse: collapse;">
+          <table style="border-collapse: collapse;">
             <thead>
               <tr>
                 <th style="text-align: left; padding: 0.5rem 0.75rem; background: var(--bg-primary); font-weight: 600; font-size: 0.8rem;">SKU</th>

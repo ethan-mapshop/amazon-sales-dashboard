@@ -444,10 +444,22 @@
       padding: 1rem;
     }
     
+    /* Tables default to natural-content width (display: table's
+       intrinsic sizing). max-width: 100% caps them at the parent so a
+       wide table can't blow past its container — content wider than
+       that triggers horizontal scroll inside any ancestor with
+       overflow-x: auto rather than pushing the page out. Apply
+       .table-fill in the rare case where a table genuinely should
+       stretch to fill its parent (e.g. side-by-side comparison cards
+       sitting in fixed-width grid columns). */
     table {
-      width: 100%;
+      max-width: 100%;
       border-collapse: collapse;
       font-size: 0.8rem;
+    }
+
+    .table-fill {
+      width: 100%;
     }
     
     th, td {
@@ -775,7 +787,11 @@
     }
     
     .bp-table {
-      width: 100%;
+      /* No explicit width — the table sizes to its 19 columns of
+         actual content (sticky-cell positioning still works
+         regardless). The wrapper above this has overflow: auto +
+         max-height: 70vh so wide content scrolls internally instead
+         of stretching the page. */
       border-collapse: collapse;
       font-size: 0.875rem;
     }

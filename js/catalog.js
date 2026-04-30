@@ -109,7 +109,7 @@
           <button class="btn btn-secondary" id="catalog-export-btn" type="button">Export CSV</button>
         </div>
 
-        <table style="width: 100%; border-collapse: collapse;">
+        <table style="border-collapse: collapse;">
           <thead>
             <tr>${filterCells}</tr>
             <tr>${labelCells}</tr>

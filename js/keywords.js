@@ -231,7 +231,7 @@
         return;
       }
       
-      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      let html = '<table style="border-collapse: collapse;">';
       html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Rank</th>';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Search Query</th>';
@@ -300,7 +300,7 @@
         return;
       }
       
-      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      let html = '<table style="border-collapse: collapse;">';
       html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Rank</th>';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Search Query</th>';
@@ -345,7 +345,7 @@
         return;
       }
       
-      let html = '<table style="width: 100%; border-collapse: collapse;">';
+      let html = '<table style="border-collapse: collapse;">';
       html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Rank</th>';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Search Query</th>';
