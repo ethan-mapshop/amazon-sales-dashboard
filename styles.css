@@ -1158,11 +1158,15 @@
     }
 
     /* Flat pages span the full main-content width and left-justify —
-       the centered 1400px column looks stranded without card chrome. */
+       the centered 1400px column looks stranded without card chrome.
+       Pages added here pair with the sticky `.page-header` pattern, so
+       the header bar's negative margins and the content below it both
+       hug the same edges. */
     .main-content:has(#overview-page.active),
     .main-content:has(#salesvolume-page.active),
     .main-content:has(#catalog-page.active),
-    .main-content:has(#mapping-page.active) {
+    .main-content:has(#mapping-page.active),
+    .main-content:has(#listing-page.active) {
       max-width: none;
       margin: 0;
     }
