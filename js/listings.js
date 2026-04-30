@@ -297,15 +297,16 @@
       const start = (changeLogPage - 1) * CHANGE_LOG_PAGE_SIZE;
       const pageEntries = entries.slice(start, start + CHANGE_LOG_PAGE_SIZE);
 
-      // Table without `width: 100%` so columns size to content. Each
-      // cell uses `white-space: nowrap` for the short fields (Date,
-      // ASIN, Delete) so they don't waste space wrapping the date or
-      // ASIN string. Notes can wrap if it's long.
+      // `width: auto` overrides the global `table { width: 100%; }` in
+      // styles.css so columns size to their actual content. Date,
+      // ASIN, and Delete cells nowrap so the short ones don't waste
+      // horizontal space wrapping a 10-char string. Product / Changes
+      // / Notes wrap normally — Notes especially can be long.
       const esc = (v) => (v == null ? '' : String(v))
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-      let html = '<table style="border-collapse: collapse;">';
+      let html = '<table style="width: auto; border-collapse: collapse;">';
       html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; white-space: nowrap;">Date</th>';
       html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
