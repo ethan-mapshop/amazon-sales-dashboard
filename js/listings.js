@@ -229,12 +229,15 @@
         if (entries.length === 0) {
           tableDiv.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);">No changes logged yet. Add your first entry above.</div>';
           changeLogData = [];
+          changeLogFiltered = [];
           return;
         }
 
-        // Already sorted newest-first by the API.
-        renderChangeLogTable(entries);
+        // Already sorted newest-first by the API. Wire up the search
+        // input + state before rendering so the pager buttons can
+        // reference `changeLogFiltered` without a race.
         setupChangeLogSearch(entries);
+        renderChangeLogTable(changeLogFiltered);
       } catch (error) {
         console.error('Error loading change log:', error);
         document.getElementById('changelog-table').innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--error);">Error loading change log</div>';
@@ -243,27 +246,41 @@
 
     // Search functionality for change log
     let changeLogData = [];
+    let changeLogFiltered = [];        // current filtered result set (or
+                                       //   = changeLogData when no search)
+    let changeLogPage = 1;
+    const CHANGE_LOG_PAGE_SIZE = 25;
 
     function setupChangeLogSearch(entries) {
       changeLogData = entries;
+      changeLogFiltered = entries;
+      // Don't reset the current page here — `loadChangeLog` runs on
+      // every delete too, and stranding the user on page 1 every time
+      // they delete one row would be annoying. `renderChangeLogTable`
+      // clamps the page if the data shrinks.
       const searchInput = document.getElementById('changelog-search');
-      if (searchInput) {
+      if (searchInput && !searchInput._changelogWired) {
         searchInput.addEventListener('input', filterChangeLog);
+        searchInput._changelogWired = true;
       }
     }
 
     function filterChangeLog() {
       const searchTerm = document.getElementById('changelog-search').value.toLowerCase();
-      if (!searchTerm) {
-        renderChangeLogTable(changeLogData);
-        return;
-      }
-      const filtered = changeLogData.filter(e =>
+      changeLogFiltered = !searchTerm ? changeLogData : changeLogData.filter(e =>
         ['date', 'productName', 'asin', 'changes', 'notes']
           .some(k => (e?.[k] || '').toString().toLowerCase().includes(searchTerm))
       );
-      renderChangeLogTable(filtered);
+      changeLogPage = 1; // reset on each search
+      renderChangeLogTable(changeLogFiltered);
     }
+
+    function changeLogGoToPage(page) {
+      const totalPages = Math.max(1, Math.ceil(changeLogFiltered.length / CHANGE_LOG_PAGE_SIZE));
+      changeLogPage = Math.min(Math.max(1, page), totalPages);
+      renderChangeLogTable(changeLogFiltered);
+    }
+    window.changeLogGoToPage = changeLogGoToPage;
 
     function renderChangeLogTable(entries) {
       const tableDiv = document.getElementById('changelog-table');
@@ -272,39 +289,66 @@
         return;
       }
 
-      // The Delete column gets a small × button per row. Wired via
-      // `data-id` + a single delegated click handler installed on the
-      // table container (see below). Avoids per-row inline onclick so
-      // we don't have to escape ids.
-      let html = '<table style="width: 100%; border-collapse: collapse;">';
-      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
-      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Date</th>';
-      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
-      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">ASIN</th>';
-      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
-      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
-      html += '<th style="text-align: center; padding: 0.75rem; font-weight: 600; width: 1%;"></th>';
-      html += '</tr></thead><tbody>';
+      // Pagination — slice to the current page. Clamp page so a delete
+      // on the last page doesn't strand the user on an empty page.
+      const total = entries.length;
+      const totalPages = Math.max(1, Math.ceil(total / CHANGE_LOG_PAGE_SIZE));
+      if (changeLogPage > totalPages) changeLogPage = totalPages;
+      const start = (changeLogPage - 1) * CHANGE_LOG_PAGE_SIZE;
+      const pageEntries = entries.slice(start, start + CHANGE_LOG_PAGE_SIZE);
 
+      // Table without `width: 100%` so columns size to content. Each
+      // cell uses `white-space: nowrap` for the short fields (Date,
+      // ASIN, Delete) so they don't waste space wrapping the date or
+      // ASIN string. Notes can wrap if it's long.
       const esc = (v) => (v == null ? '' : String(v))
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-      entries.forEach(e => {
+      let html = '<table style="border-collapse: collapse;">';
+      html += '<thead><tr style="border-bottom: 2px solid var(--border);">';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; white-space: nowrap;">Date</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Product</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; white-space: nowrap;">ASIN</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Changes Made</th>';
+      html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600;">Notes</th>';
+      html += '<th style="text-align: center; padding: 0.75rem; font-weight: 600;"></th>';
+      html += '</tr></thead><tbody>';
+
+      pageEntries.forEach(e => {
         html += '<tr style="border-bottom: 1px solid var(--border);">';
-        html += `<td style="padding: 0.75rem;">${esc(e.date)}</td>`;
+        html += `<td style="padding: 0.75rem; white-space: nowrap;">${esc(e.date)}</td>`;
         html += `<td style="padding: 0.75rem;">${esc(e.productName)}</td>`;
-        html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace;">${esc(e.asin)}</td>`;
+        html += `<td style="padding: 0.75rem; font-family: 'Roboto Mono', monospace; white-space: nowrap;">${esc(e.asin)}</td>`;
         html += `<td style="padding: 0.75rem;">${esc(e.changes)}</td>`;
         html += `<td style="padding: 0.75rem; color: var(--text-secondary);">${esc(e.notes)}</td>`;
-        html += `<td style="padding: 0.75rem; text-align: center;">`
+        html += `<td style="padding: 0.75rem; text-align: center; white-space: nowrap;">`
               + `<button class="changelog-delete-btn" data-id="${esc(e.id)}" title="Delete this entry" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.1rem; padding: 0 0.25rem;">×</button>`
               + `</td>`;
         html += '</tr>';
       });
 
       html += '</tbody></table>';
-      tableDiv.innerHTML = html;
+
+      // Pagination controls — Prev / "Page X of Y · N entries" / Next.
+      // Hide the controls entirely if everything fits on one page.
+      const showingFrom = total === 0 ? 0 : start + 1;
+      const showingTo = Math.min(start + CHANGE_LOG_PAGE_SIZE, total);
+      const pagerStyle = `display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);`;
+      const btnStyle = (disabled) => `padding: 0.5rem 1rem; background: ${disabled ? 'var(--bg-secondary)' : 'var(--bg-card)'}; border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); cursor: ${disabled ? 'not-allowed' : 'pointer'}; opacity: ${disabled ? '0.5' : '1'};`;
+
+      const pager = totalPages <= 1 ? '' : `
+        <div style="${pagerStyle}">
+          <span>Showing ${showingFrom}–${showingTo} of ${total.toLocaleString()}</span>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button onclick="changeLogGoToPage(${changeLogPage - 1})" style="${btnStyle(changeLogPage <= 1)}" ${changeLogPage <= 1 ? 'disabled' : ''}>◀ Prev</button>
+            <span>Page ${changeLogPage} of ${totalPages}</span>
+            <button onclick="changeLogGoToPage(${changeLogPage + 1})" style="${btnStyle(changeLogPage >= totalPages)}" ${changeLogPage >= totalPages ? 'disabled' : ''}>Next ▶</button>
+          </div>
+        </div>
+      `;
+
+      tableDiv.innerHTML = html + pager;
 
       // Single delegated handler for the row delete buttons.
       tableDiv.querySelectorAll('.changelog-delete-btn').forEach(btn => {
