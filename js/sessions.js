@@ -88,20 +88,29 @@
     }
     
     async function loadSessionData() {
+      // Show the spinner from the moment the tab is opened — covers
+      // the whole pipeline (sessions fetch → products fetch → change-
+      // log fetch → chart render) so the user sees something happening
+      // for the entire load, not just the final chart-instantiation
+      // sliver. Hidden either by renderSessionCharts (success path) or
+      // explicitly below if auto-load decides not to render.
+      _showSessionChartsLoader();
+      let renderTriggered = false;
+
       try {
         const response = await fetch('/api/sessions?action=get', {
           headers: {
             'Authorization': `Bearer ${accessToken}`
           }
         });
-        
+
         if (!response.ok) {
           throw new Error('Failed to load session data');
         }
-        
+
         const result = await response.json();
         sessionData = result.data;
-        
+
         // Display latest date in database
         if (sessionData.length > 0) {
           const dates = sessionData.map(d => d.date).filter(Boolean);
@@ -110,85 +119,97 @@
         } else {
           document.getElementById('latest-session-date').textContent = 'No data';
         }
-        
-        // Load products from Google Sheets to populate dropdowns
-        const productsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products!A2:G`, {
+
+        // Load products from the Upstash catalog (matches the rest of
+        // the dashboard — Change Log, Brand & Product, Profitability
+        // Overview all read from here). No type filter: anything with
+        // a non-empty, non-"N/A" ASIN is fair game, since a change-log
+        // entry can reference any ASIN regardless of variant role.
+        const productsResponse = await fetch('/api/products?action=get', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        
-        const productsData = await productsResponse.json();
-        
-        if (productsData.values && productsData.values.length > 0) {
-          // Store products - A=sku, B=name, C=brand, F=asin, G=productType
-          // For Listing Optimization: only show Parent and Non-Variable products
-          // Filter out discontinued products (ASIN = N/A) and Child products
-          allProducts = productsData.values
-            .filter(row => {
-              const asin = row[5];
-              const productType = row[6] || '';
-              return asin && 
-                     asin.toUpperCase() !== 'N/A' && 
-                     (productType === 'Parent' || productType === 'Non-Variable');
-            })
-            .map(row => ({
-              sku: row[0],
-              name: row[1] || row[0],
-              brand: row[2] || 'Unknown',
-              asin: row[5],
-              productType: row[6] || ''
-            }));
-          
-          // Get unique brands
-          const brands = [...new Set(allProducts.map(p => p.brand))].sort();
-          
-          // Populate brand dropdown
-          const brandSelect = document.getElementById('session-brand-filter');
-          brandSelect.innerHTML = '<option value="">All Brands</option>';
-          brands.forEach(brand => {
-            brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
-          });
-          
-          // Populate export brand checkboxes
-          const exportBrandCheckboxes = document.getElementById('export-brand-checkboxes');
-          exportBrandCheckboxes.innerHTML = '';
-          brands.forEach(brand => {
-            exportBrandCheckboxes.innerHTML += `
-              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                <input type="checkbox" class="export-brand-checkbox" value="${brand}" checked onchange="updateBrandDropdownLabel()" style="cursor: pointer;">
-                <span style="font-size: 0.875rem;">${brand}</span>
-              </label>
-            `;
-          });
-          
-          // Populate products (all initially)
-          filterSessionProducts();
+        if (!productsResponse.ok) {
+          throw new Error(`Failed to load products from Upstash (${productsResponse.status})`);
         }
+        const productsPayload = await productsResponse.json();
+        const products = Array.isArray(productsPayload.products) ? productsPayload.products : [];
+
+        allProducts = products
+          .filter(p => {
+            const asin = (p.asin || '').toString().trim();
+            return asin && asin.toUpperCase() !== 'N/A';
+          })
+          .map(p => ({
+            sku: p.sku,
+            name: p.name || p.sku,
+            brand: p.brand || 'Unknown',
+            asin: (p.asin || '').toString().trim(),
+            productType: p.type || ''
+          }));
+
+        // Get unique brands
+        const brands = [...new Set(allProducts.map(p => p.brand))].sort();
+
+        // Populate brand dropdown
+        const brandSelect = document.getElementById('session-brand-filter');
+        brandSelect.innerHTML = '<option value="">All Brands</option>';
+        brands.forEach(brand => {
+          brandSelect.innerHTML += `<option value="${brand}">${brand}</option>`;
+        });
+
+        // Populate export brand checkboxes
+        const exportBrandCheckboxes = document.getElementById('export-brand-checkboxes');
+        exportBrandCheckboxes.innerHTML = '';
+        brands.forEach(brand => {
+          exportBrandCheckboxes.innerHTML += `
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+              <input type="checkbox" class="export-brand-checkbox" value="${brand}" checked onchange="updateBrandDropdownLabel()" style="cursor: pointer;">
+              <span style="font-size: 0.875rem;">${brand}</span>
+            </label>
+          `;
+        });
+
+        // Populate products (all initially)
+        filterSessionProducts();
 
         // Auto-select the most recent change-log entry so the user
         // lands on a populated analysis instead of empty selectors.
-        // Silent no-op if the change log is empty or the latest entry's
-        // ASIN isn't in the products catalog.
-        await _autoLoadLatestChange();
+        // Returns true iff renderSessionCharts was triggered — used
+        // below to decide whether to hide the loader manually.
+        renderTriggered = await _autoLoadLatestChange();
 
       } catch (error) {
         console.error('Error loading session data:', error);
+      } finally {
+        // If auto-load didn't kick off a chart render (empty change
+        // log, ASIN missing from catalog, fetch error, etc.) the
+        // spinner would otherwise spin forever. Hide it and collapse
+        // the analysis container so the user sees the empty selector
+        // dropdowns and can pick manually.
+        if (!renderTriggered) {
+          _hideSessionChartsLoader();
+          const container = document.getElementById('session-charts');
+          if (container) container.style.display = 'none';
+        }
       }
     }
 
     // Walks the most-recent change-log entry through the three
     // dropdowns: brand → product → change → render. Each step waits
     // for any async work the next step depends on (filterSessionChanges
-    // fetches the change log; the other steps are synchronous DOM
-    // updates).
+    // fetches the change log; renderSessionCharts is awaited so the
+    // caller knows it actually ran). Returns `true` iff a render was
+    // triggered — `loadSessionData` uses that to decide whether to
+    // hide the spinner manually.
     async function _autoLoadLatestChange() {
       try {
         const res = await fetch('/api/changelog?action=get', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        if (!res.ok) return;
+        if (!res.ok) return false;
         const data = await res.json();
         const entries = Array.isArray(data.entries) ? data.entries : [];
-        if (entries.length === 0) return;
+        if (entries.length === 0) return false;
 
         // API returns newest-first.
         const latest = entries[0];
@@ -196,7 +217,7 @@
         const product = allProducts.find(p => (p.asin || '').toUpperCase() === targetAsin);
         if (!product) {
           console.warn(`Auto-load: ASIN ${latest.asin} from latest change-log entry isn't in the products catalog; skipping.`);
-          return;
+          return false;
         }
 
         const brandSelect   = document.getElementById('session-brand-filter');
@@ -213,13 +234,16 @@
 
         // Pick the most-recent change for that ASIN (already first in
         // the list since filterSessionChanges sorts newest-first) and
-        // trigger the chart render.
+        // trigger + await the chart render so the caller sees it ran.
         if (changeSelect.options.length > 1) {
           changeSelect.value = '0';
-          renderSessionCharts();
+          await renderSessionCharts();
+          return true;
         }
+        return false;
       } catch (err) {
         console.error('Auto-load latest change failed:', err);
+        return false;
       }
     }
 
