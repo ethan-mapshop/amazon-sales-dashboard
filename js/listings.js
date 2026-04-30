@@ -43,9 +43,11 @@
     // page expects ({ sku, name, brand, asin, productType }) — the
     // Upstash catalog stores `type` for Parent/Non-Variable, so we
     // re-key it to `productType` here for consistency with the rest of
-    // this module. Only Parent and Non-Variable products with a non-
-    // empty, non-"N/A" ASIN are eligible (variations roll up to their
-    // parent for change-log purposes).
+    // this module. Filter is intentionally permissive: any product
+    // with a non-empty, non-"N/A" ASIN is eligible regardless of type
+    // (variations, children, etc. all show up). The change log tracks
+    // listing edits and the user knows which ASIN they're editing —
+    // no reason to second-guess the catalog.
     async function loadChangeLogASINs() {
       if (!accessToken) return;
 
@@ -63,16 +65,13 @@
         allProducts = products
           .filter(p => {
             const asin = (p.asin || '').toString().trim();
-            const productType = (p.type || '').toString().trim();
-            return asin
-                && asin.toUpperCase() !== 'N/A'
-                && (productType === 'Parent' || productType === 'Non-Variable');
+            return asin && asin.toUpperCase() !== 'N/A';
           })
           .map(p => ({
             sku: p.sku,
             name: p.name || p.sku,
             brand: p.brand || 'Unknown',
-            asin: p.asin,
+            asin: (p.asin || '').toString().trim(),
             productType: p.type || ''
           }));
 
@@ -564,9 +563,13 @@
         }
 
         // ASIN → product name from the Upstash-loaded `allProducts`.
+        // Keyed by uppercase ASIN so the lookup is case-insensitive —
+        // Amazon ASINs are conventionally uppercase but a CSV exported
+        // from a different tool sometimes lowercases them.
         const asinToName = {};
         allProducts.forEach(p => {
-          if (!asinToName[p.asin]) asinToName[p.asin] = p.name;
+          const key = (p.asin || '').toUpperCase();
+          if (key && !asinToName[key]) asinToName[key] = p.name;
         });
 
         const uploadRows = [];
@@ -586,12 +589,15 @@
             return;
           }
 
-          const productName = asinToName[asin];
+          const asinKey = asin.toUpperCase();
+          const productName = asinToName[asinKey];
           if (!productName) {
             notFoundAsins.push(asin);
             continue;
           }
-          uploadRows.push([date, productName, asin, changes, notes]);
+          // Use the canonical (uppercase) ASIN in the appended row so
+          // entries are consistent regardless of CSV casing.
+          uploadRows.push([date, productName, asinKey, changes, notes]);
         }
 
         if (notFoundAsins.length > 0) {
