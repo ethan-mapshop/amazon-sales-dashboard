@@ -424,9 +424,6 @@
               <button class="btn btn-secondary" onclick="openPriceChangeBulkUpload()" style="width: auto;">
                 📤 Bulk Upload
               </button>
-              <button class="btn btn-secondary" onclick="migratePriceChangesFromSheets()" style="width: auto; margin-left: auto;" title="One-time: pull existing rows from the legacy Google Sheet (PriceChanges tab) into Upstash. Overwrites any current Upstash data.">
-                ⤴ Import from Sheets
-              </button>
             </div>
 
             <div id="pricechange-save-feedback" style="margin-top: 1rem; display: none;"></div>
@@ -434,7 +431,7 @@
         </div>
 
         <!-- Export to CSV -->
-        <div class="card" style="margin-bottom: 2rem;">
+        <div class="card card-flat" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Price Change Analysis</h3>
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
@@ -475,7 +472,7 @@
         </div>
 
         <!-- Filters: Brand → Product → Change to Analyze → Comparison Window -->
-        <div class="card" style="margin-bottom: 2rem;">
+        <div class="card card-flat" style="margin-bottom: 2rem;">
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
@@ -509,9 +506,13 @@
         <!-- Detail: Summary Cards + Charts (shown when a change is selected) -->
         <div id="pci-charts" style="margin-bottom: 2rem;">
 
-          <!-- Summary Cards -->
-          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
-            <div class="card">
+          <!-- Summary stats — flat row, no card chrome and no grid
+               stretch. Each cell sits at the natural width of its
+               contents with a 3rem gap between them. Wraps to a new
+               line on narrow viewports. Mirrors the Session & CVR
+               summary stat layout. -->
+          <div style="display: flex; flex-wrap: wrap; gap: 3rem; margin-bottom: 2rem;">
+            <div>
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
               <div style="display: flex; flex-direction: column; gap: 0.25rem;">
                 <div style="display: flex; align-items: baseline; gap: 0.5rem;">
@@ -525,7 +526,7 @@
                 <div id="pci-summary-rev-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
-            <div class="card">
+            <div>
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Units/Day</div>
               <div style="display: flex; flex-direction: column; gap: 0.25rem;">
                 <div style="display: flex; align-items: baseline; gap: 0.5rem;">
@@ -539,26 +540,27 @@
                 <div id="pci-summary-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
-            <div class="card">
+            <div>
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Change</div>
               <div id="pci-summary-price" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
               <div id="pci-summary-price-pct" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">-</div>
             </div>
-            <div class="card">
+            <div>
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
               <div id="pci-summary-days" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
               <div id="pci-summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
             </div>
           </div>
 
-          <!-- Charts: 7-day rolling average with linear trendline -->
+          <!-- Charts: 7-day rolling average with linear trendline. Flat
+               panels — no card chrome, just headings + canvases. -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
-            <div class="card">
+            <div>
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Revenue — 7-Day Rolling Avg</h3>
               <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily revenue with linear trend</p>
               <canvas id="pci-rolling-rev-chart"></canvas>
             </div>
-            <div class="card">
+            <div>
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — 7-Day Rolling Avg</h3>
               <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily units with linear trend</p>
               <canvas id="pci-rolling-units-chart"></canvas>
@@ -567,7 +569,7 @@
         </div>
 
         <!-- Summary Table -->
-        <div class="card">
+        <div class="card card-flat">
           <div id="pci-table-content">
             <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view price change impacts</div>
           </div>
