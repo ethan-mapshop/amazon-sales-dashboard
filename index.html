@@ -349,52 +349,56 @@
         </div>
       </div>
 
-      <!-- Main Content: Monthly List and Charts -->
-      <div style="display: grid; grid-template-columns: 400px 1fr; gap: 2rem; align-items: stretch;">
+      <!-- Main Content: Monthly List and Charts.
+           Parent grid: `auto 1fr` so the table column sizes to its
+           content (no horizontal scroll on 5 columns), and the chart
+           column fills whatever's left. align-items: stretch makes
+           the chart container match the table's natural height. -->
+      <div style="display: grid; grid-template-columns: auto 1fr; gap: 2rem; align-items: stretch;">
         <!-- Monthly Breakdown (table styled like Profitability Overview) -->
         <div class="card card-flat" style="display: flex; flex-direction: column;">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Monthly Breakdown</h3>
-          <div style="flex: 1; overflow-y: auto;">
-            <table style="border-collapse: collapse;">
-              <thead>
-                <tr>
-                  <th style="text-align: left;  padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Month</th>
-                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales</th>
-                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales/Day</th>
-                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume</th>
-                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume/Day</th>
-                </tr>
-              </thead>
-              <tbody id="monthly-list">
-                <!-- Monthly data will be populated here -->
-              </tbody>
-            </table>
-          </div>
+          <table style="border-collapse: collapse;">
+            <thead>
+              <tr>
+                <th style="text-align: left;  padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem; white-space: nowrap;">Month</th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem; white-space: nowrap;">Sales</th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem; white-space: nowrap;">Sales/Day</th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem; white-space: nowrap;">Volume</th>
+                <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem; white-space: nowrap;">Volume/Day</th>
+              </tr>
+            </thead>
+            <tbody id="monthly-list">
+              <!-- Monthly data will be populated here -->
+            </tbody>
+          </table>
         </div>
 
         <!-- Charts — 2×2 grid: Sales / Sales-per-Day on top, Volume /
-             Volume-per-Day below. Same explicit row heights as before
-             so the Monthly Breakdown card stretches to match. -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 260px 260px; gap: 1.5rem;">
-          <div class="card card-flat" style="display: flex; flex-direction: column;">
+             Volume-per-Day below. Rows are 1fr 1fr so the four cells
+             evenly split whatever vertical space the parent grid row
+             gives them — which equals the table's natural height
+             since the parent has align-items: stretch. -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 1.5rem;">
+          <div class="card card-flat" style="display: flex; flex-direction: column; min-height: 0;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales ($)</h3>
             <div style="flex: 1; min-height: 0;">
               <canvas id="sales-chart-sv"></canvas>
             </div>
           </div>
-          <div class="card card-flat" style="display: flex; flex-direction: column;">
+          <div class="card card-flat" style="display: flex; flex-direction: column; min-height: 0;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales/Day ($)</h3>
             <div style="flex: 1; min-height: 0;">
               <canvas id="sales-per-day-chart-sv"></canvas>
             </div>
           </div>
-          <div class="card card-flat" style="display: flex; flex-direction: column;">
+          <div class="card card-flat" style="display: flex; flex-direction: column; min-height: 0;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume (Units)</h3>
             <div style="flex: 1; min-height: 0;">
               <canvas id="volume-chart-sv"></canvas>
             </div>
           </div>
-          <div class="card card-flat" style="display: flex; flex-direction: column;">
+          <div class="card card-flat" style="display: flex; flex-direction: column; min-height: 0;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume/Day (Units)</h3>
             <div style="flex: 1; min-height: 0;">
               <canvas id="volume-per-day-chart-sv"></canvas>

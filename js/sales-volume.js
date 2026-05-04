@@ -447,7 +447,12 @@
         },
         options: {
           responsive: true,
-          maintainAspectRatio: true,
+          // false so Chart.js fills both dimensions of its flex
+          // container instead of squashing to a fixed 2:1 aspect
+          // ratio. Container height is now driven by the parent
+          // grid row (1fr 1fr) which sizes to match the Monthly
+          // Breakdown table's natural height.
+          maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
             y: {
@@ -473,7 +478,12 @@
         },
         options: {
           responsive: true,
-          maintainAspectRatio: true,
+          // false so Chart.js fills both dimensions of its flex
+          // container instead of squashing to a fixed 2:1 aspect
+          // ratio. Container height is now driven by the parent
+          // grid row (1fr 1fr) which sizes to match the Monthly
+          // Breakdown table's natural height.
+          maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
             y: {
@@ -502,7 +512,12 @@
         },
         options: {
           responsive: true,
-          maintainAspectRatio: true,
+          // false so Chart.js fills both dimensions of its flex
+          // container instead of squashing to a fixed 2:1 aspect
+          // ratio. Container height is now driven by the parent
+          // grid row (1fr 1fr) which sizes to match the Monthly
+          // Breakdown table's natural height.
+          maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
             y: {
@@ -528,7 +543,12 @@
         },
         options: {
           responsive: true,
-          maintainAspectRatio: true,
+          // false so Chart.js fills both dimensions of its flex
+          // container instead of squashing to a fixed 2:1 aspect
+          // ratio. Container height is now driven by the parent
+          // grid row (1fr 1fr) which sizes to match the Monthly
+          // Breakdown table's natural height.
+          maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
             y: {
