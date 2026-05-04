@@ -553,17 +553,29 @@
               <div id="pcda-net-change" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
               <div id="pcda-net-change-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
             </div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
+              <div id="pcda-days-since" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="pcda-days-since-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
           </div>
 
-          <!-- Chart: combined daily revenue + units across the matched
-               SKUs, with the change date marked. Dual-axis so the two
-               magnitudes don't squash each other. Hidden until a date
-               is picked. -->
+          <!-- Charts: separate Revenue + Units panels for the matched
+               SKUs, dashed line marks the change date. Sized via a
+               grid so they sit side-by-side at any wide viewport;
+               wraps to a single column on narrow screens. Hidden
+               until a date is picked. -->
           <div id="pcda-chart-wrapper" style="display: none; margin-bottom: 1.5rem;">
-            <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Daily Revenue &amp; Units (across affected SKUs)</h4>
-            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Revenue on left axis, units on right; dashed line marks the change date.</p>
-            <div style="position: relative; height: 320px;">
-              <canvas id="pcda-chart"></canvas>
+            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Daily totals across the affected SKUs. Dashed line marks the change date.</p>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem;">
+              <div>
+                <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Revenue</h4>
+                <canvas id="pcda-rev-chart"></canvas>
+              </div>
+              <div>
+                <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Units</h4>
+                <canvas id="pcda-units-chart"></canvas>
+              </div>
             </div>
           </div>
 

@@ -1272,7 +1272,11 @@
     // dropdown narrows to brands with changes on that date → stats +
     // chart + compact list aggregate across the matched SKUs.
 
-    let _pcdaChart = null;
+    // Two separate Chart.js instances — Revenue and Units shown
+    // side-by-side rather than dual-axis on a single canvas (matches
+    // the Individual Analysis presentation).
+    let _pcdaRevChart = null;
+    let _pcdaUnitsChart = null;
 
     function _populatePCDADateDropdown() {
       const sel = document.getElementById('pcda-date');
@@ -1285,8 +1289,11 @@
       const current = sel.value;
       sel.innerHTML = '<option value="">Select a date…</option>' +
         dates.map(d => `<option value="${_pcEsc(d)}">${_pcEsc(d)}</option>`).join('');
-      // Preserve selection if still valid.
-      if (dates.includes(current)) sel.value = current;
+      // Preserve a valid prior selection; otherwise default to the
+      // most recent change date so the user lands on a populated view
+      // instead of an empty dropdown.
+      if (dates.includes(current))    sel.value = current;
+      else if (dates.length > 0)      sel.value = dates[0];
     }
 
     function _populatePCDABrandDropdown() {
@@ -1420,6 +1427,15 @@
       document.getElementById('pcda-net-change-detail').textContent =
         `$${oldAvg.toFixed(2)} → $${newAvg.toFixed(2)} (revenue-weighted)`;
 
+      // Days Since Change — straightforward calendar-day count from
+      // the picked change date to today. `daysAfter` (used in stats
+      // above) caps at yesterday for "days of after-data"; this card
+      // shows the human-meaningful "how long ago was this".
+      const today = new Date().toISOString().split('T')[0];
+      const daysSince = daysBetween(date, today);
+      document.getElementById('pcda-days-since').textContent = daysSince;
+      document.getElementById('pcda-days-since-detail').textContent = `Changed ${date}`;
+
       stats.style.display = 'flex';
 
       // Compact list (drives drill-through to Individual Analysis).
@@ -1461,8 +1477,9 @@
       const revData   = dates.map(d => dailyRev[d]);
       const unitsData = dates.map(d => dailyUnits[d]);
 
-      // Mark the change date with a vertical dashed line. The label uses
-      // MM-DD form (matching the axis labels).
+      // Mark the change date with a vertical dashed line. The label
+      // uses MM-DD form (matching the axis labels). Same annotation
+      // shape applied to both charts.
       const annotations = {
         changeLine: {
           type: 'line',
@@ -1474,56 +1491,42 @@
         }
       };
 
-      if (_pcdaChart) _pcdaChart.destroy();
-      const ctx = document.getElementById('pcda-chart').getContext('2d');
-      _pcdaChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [
-            {
-              label: 'Revenue ($)',
-              data: revData,
-              borderColor: 'rgb(255, 159, 64)',
-              backgroundColor: 'rgba(255, 159, 64, 0.1)',
-              tension: 0.3,
-              yAxisID: 'y'
-            },
-            {
-              label: 'Units',
-              data: unitsData,
-              borderColor: 'rgb(54, 162, 235)',
-              backgroundColor: 'rgba(54, 162, 235, 0.1)',
-              tension: 0.3,
-              yAxisID: 'y1'
-            }
-          ]
+      const mkOpts = (isCurrency) => ({
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          annotation: { annotations }
         },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: 'index', intersect: false },
-          plugins: {
-            legend: { position: 'top' },
-            annotation: { annotations }
-          },
-          scales: {
-            y: {
-              type: 'linear',
-              position: 'left',
-              beginAtZero: true,
-              title: { display: true, text: 'Revenue ($)' }
-            },
-            y1: {
-              type: 'linear',
-              position: 'right',
-              beginAtZero: true,
-              title: { display: true, text: 'Units' },
-              grid: { drawOnChartArea: false }
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: {
+              callback: v => isCurrency ? '$' + Number(v).toLocaleString() : Number(v).toLocaleString()
             }
           }
         }
       });
+
+      const mkDataset = (data, color) => [{
+        data,
+        borderColor: color,
+        backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'),
+        tension: 0.4,
+        pointRadius: 0,
+        borderWidth: 2
+      }];
+
+      if (_pcdaRevChart)   { _pcdaRevChart.destroy();   _pcdaRevChart = null; }
+      if (_pcdaUnitsChart) { _pcdaUnitsChart.destroy(); _pcdaUnitsChart = null; }
+
+      _pcdaRevChart = new Chart(
+        document.getElementById('pcda-rev-chart').getContext('2d'),
+        { type: 'line', data: { labels, datasets: mkDataset(revData, 'rgb(255, 159, 64)') }, options: mkOpts(true) }
+      );
+      _pcdaUnitsChart = new Chart(
+        document.getElementById('pcda-units-chart').getContext('2d'),
+        { type: 'line', data: { labels, datasets: mkDataset(unitsData, 'rgb(54, 162, 235)') }, options: mkOpts(false) }
+      );
     }
 
     function _renderPCDAList(matched) {
@@ -1544,54 +1547,22 @@
       html += '<th style="text-align: left;  padding: 0.5rem 0.75rem;">Product</th>';
       html += '<th style="text-align: right; padding: 0.5rem 0.75rem;">Old → New</th>';
       html += '<th style="text-align: right; padding: 0.5rem 0.75rem;">Δ%</th>';
-      html += '<th style="text-align: center; padding: 0.5rem 0.75rem;"></th>';
       html += '</tr></thead><tbody>';
 
       for (const pc of sorted) {
         const info = pciSkuMap[pc.sku] || {};
         const pct  = pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0;
         const color = pct >= 0 ? 'var(--success)' : 'var(--error)';
-        const drillBtn = pc.id
-          ? `<button onclick="pcdaDrillIntoChange('${_pcEsc(pc.id)}')" style="background: none; border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.5rem; color: var(--text-primary); cursor: pointer; font-size: 0.85rem;">View →</button>`
-          : '';
         html += '<tr style="border-bottom: 1px solid var(--border);">';
         html += `<td style="padding: 0.5rem 0.75rem;">${_pcEsc(shortenBrandName(info.brand || 'Unknown'))}</td>`;
         html += `<td style="padding: 0.5rem 0.75rem;">${_pcEsc(info.productName || pc.sku)}</td>`;
         html += `<td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; white-space: nowrap;">$${pc.oldPrice.toFixed(2)} → $${pc.newPrice.toFixed(2)}</td>`;
         html += `<td style="padding: 0.5rem 0.75rem; text-align: right; color: ${color}; font-weight: 500;">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</td>`;
-        html += `<td style="padding: 0.5rem 0.75rem; text-align: center;">${drillBtn}</td>`;
         html += '</tr>';
       }
       html += '</tbody></table>';
       container.innerHTML = html;
     }
-
-    // Click handler from the compact list. Resets Individual Analysis
-    // filters so the picked change is reachable, sets the change-select
-    // to that change's index, fires the chart render, and scrolls the
-    // Individual section into view.
-    function pcdaDrillIntoChange(id) {
-      // Reset Individual filters to "all" so _pciFilteredForSelect
-      // includes every change, then find the target by id.
-      const brandFilter = document.getElementById('pci-brand-filter');
-      if (brandFilter) brandFilter.value = 'all';
-      filterPCIProducts(); // synchronous: cascades through filterPCIChanges → loadPCITable
-
-      const list = window._pciFilteredForSelect || [];
-      const idx = list.findIndex(pc => pc?.id === id);
-      if (idx < 0) return;
-
-      const changeSelect = document.getElementById('pci-change-select');
-      if (changeSelect) {
-        changeSelect.value = idx;
-        renderPCICharts();
-      }
-      // Smooth-scroll to the Individual Analysis section so the user
-      // sees what just got selected.
-      const target = document.getElementById('pci-charts');
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    window.pcdaDrillIntoChange = pcdaDrillIntoChange;
 
     // Returns { revenue, units } for a SKU within a date range from orders data
     function calcOrderMetrics(orders, sku, startDate, endDate, windowDays) {
