@@ -471,13 +471,22 @@
           <div id="pci-export-feedback" style="margin-top: 1rem; display: none;"></div>
         </div>
 
-        <!-- Price Change Day Analysis — pick a single date, optionally
-             scope to a brand, see the aggregate before/after impact
-             across all SKUs that changed on that date. Sits between
-             Bulk Export (date range, CSV out) and Individual Analysis
-             (single-change drill-in). -->
-        <div class="card card-flat" style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Price Change Day Analysis</h3>
+        <!-- Sub-tab strip — Day vs Individual analysis. Bulk Export
+             stays above as a separate concern (CSV out, not analysis).
+             Default on first view is the Day Analysis since it's the
+             newer addition; switch handler re-renders the active view
+             so charts with previously-hidden canvases pick up fresh
+             dimensions. -->
+        <div class="tabs" style="margin-bottom: 1.5rem;">
+          <button id="pci-subtab-day" class="tab active" onclick="showPCISubtab('day')">Price Change Day Analysis</button>
+          <button id="pci-subtab-individual" class="tab" onclick="showPCISubtab('individual')">Individual Price Change Analysis</button>
+        </div>
+
+        <!-- Price Change Day Analysis sub-tab content. Pick a single
+             date, optionally scope to a brand, see the aggregate
+             before/after impact across all SKUs that changed on that
+             date. -->
+        <div id="pci-day-view">
           <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1rem;">Aggregate impact across all SKUs that had a price change on a specific date.</p>
 
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1.5rem;">
@@ -563,15 +572,17 @@
           <div id="pcda-list" style="overflow-x: auto;"></div>
         </div>
 
-        <!-- Individual Price Change Analysis — single-change drill-in
-             scoped to one brand/product/change. -->
-        <div class="card card-flat" style="margin-bottom: 1.5rem;">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0;">Individual Price Change Analysis</h3>
-        </div>
+        <!-- Individual Price Change Analysis sub-tab content. Hidden on
+             first view; revealed by showPCISubtab('individual'). The
+             switch handler also re-runs renderPCICharts so the
+             rolling-avg charts redraw against now-visible canvases
+             (Chart.js latches onto 0×0 if instantiated while hidden). -->
+        <div id="pci-individual-view" style="display: none;">
+          <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1rem;">Drill into a single price change for one product. Click a row in the table at the bottom (or use the dropdowns) to load its before/after detail.</p>
 
-        <!-- Filters: Brand → Product → Change to Analyze → Comparison Window -->
-        <div class="card card-flat" style="margin-bottom: 2rem;">
-          <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+          <!-- Filters: Brand → Product → Change to Analyze → Comparison Window -->
+          <div class="card card-flat" style="margin-bottom: 2rem;">
+            <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
               <select id="pci-brand-filter" onchange="filterPCIProducts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 160px;">
@@ -671,12 +682,13 @@
           </div>
         </div>
 
-        <!-- Summary Table -->
-        <div class="card card-flat">
-          <div id="pci-table-content">
-            <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view price change impacts</div>
+          <!-- Summary Table -->
+          <div class="card card-flat">
+            <div id="pci-table-content">
+              <div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view price change impacts</div>
+            </div>
           </div>
-        </div>
+        </div><!-- /pci-individual-view -->
 
       </div><!-- /sv-priceimpact -->
 

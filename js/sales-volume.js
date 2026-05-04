@@ -1230,6 +1230,41 @@
       });
     }
 
+    // ── PCI SUB-TABS ─────────────────────────────────────────────────────────
+    // The Price Change Impacts tab has two analysis modes — "Price Change
+    // Day Analysis" (date-first aggregate) and "Individual Price Change
+    // Analysis" (single-change drill-in). Bulk Export sits above as a
+    // separate concern. Switching sub-tabs re-renders the now-visible
+    // panel so any chart whose canvas was 0×0 at instantiation (because
+    // the parent was hidden) picks up real dimensions.
+    function showPCISubtab(name) {
+      const dayView = document.getElementById('pci-day-view');
+      const indView = document.getElementById('pci-individual-view');
+      const dayBtn  = document.getElementById('pci-subtab-day');
+      const indBtn  = document.getElementById('pci-subtab-individual');
+      if (!dayView || !indView) return;
+
+      const showingDay = name === 'day';
+      dayView.style.display = showingDay ? 'block' : 'none';
+      indView.style.display = showingDay ? 'none'  : 'block';
+      if (dayBtn) dayBtn.classList.toggle('active', showingDay);
+      if (indBtn) indBtn.classList.toggle('active', !showingDay);
+
+      // Re-render whichever view we just revealed. If the user switched
+      // to Individual and a change is already selected, re-fire
+      // renderPCICharts so the rolling-avg chart canvases (which may
+      // have been 0×0 while the view was hidden) draw against fresh
+      // dimensions. Same for Day → re-run _renderPCDA if a date is
+      // picked.
+      if (showingDay) {
+        _renderPCDA();
+      } else {
+        const sel = document.getElementById('pci-change-select');
+        if (sel && sel.value !== '') renderPCICharts();
+      }
+    }
+    window.showPCISubtab = showPCISubtab;
+
     // ── PRICE CHANGE DAY ANALYSIS ────────────────────────────────────────────
     // "What was the aggregate impact of all the price changes we made on
     // this date?" Sits between Bulk Export (range, CSV out) and
