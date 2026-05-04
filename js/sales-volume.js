@@ -415,6 +415,12 @@
     let pciAllProducts = [];  // full Upstash product list for the Log
                               // form's brand/product dropdowns
 
+    // Pagination state for the Individual Analysis Summary Table.
+    // Reset to page 1 whenever the user changes brand/product filters
+    // since the dataset shrinks.
+    let _pciPage = 1;
+    const _PCI_PAGE_SIZE = 25;
+
     async function initPCI() {
       if (!accessToken) return;
 
@@ -909,14 +915,28 @@
       productSelect.innerHTML = '<option value="all">All Products</option>';
       productNames.forEach(n => productSelect.innerHTML += `<option value="${n}">${n}</option>`);
 
+      _pciPage = 1; // brand changed → reset Summary Table to page 1
       filterPCIChanges();
     }
+
+    // Pager click for the Individual Summary Table — clamps +
+    // re-renders the table only (no chart re-render needed since the
+    // data set is unchanged).
+    function pciGoToPage(page) {
+      const list = window._pciResults || [];
+      const totalPages = Math.max(1, Math.ceil(list.length / _PCI_PAGE_SIZE));
+      _pciPage = Math.min(Math.max(1, page), totalPages);
+      loadPCITable();
+    }
+    window.pciGoToPage = pciGoToPage;
 
     // Populates the "Change to Analyze" dropdown filtered by current product selection
     function filterPCIChanges() {
       const productFilter = document.getElementById('pci-product-filter').value;
       const changeSelect = document.getElementById('pci-change-select');
       const windowDays = parseInt(document.getElementById('pci-window').value);
+
+      _pciPage = 1; // dataset will change → reset to page 1
 
       const filtered = pciPriceChanges.filter(pc => {
         const info = pciSkuMap[pc.sku];
@@ -1006,6 +1026,16 @@
         return;
       }
 
+      // Pagination — clamp page if the dataset shrunk and slice the
+      // results to render. The row's onclick passes `start + i` so it
+      // resolves to the full-list index in _pciFilteredForSelect that
+      // selectPCIChange / renderPCICharts expect.
+      const total      = results.length;
+      const totalPages = Math.max(1, Math.ceil(total / _PCI_PAGE_SIZE));
+      if (_pciPage > totalPages) _pciPage = totalPages;
+      const start      = (_pciPage - 1) * _PCI_PAGE_SIZE;
+      const pageRows   = results.slice(start, start + _PCI_PAGE_SIZE);
+
       // Render table (Revenue + Units only, no Margin/Profit)
       let html = `
         <div style="overflow-x: auto;">
@@ -1035,7 +1065,11 @@
             </thead>
             <tbody>`;
 
-      results.forEach((r, i) => {
+      pageRows.forEach((r, pageIdx) => {
+        // `i` is the full-list index in `results` (and equivalently in
+        // _pciFilteredForSelect) so the row click resolves correctly
+        // even after pagination slicing.
+        const i = start + pageIdx;
         // Per-day metrics — windowDays is fixed for the Before period
         // (configured via the Comparison Window dropdown); daysAfter
         // varies per row (1 day if just changed, up to whatever
@@ -1083,6 +1117,25 @@
       });
 
       html += `</tbody></table></div>`;
+
+      // Pager — same shape as the Day Analysis list and the Change Log.
+      // Hidden when everything fits on one page.
+      if (totalPages > 1) {
+        const showFrom = total === 0 ? 0 : start + 1;
+        const showTo   = Math.min(start + _PCI_PAGE_SIZE, total);
+        const btn = (disabled) => `padding: 0.5rem 1rem; background: ${disabled ? 'var(--bg-secondary)' : 'var(--bg-card)'}; border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); cursor: ${disabled ? 'not-allowed' : 'pointer'}; opacity: ${disabled ? '0.5' : '1'};`;
+        html += `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+            <span>Showing ${showFrom}–${showTo} of ${total.toLocaleString()}</span>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <button onclick="pciGoToPage(${_pciPage - 1})" style="${btn(_pciPage <= 1)}" ${_pciPage <= 1 ? 'disabled' : ''}>◀ Prev</button>
+              <span>Page ${_pciPage} of ${totalPages}</span>
+              <button onclick="pciGoToPage(${_pciPage + 1})" style="${btn(_pciPage >= totalPages)}" ${_pciPage >= totalPages ? 'disabled' : ''}>Next ▶</button>
+            </div>
+          </div>
+        `;
+      }
+
       container.innerHTML = html;
 
       // If a change was already selected, re-render its charts with the new window
@@ -1278,6 +1331,13 @@
     let _pcdaRevChart = null;
     let _pcdaUnitsChart = null;
 
+    // Pagination state for the Day Analysis compact list. 25/page
+    // matches the Listing Change History pager. Reset to page 1 on
+    // any filter change so the user doesn't get stranded on an empty
+    // page when the filtered set shrinks.
+    let _pcdaPage = 1;
+    const _PCDA_PAGE_SIZE = 25;
+
     function _populatePCDADateDropdown() {
       const sel = document.getElementById('pcda-date');
       if (!sel) return;
@@ -1323,14 +1383,27 @@
 
     function pcdaOnDateChange() {
       _populatePCDABrandDropdown();
+      _pcdaPage = 1; // filter changed → start at page 1
       _renderPCDA();
     }
     window.pcdaOnDateChange = pcdaOnDateChange;
 
     function pcdaOnFilterChange() {
+      _pcdaPage = 1;
       _renderPCDA();
     }
     window.pcdaOnFilterChange = pcdaOnFilterChange;
+
+    // Pager click — clamps to valid range and re-renders the list only
+    // (no need to recompute aggregates or re-fire charts since the
+    // filter set didn't change).
+    function pcdaGoToPage(page) {
+      const list = window._pcdaMatched || [];
+      const totalPages = Math.max(1, Math.ceil(list.length / _PCDA_PAGE_SIZE));
+      _pcdaPage = Math.min(Math.max(1, page), totalPages);
+      _renderPCDAList(list);
+    }
+    window.pcdaGoToPage = pcdaGoToPage;
 
     async function _renderPCDA() {
       const date  = document.getElementById('pcda-date').value;
@@ -1354,6 +1427,9 @@
         if (brand !== 'all' && pciSkuMap[pc.sku]?.brand !== brand) return false;
         return true;
       });
+      // Cache the filtered set so the pager click handler can re-render
+      // the list without recomputing aggregates.
+      window._pcdaMatched = matched;
 
       if (matched.length === 0) {
         stats.style.display = 'none';
@@ -1540,7 +1616,15 @@
         return bp - ap;
       });
 
-      let html = '<div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Changes included (' + sorted.length + '):</div>';
+      // Pagination — clamp page if the dataset shrunk (e.g., user
+      // narrowed the brand filter and now there are fewer rows).
+      const total      = sorted.length;
+      const totalPages = Math.max(1, Math.ceil(total / _PCDA_PAGE_SIZE));
+      if (_pcdaPage > totalPages) _pcdaPage = totalPages;
+      const start      = (_pcdaPage - 1) * _PCDA_PAGE_SIZE;
+      const pageRows   = sorted.slice(start, start + _PCDA_PAGE_SIZE);
+
+      let html = '<div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Changes included (' + total + '):</div>';
       html += '<table style="border-collapse: collapse; font-size: 0.85rem;">';
       html += '<thead><tr style="background: var(--bg-secondary);">';
       html += '<th style="text-align: left;  padding: 0.5rem 0.75rem;">Brand</th>';
@@ -1549,7 +1633,7 @@
       html += '<th style="text-align: right; padding: 0.5rem 0.75rem;">Δ%</th>';
       html += '</tr></thead><tbody>';
 
-      for (const pc of sorted) {
+      for (const pc of pageRows) {
         const info = pciSkuMap[pc.sku] || {};
         const pct  = pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0;
         const color = pct >= 0 ? 'var(--success)' : 'var(--error)';
@@ -1561,6 +1645,26 @@
         html += '</tr>';
       }
       html += '</tbody></table>';
+
+      // Prev / "Page X of Y · Showing N–M of T" / Next. Hidden when
+      // everything fits on one page. Same shape as the Listing Change
+      // Log pager.
+      if (totalPages > 1) {
+        const showFrom = total === 0 ? 0 : start + 1;
+        const showTo   = Math.min(start + _PCDA_PAGE_SIZE, total);
+        const btn = (disabled) => `padding: 0.5rem 1rem; background: ${disabled ? 'var(--bg-secondary)' : 'var(--bg-card)'}; border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); cursor: ${disabled ? 'not-allowed' : 'pointer'}; opacity: ${disabled ? '0.5' : '1'};`;
+        html += `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);">
+            <span>Showing ${showFrom}–${showTo} of ${total.toLocaleString()}</span>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <button onclick="pcdaGoToPage(${_pcdaPage - 1})" style="${btn(_pcdaPage <= 1)}" ${_pcdaPage <= 1 ? 'disabled' : ''}>◀ Prev</button>
+              <span>Page ${_pcdaPage} of ${totalPages}</span>
+              <button onclick="pcdaGoToPage(${_pcdaPage + 1})" style="${btn(_pcdaPage >= totalPages)}" ${_pcdaPage >= totalPages ? 'disabled' : ''}>Next ▶</button>
+            </div>
+          </div>
+        `;
+      }
+
       container.innerHTML = html;
     }
 
