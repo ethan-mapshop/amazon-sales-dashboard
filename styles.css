@@ -58,7 +58,10 @@
     .auth-expired-banner button {
       padding: 0.4rem 1rem;
       background: rgba(255, 255, 255, 0.95);
-      color: var(--text-primary);
+      /* Hardcoded dark — the button background is fixed white regardless
+         of theme, so var(--text-primary) (near-white in this dark UI)
+         was rendering white-on-white until hover. */
+      color: #1f1f1f;
       border: none;
       border-radius: 6px;
       font-weight: 600;
