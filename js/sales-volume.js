@@ -80,6 +80,12 @@
         // elements exist, so getElementById works fine).
         filterSVProducts();
 
+        // Populate the Year + Month nav dropdowns now that we know
+        // the earliest synced month. Defaults to the latest navigable
+        // month so the page lands on current-month-MTD by default.
+        // renderSalesVolumeData below reads from these dropdowns.
+        _svPopulateNavDropdowns();
+
         // Reveal the body before rendering — Chart.js needs the
         // canvases laid out (non-zero dimensions) when it instantiates
         // them, otherwise it latches onto 0×0 forever (same bug we
@@ -174,12 +180,195 @@
 
       renderSalesVolumeData();
     }
-    
+
+    // ── MONTH NAVIGATION ─────────────────────────────────────────────────────
+    // Year + Month dropdowns plus Prev/Next buttons drive the anchor
+    // for every card / chart / table on the Monthly Overview tab.
+    // Range: earliest navigable month = oldest synced month + 12
+    // (a full year of prior data is required for YoY comparisons),
+    // latest = the current month (yesterday's month-of-year). Buttons
+    // disable at the bounds.
+
+    const SV_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    // Computes { firstY, firstM, lastY, lastM } (months 1-indexed) or
+    // null if there's not enough data for any navigable month yet.
+    function _svComputeNavRange() {
+      if (!svOrdersData || svOrdersData.length === 0) return null;
+      let earliest = null;
+      for (const o of svOrdersData) {
+        const ym = (o.orderDate || '').slice(0, 7);
+        if (!ym) continue;
+        if (earliest === null || ym < earliest) earliest = ym;
+      }
+      if (!earliest) return null;
+
+      const [ey, em] = earliest.split('-').map(Number);
+      // Earliest navigable = earliest synced + 12 months. Carry into next year as needed.
+      let firstY = ey;
+      let firstM = em + 12;
+      while (firstM > 12) { firstM -= 12; firstY++; }
+
+      // Latest navigable = yesterday's month (the most current data we have).
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const lastY = yesterday.getFullYear();
+      const lastM = yesterday.getMonth() + 1;
+
+      // If the earliest-navigable boundary is later than yesterday,
+      // there's nothing to navigate yet (catalog-young store).
+      if (firstY > lastY || (firstY === lastY && firstM > lastM)) return null;
+
+      return { firstY, firstM, lastY, lastM };
+    }
+
+    // Picks the months that should appear in the Month dropdown for a
+    // given selected year — clamped to the navigable range so January
+    // disappears for 2026 if the range starts in March 2026, etc.
+    function _svMonthRangeForYear(year, range) {
+      const startM = year === range.firstY ? range.firstM : 1;
+      const endM   = year === range.lastY  ? range.lastM  : 12;
+      return { startM, endM };
+    }
+
+    // Populates the Year + Month dropdowns. If a current selection is
+    // already set, preserve it (clamped to range); otherwise default
+    // to the latest navigable month.
+    function _svPopulateNavDropdowns() {
+      const range = _svComputeNavRange();
+      const yearSel  = document.getElementById('sv-nav-year');
+      const monthSel = document.getElementById('sv-nav-month');
+      if (!yearSel || !monthSel) return;
+
+      if (!range) {
+        // Not enough data — disable everything.
+        yearSel.innerHTML  = '';
+        monthSel.innerHTML = '';
+        yearSel.disabled = monthSel.disabled = true;
+        document.getElementById('sv-nav-prev').disabled = true;
+        document.getElementById('sv-nav-next').disabled = true;
+        return;
+      }
+      yearSel.disabled = monthSel.disabled = false;
+
+      const curY = parseInt(yearSel.value, 10);
+      const curM = parseInt(monthSel.value, 10);
+
+      // Year list
+      yearSel.innerHTML = '';
+      for (let y = range.firstY; y <= range.lastY; y++) {
+        yearSel.innerHTML += `<option value="${y}">${y}</option>`;
+      }
+
+      // Default to most recent navigable month if no valid prior pick.
+      const validCur = Number.isFinite(curY) && Number.isFinite(curM)
+        && curY >= range.firstY && curY <= range.lastY
+        && (() => {
+          const { startM, endM } = _svMonthRangeForYear(curY, range);
+          return curM >= startM && curM <= endM;
+        })();
+
+      if (validCur) {
+        yearSel.value = curY;
+        _svPopulateMonthsForYear(curY, curM, range);
+      } else {
+        yearSel.value = range.lastY;
+        _svPopulateMonthsForYear(range.lastY, range.lastM, range);
+      }
+
+      _svUpdateNavButtons();
+    }
+
+    function _svPopulateMonthsForYear(year, defaultMonth, range) {
+      const monthSel = document.getElementById('sv-nav-month');
+      if (!monthSel) return;
+      const { startM, endM } = _svMonthRangeForYear(year, range);
+      monthSel.innerHTML = '';
+      for (let m = startM; m <= endM; m++) {
+        monthSel.innerHTML += `<option value="${m}">${SV_MONTH_NAMES[m - 1]}</option>`;
+      }
+      // Clamp default to valid range for this year.
+      const m = Math.min(Math.max(defaultMonth || endM, startM), endM);
+      monthSel.value = m;
+    }
+
+    // Greys out Prev/Next at the navigable bounds.
+    function _svUpdateNavButtons() {
+      const range = _svComputeNavRange();
+      const prevBtn = document.getElementById('sv-nav-prev');
+      const nextBtn = document.getElementById('sv-nav-next');
+      if (!range || !prevBtn || !nextBtn) return;
+      const y = parseInt(document.getElementById('sv-nav-year').value, 10);
+      const m = parseInt(document.getElementById('sv-nav-month').value, 10);
+      if (!Number.isFinite(y) || !Number.isFinite(m)) {
+        prevBtn.disabled = nextBtn.disabled = true;
+        return;
+      }
+      prevBtn.disabled = (y === range.firstY && m === range.firstM);
+      nextBtn.disabled = (y === range.lastY  && m === range.lastM);
+    }
+
+    function svNavYearChange() {
+      const range = _svComputeNavRange();
+      if (!range) return;
+      const y = parseInt(document.getElementById('sv-nav-year').value, 10);
+      // Pick the latest valid month for the newly-selected year so
+      // jumping years lands on the most recent data for that year.
+      const { endM } = _svMonthRangeForYear(y, range);
+      _svPopulateMonthsForYear(y, endM, range);
+      _svUpdateNavButtons();
+      renderSalesVolumeData();
+    }
+    window.svNavYearChange = svNavYearChange;
+
+    function svNavMonthChange() {
+      _svUpdateNavButtons();
+      renderSalesVolumeData();
+    }
+    window.svNavMonthChange = svNavMonthChange;
+
+    // Step the selection by ±1 month within the navigable range.
+    // Year rolls when crossing Dec/Jan; clamp at bounds.
+    function _svNavStep(delta) {
+      const range = _svComputeNavRange();
+      if (!range) return;
+      let y = parseInt(document.getElementById('sv-nav-year').value, 10);
+      let m = parseInt(document.getElementById('sv-nav-month').value, 10);
+      if (!Number.isFinite(y) || !Number.isFinite(m)) return;
+      m += delta;
+      while (m < 1)  { m += 12; y--; }
+      while (m > 12) { m -= 12; y++; }
+      // Clamp to range
+      if (y < range.firstY || (y === range.firstY && m < range.firstM)) {
+        y = range.firstY; m = range.firstM;
+      }
+      if (y > range.lastY || (y === range.lastY && m > range.lastM)) {
+        y = range.lastY; m = range.lastM;
+      }
+      // Apply: rebuild months for the (possibly new) year, then set m
+      _svPopulateMonthsForYear(y, m, range);
+      document.getElementById('sv-nav-year').value = y;
+      document.getElementById('sv-nav-month').value = m;
+      _svUpdateNavButtons();
+      renderSalesVolumeData();
+    }
+    function svNavPrev() { _svNavStep(-1); }
+    function svNavNext() { _svNavStep(+1); }
+    window.svNavPrev = svNavPrev;
+    window.svNavNext = svNavNext;
+
     function renderSalesVolumeData() {
       const selectedSKU         = document.getElementById('sv-product-filter').value;
       const selectedBrand       = document.getElementById('sv-brand-filter').value;
-      const selectedYear        = document.getElementById('sv-year-filter').value;
-      const selectedMonth       = document.getElementById('sv-month-filter').value; // 'YYYY-MM' or ''
+      // Anchor month comes from the dedicated nav widget. Always
+      // specifies a full year+month — no "all years" / "all months"
+      // states since the new nav widget always picks a concrete month.
+      const navYearVal  = parseInt(document.getElementById('sv-nav-year').value, 10);
+      const navMonthVal = parseInt(document.getElementById('sv-nav-month').value, 10);
+      const selectedMonth = (Number.isFinite(navYearVal) && Number.isFinite(navMonthVal))
+        ? `${navYearVal}-${String(navMonthVal).padStart(2, '0')}`
+        : '';
       const selectedFulfillment = document.getElementById('sv-fulfillment-filter').value; // 'AFN','MFN', or ''
 
       // Build SKU set for brand filtering (when brand selected but no specific product)
@@ -210,25 +399,19 @@
       let anchorLastDay; // last day of that month (for YTD/MTD end dates)
 
       if (selectedMonth) {
-        // e.g. '2026-01' => anchor = Jan 1 2026, anchorLastDay = Jan 31 2026
+        // e.g. '2026-04' → anchor = Apr 1 2026. anchorLastDay caps at
+        // yesterday when the selected month is the current month so
+        // partial-month MTD math doesn't reach into days that have
+        // no data yet (data only flows in through yesterday's sync).
         const [y, m] = selectedMonth.split('-').map(Number);
         anchor = new Date(y, m - 1, 1);
-        anchorLastDay = new Date(y, m, 0); // day 0 of next month = last day of this month
-      } else if (selectedYear) {
-        // Year selected: use Dec 31 of that year (or yesterday if current year)
-        const y = parseInt(selectedYear);
+        const monthEnd = new Date(y, m, 0);
         const today = new Date();
-        if (y === today.getFullYear()) {
-          const yesterday = new Date(today);
-          yesterday.setDate(yesterday.getDate() - 1);
-          anchor = new Date(yesterday.getFullYear(), yesterday.getMonth(), 1);
-          anchorLastDay = yesterday;
-        } else {
-          anchor = new Date(y, 11, 1); // Dec
-          anchorLastDay = new Date(y, 11, 31);
-        }
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        anchorLastDay = monthEnd > yesterday ? yesterday : monthEnd;
       } else {
-        // Default: yesterday
+        // Defensive fallback: nav not initialized yet → use yesterday.
         const today = new Date();
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);

@@ -198,7 +198,28 @@
 
       <div id="sv-monthly-body">
 
-      <!-- Filters -->
+      <!-- Month navigation. Year + Month dropdowns plus Prev / Next
+           buttons. Range is constrained to months that have a full
+           year of prior data to compare against (so YoY math always
+           has an anchor): earliest = oldest synced month + 12 months,
+           latest = current month. Buttons grey out at the bounds. -->
+      <div class="card card-flat" style="margin-bottom: 2rem;">
+        <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Year</label>
+            <select id="sv-nav-year" onchange="svNavYearChange()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 100px;"></select>
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Month</label>
+            <select id="sv-nav-month" onchange="svNavMonthChange()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 130px;"></select>
+          </div>
+          <button id="sv-nav-prev" class="btn btn-secondary" onclick="svNavPrev()" style="height: fit-content;">◀ Previous</button>
+          <button id="sv-nav-next" class="btn btn-secondary" onclick="svNavNext()" style="height: fit-content;">Next ▶</button>
+        </div>
+      </div>
+
+      <!-- Filters (Brand / Product / Fulfillment) — Year + Month moved
+           to the dedicated navigation card above. -->
       <div class="card card-flat" style="margin-bottom: 2rem;">
         <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
           <div>
@@ -211,32 +232,6 @@
             <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
             <select id="sv-product-filter" onchange="renderSalesVolumeData()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 240px;">
               <option value="">All Products</option>
-            </select>
-          </div>
-          <div>
-            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Year</label>
-            <select id="sv-year-filter" onchange="renderSalesVolumeData()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 100px;">
-              <option value="">All Years</option>
-              <option value="2026">2026</option>
-              <option value="2027">2027</option>
-            </select>
-          </div>
-          <div>
-            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Month</label>
-            <select id="sv-month-filter" onchange="renderSalesVolumeData()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 130px;">
-              <option value="">All Months</option>
-              <option value="2026-01">Jan 2026</option>
-              <option value="2026-02">Feb 2026</option>
-              <option value="2026-03">Mar 2026</option>
-              <option value="2026-04">Apr 2026</option>
-              <option value="2026-05">May 2026</option>
-              <option value="2026-06">Jun 2026</option>
-              <option value="2026-07">Jul 2026</option>
-              <option value="2026-08">Aug 2026</option>
-              <option value="2026-09">Sep 2026</option>
-              <option value="2026-10">Oct 2026</option>
-              <option value="2026-11">Nov 2026</option>
-              <option value="2026-12">Dec 2026</option>
             </select>
           </div>
           <div>
