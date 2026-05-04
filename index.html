@@ -11,7 +11,17 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  
+
+  <!-- Auth-expiry banner. Hidden by default; shown by checkAuthExpiry()
+       when the saved Google token is within 5 minutes of expiring or
+       has already expired, OR when an authed fetch returns 401. The
+       Sign In button fires the same OAuth flow as initial sign-in;
+       on success the banner self-hides via the auth callback. -->
+  <div id="auth-expired-banner" class="auth-expired-banner" style="display: none;" role="alert">
+    <span id="auth-expired-text">⚠ Your Google sign-in has expired. Click Sign In to continue.</span>
+    <button id="auth-expired-signin-btn" class="btn">Sign In</button>
+  </div>
+
   <!-- SIDEBAR -->
   <nav id="sidebar">
     <div class="sidebar-brand">

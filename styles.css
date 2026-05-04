@@ -29,7 +29,52 @@
       min-height: 100vh;
       padding: 2rem;
     }
-    
+
+    /* Top-of-page auth-expired banner. Sticks above everything (sidebar
+       + content) and offsets the layout below it by its height when
+       visible. The .auth-expired-banner.warn variant uses orange for
+       the proactive "expires in N minutes" state; the default red
+       state means the token has already expired. */
+    .auth-expired-banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 10000;
+      padding: 0.75rem 1.5rem;
+      background: var(--error);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+    }
+    .auth-expired-banner.warn {
+      background: var(--accent-orange, #f97316);
+    }
+    .auth-expired-banner button {
+      padding: 0.4rem 1rem;
+      background: rgba(255, 255, 255, 0.95);
+      color: var(--text-primary);
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    .auth-expired-banner button:hover {
+      background: white;
+    }
+    /* Push the page down when the banner is visible so it doesn't
+       overlap the sidebar's top brand block. Toggled via a class on
+       <body> set by the JS check. */
+    body.auth-banner-active {
+      padding-top: 4.25rem;
+    }
+
     .container {
       max-width: 1400px;
       margin: 0 auto;

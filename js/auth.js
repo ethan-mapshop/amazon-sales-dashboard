@@ -1,3 +1,85 @@
+    // ── AUTH-EXPIRY BANNER ───────────────────────────────────────────────────
+    // Google access tokens last 1 hour; we save tokenExpiry in
+    // localStorage on sign-in. This periodic check surfaces a banner
+    // (a) proactively when the token is within 5 minutes of expiring,
+    // and (b) after expiry. Without it, the user has no signal that
+    // their session died — they click "load some data," the spinner
+    // spins forever, and they have to figure it out themselves.
+    // showAuthBanner can also be called directly from a 401 handler
+    // if a fetch surprises us with auth failure before the periodic
+    // check has caught up.
+
+    const AUTH_BANNER_WARN_MS = 5 * 60 * 1000; // warn 5 min before expiry
+
+    function showAuthBanner(state) {
+      // state: 'expired' | 'warn' | 'hide'
+      const banner = document.getElementById('auth-expired-banner');
+      const text   = document.getElementById('auth-expired-text');
+      const btn    = document.getElementById('auth-expired-signin-btn');
+      if (!banner || !text || !btn) return;
+      if (state === 'hide') {
+        banner.style.display = 'none';
+        document.body.classList.remove('auth-banner-active');
+        return;
+      }
+      banner.classList.toggle('warn', state === 'warn');
+      const expiry  = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
+      const minutes = Math.max(1, Math.ceil((expiry - Date.now()) / 60000));
+      if (state === 'warn') {
+        text.textContent = `⚠ Your Google sign-in expires in ${minutes} minute${minutes === 1 ? '' : 's'}. Click to renew.`;
+        btn.textContent = 'Renew';
+      } else {
+        text.textContent = '⚠ Your Google sign-in has expired. Click Sign In to continue.';
+        btn.textContent = 'Sign In';
+      }
+      banner.style.display = 'flex';
+      document.body.classList.add('auth-banner-active');
+    }
+
+    function checkAuthExpiry() {
+      const expiry = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
+      // No saved token yet → not signed in. The initial auth UI handles
+      // that case; banner stays hidden.
+      if (!expiry) { showAuthBanner('hide'); return; }
+      const remaining = expiry - Date.now();
+      if (remaining <= 0)                       showAuthBanner('expired');
+      else if (remaining <= AUTH_BANNER_WARN_MS) showAuthBanner('warn');
+      else                                       showAuthBanner('hide');
+    }
+    // Expose so any fetch site catching a 401 can force the banner
+    // immediately, before the periodic check ticks.
+    window.showAuthExpiredBanner = () => showAuthBanner('expired');
+
+    // Run an initial check on load and every 30 seconds thereafter.
+    document.addEventListener('DOMContentLoaded', () => {
+      checkAuthExpiry();
+      setInterval(checkAuthExpiry, 30000);
+
+      const banner = document.getElementById('auth-expired-banner');
+      const btn    = document.getElementById('auth-expired-signin-btn');
+      if (btn) {
+        btn.addEventListener('click', () => {
+          // Disable the button so the user can't double-click while
+          // the OAuth popup is open.
+          btn.disabled = true;
+          btn.textContent = 'Opening…';
+          if (tokenClient) {
+            tokenClient.requestAccessToken();
+          } else {
+            // Token client wasn't ready (rare) — re-init and try again.
+            initializeGoogleAuth();
+            setTimeout(() => {
+              if (tokenClient) tokenClient.requestAccessToken();
+              else {
+                btn.disabled = false;
+                btn.textContent = 'Sign In';
+              }
+            }, 500);
+          }
+        });
+      }
+    });
+
     // Google Auth
     function initializeGoogleAuth() {
       if (!config.clientId) return;
@@ -31,6 +113,15 @@
               // Show signed in state
               displayUserInfo(null);
               enableUpload();
+              // Hide the expiry banner if it was showing, and reset its
+              // button (it may have been left in a disabled "Opening…"
+              // state by the click handler that triggered this re-auth).
+              showAuthBanner('hide');
+              const renewBtn = document.getElementById('auth-expired-signin-btn');
+              if (renewBtn) {
+                renewBtn.disabled = false;
+                renewBtn.textContent = 'Sign In';
+              }
               // Kick off the data fetch for whichever overview tab is active
               // so the user lands on a populated report instead of having to
               // click a tab/button to trigger the first load.
@@ -127,6 +218,10 @@
       accessToken = null;
       localStorage.removeItem('googleAccessToken');
       localStorage.removeItem('tokenExpiry');
+      // Hide the expiry banner before reload — without this, the brief
+      // moment between removing tokenExpiry and the page reload would
+      // re-trigger checkAuthExpiry and flash the "expired" banner.
+      showAuthBanner('hide');
       location.reload();
     }
     
