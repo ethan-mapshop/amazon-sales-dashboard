@@ -432,7 +432,7 @@
 
         <!-- Export to CSV -->
         <div class="card card-flat" style="margin-bottom: 2rem;">
-          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Price Change Analysis</h3>
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Bulk Export Price Change Analysis</h3>
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
               <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brands</label>
@@ -471,6 +471,12 @@
           <div id="pci-export-feedback" style="margin-top: 1rem; display: none;"></div>
         </div>
 
+        <!-- Individual Price Change Analysis — single-change drill-in
+             scoped to one brand/product/change. -->
+        <div class="card card-flat" style="margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0;">Individual Price Change Analysis</h3>
+        </div>
+
         <!-- Filters: Brand → Product → Change to Analyze → Comparison Window -->
         <div class="card card-flat" style="margin-bottom: 2rem;">
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
@@ -506,13 +512,14 @@
         <!-- Detail: Summary Cards + Charts (shown when a change is selected) -->
         <div id="pci-charts" style="margin-bottom: 2rem;">
 
-          <!-- Summary stats — flat row, no card chrome and no grid
-               stretch. Each cell sits at the natural width of its
-               contents with a 3rem gap between them. Wraps to a new
-               line on narrow viewports. Mirrors the Session & CVR
-               summary stat layout. -->
-          <div style="display: flex; flex-wrap: wrap; gap: 3rem; margin-bottom: 2rem;">
-            <div>
+          <!-- Summary stats — soft chrome (subtle bg + rounded corners)
+               so each metric reads as its own card without the heavy
+               full-card chrome. Same flex-wrap-natural layout as
+               Session & CVR. The shared inline style is kept verbose
+               on each cell rather than refactored into a class so a
+               quick visual tweak doesn't require hunting the CSS. -->
+          <div style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem;">
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
               <div style="display: flex; flex-direction: column; gap: 0.25rem;">
                 <div style="display: flex; align-items: baseline; gap: 0.5rem;">
@@ -526,7 +533,7 @@
                 <div id="pci-summary-rev-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
-            <div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Units/Day</div>
               <div style="display: flex; flex-direction: column; gap: 0.25rem;">
                 <div style="display: flex; align-items: baseline; gap: 0.5rem;">
@@ -540,13 +547,17 @@
                 <div id="pci-summary-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
-            <div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Change</div>
               <div id="pci-summary-price" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
               <div id="pci-summary-price-pct" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">-</div>
             </div>
-            <div>
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <!-- Label has an id so renderPCICharts can flip its text
+                   between "Days Since Change" / "Days to Next Change"
+                   without needing a `.closest('.card')` lookup (the
+                   stat box no longer wraps in `.card`). -->
+              <div id="pci-summary-days-label" style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
               <div id="pci-summary-days" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
               <div id="pci-summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
             </div>

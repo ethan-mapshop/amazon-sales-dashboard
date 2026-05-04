@@ -1121,11 +1121,15 @@
       document.getElementById('pci-summary-price-pct').textContent = (r.changePercent >= 0 ? '+' : '') + r.changePercent.toFixed(1) + '%';
 
       document.getElementById('pci-summary-days').textContent = r.daysAfter;
+      // Direct id lookup on the label — the stat box no longer wraps
+      // in `.card`, so the old `closest('.card').querySelector('div:first-child')`
+      // returned null and threw, killing the chart render.
+      const daysLabel = document.getElementById('pci-summary-days-label');
       if (r.nextChange) {
-        document.getElementById('pci-summary-days').closest('.card').querySelector('div:first-child').textContent = 'Days to Next Change';
+        if (daysLabel) daysLabel.textContent = 'Days to Next Change';
         document.getElementById('pci-summary-change-date').textContent = `${r.date} → ${r.nextChange}`;
       } else {
-        document.getElementById('pci-summary-days').closest('.card').querySelector('div:first-child').textContent = 'Days Since Change';
+        if (daysLabel) daysLabel.textContent = 'Days Since Change';
         document.getElementById('pci-summary-change-date').textContent = `Changed ${r.date}`;
       }
 
