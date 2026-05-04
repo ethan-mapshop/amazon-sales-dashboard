@@ -394,26 +394,6 @@
       return brandMap[brandName] || brandName;
     }
 
-    function parsePriceChanges(data) {
-      if (!data.values || data.values.length < 2) return [];
-      const headers = data.values[0].map(h => h.toLowerCase());
-      const dateIdx     = headers.indexOf('date');
-      const skuIdx      = headers.indexOf('sku');
-      const oldPriceIdx = headers.indexOf('old price');
-      const newPriceIdx = headers.indexOf('new price');
-      const changes = [];
-      for (let i = 1; i < data.values.length; i++) {
-        const row = data.values[i];
-        changes.push({
-          date:     row[dateIdx],
-          sku:      row[skuIdx],
-          oldPrice: parseFloat(row[oldPriceIdx]) || 0,
-          newPrice: parseFloat(row[newPriceIdx]) || 0
-        });
-      }
-      return changes.sort((a, b) => new Date(b.date) - new Date(a.date));
-    }
-
     // ── SALES & VOLUME SUBTABS ────────────────────────────────────────────────
 
     function showSVTab(tab) {
@@ -430,41 +410,51 @@
     // ── PRICE CHANGE IMPACTS ──────────────────────────────────────────────────
 
     // PCI charts stored on window (pciRollingRevChart, pciRollingUnitsChart, pciCumRevChart, pciCumUnitsChart)
-    let pciPriceChanges = []; // parsed from Sheets
+    let pciPriceChanges = []; // entries from /api/pricechanges
     let pciSkuMap = {};       // sku -> { brand, productName }
+    let pciAllProducts = [];  // full Upstash product list for the Log
+                              // form's brand/product dropdowns
 
     async function initPCI() {
       if (!accessToken) return;
-      if (pciPriceChanges.length > 0) {
-        // Already loaded — just re-render table
-        renderPCIFilters();
-        loadPCITable();
-        return;
-      }
 
       try {
-        const [priceChangesRes, productsRes] = await Promise.all([
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/PriceChanges`, {
+        // Both endpoints are Upstash-backed. PriceChanges replaces the
+        // legacy Sheets read; Products is the same catalog the rest
+        // of the dashboard uses. Always re-fetch on init so an entry
+        // added since last load shows up immediately.
+        const [pcRes, productsRes] = await Promise.all([
+          fetch('/api/pricechanges?action=get', {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           }),
-          fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Products`, {
+          fetch('/api/products?action=get', {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
         ]);
 
-        if (!priceChangesRes.ok) {
+        if (!pcRes.ok) {
           document.getElementById('pci-table-content').innerHTML =
-            '<div style="padding:4rem;text-align:center;color:var(--error);">PriceChanges sheet not found.</div>';
+            '<div style="padding:4rem;text-align:center;color:var(--error);">Failed to load price changes.</div>';
           return;
         }
 
-        const [pcData, prodData] = await Promise.all([priceChangesRes.json(), productsRes.json()]);
-        pciPriceChanges = parsePriceChanges(pcData); // reuse existing parser
+        const pcData = await pcRes.json();
+        // Server returns entries already sorted newest-first with the
+        // same fields the rest of the PCI code expects: date, sku,
+        // oldPrice, newPrice (plus id for the delete buttons).
+        pciPriceChanges = Array.isArray(pcData.entries) ? pcData.entries : [];
 
-        // Build sku map from products sheet
-        const products = parseProducts(prodData);
+        const productsPayload = productsRes.ok ? await productsRes.json() : { products: [] };
+        const products = Array.isArray(productsPayload.products) ? productsPayload.products : [];
+        pciAllProducts = products;
         pciSkuMap = {};
-        products.forEach(p => { pciSkuMap[p.sku] = { brand: p.brand, productName: p.name }; });
+        for (const p of products) {
+          if (!p?.sku) continue;
+          pciSkuMap[p.sku] = { brand: p.brand || 'Unknown', productName: p.name || p.sku };
+        }
+
+        // Populate the Log Price Change form's brand/product dropdowns.
+        _populatePriceChangeForm();
 
         renderPCIFilters();
         loadPCITable();
@@ -474,6 +464,414 @@
         document.getElementById('pci-table-content').innerHTML =
           `<div style="padding:4rem;text-align:center;color:var(--error);">Error: ${err.message}</div>`;
       }
+    }
+
+    // ── LOG PRICE CHANGE FORM ─────────────────────────────────────────────────
+
+    function _populatePriceChangeForm() {
+      const brandSel = document.getElementById('pricechange-brand');
+      if (!brandSel) return;
+      // Brand dropdown: every distinct brand in the catalog. Default
+      // option is "All Brands" (no brand filter on the product list).
+      const brands = [...new Set(pciAllProducts.map(p => (p.brand || '').trim()).filter(Boolean))].sort();
+      brandSel.innerHTML = '<option value="">All Brands</option>' +
+        brands.map(b => `<option value="${_pcEsc(b)}">${_pcEsc(b)}</option>`).join('');
+      // Trigger product list rebuild (also sets the date picker default).
+      filterPriceChangeProducts();
+
+      const dateInput = document.getElementById('pricechange-date');
+      if (dateInput && !dateInput.value) {
+        dateInput.valueAsDate = new Date();
+      }
+    }
+
+    function filterPriceChangeProducts() {
+      const brandSel = document.getElementById('pricechange-brand');
+      const productSel = document.getElementById('pricechange-product');
+      if (!brandSel || !productSel) return;
+      const brand = brandSel.value;
+
+      // Each option is a single SKU (price-change entries are stored
+      // per-SKU). Display label is "Product Name (SKU)" so a user can
+      // distinguish FBA vs FBM versions of the same product. Filter by
+      // brand if one is selected.
+      const filtered = pciAllProducts
+        .filter(p => p?.sku && (!brand || (p.brand || '') === brand))
+        .filter(p => {
+          const asin = (p.asin || '').toString().trim();
+          return asin && asin.toUpperCase() !== 'N/A';
+        })
+        .sort((a, b) => (a.name || a.sku).localeCompare(b.name || b.sku));
+
+      productSel.innerHTML = '<option value="">Select Product...</option>' +
+        filtered.map(p => {
+          const label = `${p.name || p.sku} (${p.sku})`;
+          return `<option value="${_pcEsc(p.sku)}">${_pcEsc(label)}</option>`;
+        }).join('');
+    }
+    window.filterPriceChangeProducts = filterPriceChangeProducts;
+
+    async function savePriceChange() {
+      const feedback = document.getElementById('pricechange-save-feedback');
+      const showError = (msg) => _pcShowFeedback(feedback, 'error', msg);
+      const showSuccess = (msg) => _pcShowFeedback(feedback, 'success', msg);
+
+      if (!accessToken) { showError('⚠ Please sign in to save changes'); return; }
+
+      const sku       = document.getElementById('pricechange-product').value;
+      const date      = document.getElementById('pricechange-date').value;
+      const oldPrice  = parseFloat(document.getElementById('pricechange-old-price').value);
+      const newPrice  = parseFloat(document.getElementById('pricechange-new-price').value);
+
+      if (!sku)                     { showError('⚠ Please select a product'); return; }
+      if (!date)                    { showError('⚠ Please select a date');    return; }
+      if (!Number.isFinite(oldPrice)) { showError('⚠ Old Price is required'); return; }
+      if (!Number.isFinite(newPrice)) { showError('⚠ New Price is required'); return; }
+
+      try {
+        const res = await fetch('/api/pricechanges?action=add', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ date, sku, oldPrice, newPrice })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showError('⚠ Failed to save: ' + (err.error || res.status));
+          return;
+        }
+        showSuccess('✓ Price change saved');
+        setTimeout(() => { feedback.style.display = 'none'; }, 4000);
+
+        // Clear the form (keep brand/product so the user can quickly
+        // log a follow-up for the same SKU). Reset prices + date.
+        document.getElementById('pricechange-old-price').value = '';
+        document.getElementById('pricechange-new-price').value = '';
+        document.getElementById('pricechange-date').valueAsDate = new Date();
+
+        // Reload the data + re-render the table.
+        pciPriceChanges = [];
+        await initPCI();
+      } catch (err) {
+        console.error('Save price change failed:', err);
+        showError('⚠ Save failed: ' + err.message);
+      }
+    }
+    window.savePriceChange = savePriceChange;
+
+    async function deletePriceChange(id, btn) {
+      if (!id || !accessToken) return;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '…';
+      }
+      try {
+        const res = await fetch('/api/pricechanges?action=delete', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ id })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // Reload + re-render.
+        pciPriceChanges = [];
+        await initPCI();
+      } catch (err) {
+        console.error('Delete price change failed:', err);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '×';
+        }
+      }
+    }
+    window.deletePriceChange = deletePriceChange;
+
+    // One-time backfill from the legacy PriceChanges Sheet tab. Same
+    // pattern as the Listing Change Log's import button — overwrites
+    // Upstash with whatever's in the Sheet.
+    async function migratePriceChangesFromSheets() {
+      const feedback = document.getElementById('pricechange-save-feedback');
+      if (!accessToken) { _pcShowFeedback(feedback, 'error', '⚠ Please sign in first'); return; }
+      if (typeof SPREADSHEET_ID === 'undefined' || !SPREADSHEET_ID) {
+        _pcShowFeedback(feedback, 'error', '⚠ SPREADSHEET_ID is not set');
+        return;
+      }
+
+      _pcShowFeedback(feedback, 'success', '⏳ Importing from Google Sheet…');
+      try {
+        const res = await fetch('/api/pricechanges?action=migrate-from-sheets', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ spreadsheetId: SPREADSHEET_ID })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          _pcShowFeedback(feedback, 'error', '⚠ Import failed: ' + (err.error || res.status));
+          return;
+        }
+        const data = await res.json();
+        _pcShowFeedback(feedback, 'success',
+          `✓ Imported ${data.imported} price changes${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}.`);
+        setTimeout(() => { feedback.style.display = 'none'; }, 6000);
+
+        pciPriceChanges = [];
+        await initPCI();
+      } catch (err) {
+        console.error('Migrate price changes failed:', err);
+        _pcShowFeedback(feedback, 'error', '⚠ Import failed: ' + err.message);
+      }
+    }
+    window.migratePriceChangesFromSheets = migratePriceChangesFromSheets;
+
+    // ── BULK UPLOAD MODAL ────────────────────────────────────────────────────
+    // Mirrors the Listing Change Log bulk-upload flow: drop-zone +
+    // CSV parser + preview + post to /api/pricechanges?action=bulk-add.
+
+    let _pcBulkRows = null;
+
+    function openPriceChangeBulkUpload() {
+      const modal = document.getElementById('pc-bulk-upload-modal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      _pcBulkRows = null;
+      document.getElementById('pc-bulk-upload-filename').textContent = 'No file selected';
+      document.getElementById('pc-bulk-upload-preview').innerHTML = '';
+      const fb = document.getElementById('pc-bulk-upload-feedback');
+      if (fb) fb.style.display = 'none';
+      const file = document.getElementById('pc-bulk-upload-file');
+      if (file) file.value = '';
+    }
+    window.openPriceChangeBulkUpload = openPriceChangeBulkUpload;
+
+    function closePriceChangeBulkUpload() {
+      const modal = document.getElementById('pc-bulk-upload-modal');
+      if (modal) modal.style.display = 'none';
+    }
+    window.closePriceChangeBulkUpload = closePriceChangeBulkUpload;
+
+    // Wire up drop-zone + file picker once the page loads. The modal
+    // exists in the DOM from the start (display: none); the listeners
+    // attach once and don't need to be re-bound when the modal opens.
+    document.addEventListener('DOMContentLoaded', () => {
+      const dropzone = document.getElementById('pc-bulk-upload-dropzone');
+      const fileInput = document.getElementById('pc-bulk-upload-file');
+      if (!dropzone || !fileInput) return;
+
+      dropzone.addEventListener('click', () => fileInput.click());
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.style.borderColor = 'var(--accent-orange)';
+        dropzone.style.background = 'rgba(255,255,255,0.02)';
+      });
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.style.borderColor = 'var(--border)';
+        dropzone.style.background = '';
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.style.borderColor = 'var(--border)';
+        dropzone.style.background = '';
+        if (e.dataTransfer.files.length > 0) _pcHandleBulkFile(e.dataTransfer.files[0]);
+      });
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) _pcHandleBulkFile(e.target.files[0]);
+      });
+    });
+
+    function _pcHandleBulkFile(file) {
+      document.getElementById('pc-bulk-upload-filename').textContent = file.name;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target.result;
+          const rows = _pcParseCsv(text);
+          if (rows.length < 2) {
+            _pcShowFeedback(document.getElementById('pc-bulk-upload-feedback'),
+              'error', '⚠ CSV is empty or has only a header row');
+            return;
+          }
+          const header = rows[0].map(c => c.trim().toLowerCase());
+          const dateIdx     = header.findIndex(h => h === 'date');
+          const skuIdx      = header.findIndex(h => h === 'sku');
+          const oldPriceIdx = header.findIndex(h => h === 'old price' || h === 'oldprice');
+          const newPriceIdx = header.findIndex(h => h === 'new price' || h === 'newprice');
+          if (dateIdx < 0 || skuIdx < 0 || oldPriceIdx < 0 || newPriceIdx < 0) {
+            _pcShowFeedback(document.getElementById('pc-bulk-upload-feedback'),
+              'error', '⚠ CSV must have columns: Date, SKU, Old Price, New Price');
+            return;
+          }
+
+          const parsed = [];
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.every(c => !c || !c.trim())) continue; // skip blank lines
+            const date     = _pcNormalizeDate(row[dateIdx]);
+            const sku      = (row[skuIdx] || '').trim();
+            const oldPrice = parseFloat((row[oldPriceIdx] || '').replace(/[$,]/g, ''));
+            const newPrice = parseFloat((row[newPriceIdx] || '').replace(/[$,]/g, ''));
+            if (!date || !sku || !Number.isFinite(oldPrice) || !Number.isFinite(newPrice)) continue;
+            parsed.push({ date, sku, oldPrice, newPrice });
+          }
+
+          _pcBulkRows = parsed;
+          _pcRenderBulkPreview(parsed);
+        } catch (err) {
+          console.error('CSV parse failed:', err);
+          _pcShowFeedback(document.getElementById('pc-bulk-upload-feedback'),
+            'error', '⚠ Failed to parse CSV: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function _pcRenderBulkPreview(rows) {
+      const preview = document.getElementById('pc-bulk-upload-preview');
+      if (!preview) return;
+      if (rows.length === 0) {
+        preview.innerHTML = '<div style="padding: 1rem; color: var(--text-secondary);">No valid rows found</div>';
+        return;
+      }
+      const sample = rows.slice(0, 5);
+      let html = `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Preview (${rows.length} row${rows.length === 1 ? '' : 's'}, showing first ${sample.length}):</div>`;
+      html += '<table style="border-collapse: collapse; font-size: 0.85rem;">';
+      html += '<thead><tr style="border-bottom: 1px solid var(--border);"><th style="text-align: left; padding: 0.5rem;">Date</th><th style="text-align: left; padding: 0.5rem;">SKU</th><th style="text-align: right; padding: 0.5rem;">Old</th><th style="text-align: right; padding: 0.5rem;">New</th></tr></thead><tbody>';
+      for (const r of sample) {
+        html += `<tr style="border-bottom: 1px solid var(--border);"><td style="padding: 0.5rem;">${_pcEsc(r.date)}</td><td style="padding: 0.5rem; font-family: 'Roboto Mono', monospace;">${_pcEsc(r.sku)}</td><td style="padding: 0.5rem; text-align: right;">$${r.oldPrice.toFixed(2)}</td><td style="padding: 0.5rem; text-align: right;">$${r.newPrice.toFixed(2)}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      preview.innerHTML = html;
+    }
+
+    async function processPriceChangeBulkUpload() {
+      const feedback = document.getElementById('pc-bulk-upload-feedback');
+      if (!_pcBulkRows || _pcBulkRows.length === 0) {
+        _pcShowFeedback(feedback, 'error', '⚠ No rows to upload');
+        return;
+      }
+      try {
+        const res = await fetch('/api/pricechanges?action=bulk-add', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ entries: _pcBulkRows })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          _pcShowFeedback(feedback, 'error', '⚠ Upload failed: ' + (err.error || res.status));
+          return;
+        }
+        const result = await res.json();
+        const tail = result.rejectedCount > 0 ? ` (${result.rejectedCount} rejected by server)` : '';
+        _pcShowFeedback(feedback, 'success', `✓ Uploaded ${result.added} price change${result.added === 1 ? '' : 's'}${tail}`);
+        setTimeout(() => {
+          closePriceChangeBulkUpload();
+          pciPriceChanges = [];
+          initPCI();
+        }, 1500);
+      } catch (err) {
+        console.error('Bulk upload failed:', err);
+        _pcShowFeedback(feedback, 'error', '⚠ Upload failed: ' + err.message);
+      }
+    }
+    window.processPriceChangeBulkUpload = processPriceChangeBulkUpload;
+
+    // ── Helper utilities used by the form / bulk / table render ──────────────
+
+    function _pcShowFeedback(el, kind, msg) {
+      if (!el) return;
+      el.style.display = 'block';
+      el.style.padding = '1rem';
+      el.style.borderRadius = '6px';
+      if (kind === 'error') {
+        el.style.background = 'rgba(239, 68, 68, 0.1)';
+        el.style.border = '1px solid var(--error)';
+        el.style.color = 'var(--error)';
+      } else {
+        el.style.background = 'rgba(6, 214, 160, 0.1)';
+        el.style.border = '1px solid var(--success)';
+        el.style.color = 'var(--success)';
+      }
+      el.textContent = msg;
+    }
+
+    function _pcEsc(s) {
+      return (s == null ? '' : String(s))
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // Lightweight CSV parser — handles quoted fields with embedded
+    // commas / newlines / escaped quotes. Plenty for Excel-exported
+    // CSVs of price changes.
+    function _pcParseCsv(text) {
+      const rows = [];
+      let row = [];
+      let field = '';
+      let inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inQuotes) {
+          if (c === '"') {
+            if (text[i + 1] === '"') { field += '"'; i++; }
+            else inQuotes = false;
+          } else {
+            field += c;
+          }
+        } else {
+          if (c === '"') inQuotes = true;
+          else if (c === ',') { row.push(field); field = ''; }
+          else if (c === '\n' || c === '\r') {
+            if (c === '\r' && text[i + 1] === '\n') i++; // CRLF
+            row.push(field); field = '';
+            rows.push(row); row = [];
+          } else {
+            field += c;
+          }
+        }
+      }
+      if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+      return rows;
+    }
+
+    // Date normalizer: accepts YYYY-MM-DD, M/D/YY, M/D/YYYY, "Apr 30 2026",
+    // "Apr 30, 2026", etc. Returns YYYY-MM-DD or null. Mirrors the
+    // change-log bulk uploader so the UX is consistent.
+    function _pcNormalizeDate(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      // M/D/YY or M/D/YYYY
+      let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+      if (m) {
+        let y = parseInt(m[3], 10);
+        if (y < 100) y += y < 70 ? 2000 : 1900; // 2-digit pivot
+        return `${y}-${String(parseInt(m[1], 10)).padStart(2, '0')}-${String(parseInt(m[2], 10)).padStart(2, '0')}`;
+      }
+      // "Apr 30, 2026" or "Apr 30 2026"
+      m = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+      if (m) {
+        const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06', jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+        const mo = months[m[1].toLowerCase().slice(0, 3)];
+        if (mo) return `${m[3]}-${mo}-${String(parseInt(m[2], 10)).padStart(2, '0')}`;
+      }
+      // Fallback to Date parser
+      const d = new Date(s);
+      if (!Number.isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const mo = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${y}-${mo}-${dd}`;
+      }
+      return null;
     }
 
     function renderPCIFilters() {
@@ -575,6 +973,7 @@
         const daysAfter = daysBetween(changeDate, offsetDate(afterEnd, 1)); // exclusive end
 
         return {
+          id: pc.id, // threaded through so the delete button can target it
           date: pc.date,
           sku: pc.sku,
           brand: pciSkuMap[pc.sku]?.brand || 'Unknown',
@@ -608,6 +1007,7 @@
                 <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">Before (${windowDays}d)</th>
                 <th colspan="2" style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">After (since change)</th>
                 <th colspan="2" style="text-align:center;padding:0.75rem;">Impact</th>
+                <th rowspan="2"></th>
               </tr>
               <tr style="background:var(--bg-secondary);">
                 <th style="text-align:left;padding:0.5rem;">Date</th>
@@ -633,6 +1033,13 @@
         const unitsColor = unitsChange > 0 ? 'var(--success)' : unitsChange < 0 ? 'var(--error)' : 'inherit';
         const rowStyle = `cursor:pointer; transition: background 0.15s;`;
 
+        // Per-row delete button uses event.stopPropagation so clicking
+        // it doesn't fire the row's selectPCIChange handler. id is
+        // threaded from the API response.
+        const deleteBtn = r.id
+          ? `<button class="pci-delete-btn" data-id="${_pcEsc(r.id)}" title="Delete this price change" style="background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.1rem; padding: 0 0.25rem;" onclick="event.stopPropagation(); deletePriceChange('${_pcEsc(r.id)}', this);">×</button>`
+          : '';
+
         html += `
           <tr style="${rowStyle}" onclick="selectPCIChange(${i})" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background=''">
             <td style="padding:0.75rem;white-space:nowrap;">${r.date}</td>
@@ -647,6 +1054,7 @@
             <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.after.units}</td>
             <td style="text-align:center;padding:0.75rem;color:${revColor};font-weight:500;">${revChange > 0 ? '+' : ''}${revChange.toFixed(1)}%</td>
             <td style="text-align:center;padding:0.75rem;color:${unitsColor};font-weight:500;">${unitsChange > 0 ? '+' : ''}${unitsChange.toFixed(1)}%</td>
+            <td style="text-align:center;padding:0.75rem;">${deleteBtn}</td>
           </tr>`;
       });
 

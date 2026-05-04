@@ -210,40 +210,6 @@
       }
     }
     
-    // ============================================
-    // PARSE HELPER FUNCTIONS (shared utilities)
-    // ============================================
-    
-    function parseProducts(productsData) {
-      const products = [];
-      const rows = productsData.values || [];
-      
-      if (rows.length < 2) return products;
-      
-      const headers = rows[0].map(h => h.toLowerCase());
-      const skuIdx = headers.indexOf('sku');
-      const nameIdx = headers.indexOf('name');
-      const brandIdx = headers.indexOf('brand');
-      const costIdx = headers.indexOf('cost');
-      const fulfillmentIdx = headers.indexOf('fulfillment');
-      
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row[skuIdx]) continue;
-        
-        products.push({
-          sku: row[skuIdx],
-          name: row[nameIdx] || '',
-          brand: row[brandIdx] || '',
-          cost: parseFloat(row[costIdx]) || 0,
-          fulfillmentType: row[fulfillmentIdx] || 'FBM'
-        });
-      }
-      
-      return products;
-    }
-    
-    
     // Brand & Product data comes from the v2024 Upstash pipeline (see
     // `_loadBrandProductV2024` in overview-upstash.js — handles dedup,
     // ad-spend allocation, shipping, etc.). Wrapped in this thin shim

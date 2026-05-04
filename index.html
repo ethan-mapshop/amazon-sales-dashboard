@@ -378,6 +378,61 @@
       <!-- PRICE CHANGE IMPACTS SUB-TAB -->
       <div id="sv-priceimpact" class="sv-subtab" style="display:none;">
 
+        <!-- Log Price Change -->
+        <div class="card card-flat" style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Log Price Change</h3>
+
+          <!-- Same width-constrained wrapper as the Change Log form so
+               every row aligns at the same right edge. -->
+          <div style="max-width: 720px;">
+            <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
+              <div style="flex: 0 0 auto;">
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
+                <select id="pricechange-brand" onchange="filterPriceChangeProducts()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 200px;">
+                  <option value="">All Brands</option>
+                </select>
+              </div>
+
+              <div style="flex: 1 1 280px;">
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Product</label>
+                <select id="pricechange-product" style="width: 100%; padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 280px;">
+                  <option value="">Select Product...</option>
+                </select>
+              </div>
+
+              <div style="flex: 0 0 auto;">
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Date Changed</label>
+                <input type="date" id="pricechange-date" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); width: 150px;">
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Old Price</label>
+                <input type="number" step="0.01" min="0" id="pricechange-old-price" placeholder="0.00" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); width: 140px;">
+              </div>
+              <div>
+                <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">New Price</label>
+                <input type="number" step="0.01" min="0" id="pricechange-new-price" placeholder="0.00" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); width: 140px;">
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 1rem; align-items: center;">
+              <button class="btn btn-primary" onclick="savePriceChange()" style="width: auto;">
+                Save Price Change
+              </button>
+              <button class="btn btn-secondary" onclick="openPriceChangeBulkUpload()" style="width: auto;">
+                📤 Bulk Upload
+              </button>
+              <button class="btn btn-secondary" onclick="migratePriceChangesFromSheets()" style="width: auto; margin-left: auto;" title="One-time: pull existing rows from the legacy Google Sheet (PriceChanges tab) into Upstash. Overwrites any current Upstash data.">
+                ⤴ Import from Sheets
+              </button>
+            </div>
+
+            <div id="pricechange-save-feedback" style="margin-top: 1rem; display: none;"></div>
+          </div>
+        </div>
+
         <!-- Export to CSV -->
         <div class="card" style="margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Export Price Change Analysis</h3>
@@ -1329,6 +1384,45 @@
       </div>
     </div>
 
+    <!-- Bulk Upload Modal — Price Changes (parallel structure to the
+         Listing Change Log modal above; different IDs so they don't
+         collide). -->
+    <div id="pc-bulk-upload-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+      <div style="background: var(--bg-card); border-radius: 8px; padding: 2rem; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1.25rem; font-weight: 600;">Bulk Upload Price Changes</h3>
+          <button onclick="closePriceChangeBulkUpload()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-primary);">×</button>
+        </div>
+
+        <div style="background: var(--bg-secondary); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; border-left: 3px solid var(--accent-orange);">
+          <div style="font-weight: 600; margin-bottom: 0.5rem;">CSV Format Required</div>
+          <div style="font-size: 0.875rem; color: var(--text-secondary); line-height: 1.6;">
+            Columns must be:<br>
+            <code style="background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 3px; font-family: 'Roboto Mono', monospace;">Date | SKU | Old Price | New Price</code><br><br>
+            • <strong>Date:</strong> any common format — auto-converted to YYYY-MM-DD (e.g. 4/30/26, Apr 30 2026, 2026-04-30)<br>
+            • <strong>SKU:</strong> Must match a SKU in the Upstash product catalog<br>
+            • <strong>Old Price / New Price:</strong> numeric (with or without leading $)
+          </div>
+        </div>
+
+        <div id="pc-bulk-upload-dropzone" style="border: 2px dashed var(--border); border-radius: 8px; padding: 2rem; text-align: center; margin-bottom: 1rem; cursor: pointer; transition: border-color 0.15s, background 0.15s;">
+          <div style="font-size: 2rem; opacity: 0.4; margin-bottom: 0.5rem;">⬆</div>
+          <div style="font-weight: 600; margin-bottom: 0.25rem;">Drop a CSV here, or click to choose a file</div>
+          <div id="pc-bulk-upload-filename" style="font-size: 0.875rem; color: var(--text-secondary);">No file selected</div>
+          <input type="file" id="pc-bulk-upload-file" accept=".csv,text/csv" style="display: none;">
+        </div>
+
+        <div id="pc-bulk-upload-preview" style="margin-bottom: 1rem; max-height: 300px; overflow-y: auto;"></div>
+
+        <div style="display: flex; gap: 1rem;">
+          <button class="btn btn-primary" onclick="processPriceChangeBulkUpload()">Upload Price Changes</button>
+          <button class="btn btn-secondary" onclick="closePriceChangeBulkUpload()">Cancel</button>
+        </div>
+
+        <div id="pc-bulk-upload-feedback" style="margin-top: 1rem; display: none;"></div>
+      </div>
+    </div>
+
     <!-- MAPPING PAGE -->
     <div id="mapping-page" class="page">
       <div class="page-header">
@@ -1449,7 +1543,6 @@
   <script src="js/overview-upstash.js"></script>
   <script src="js/credentials.js"></script>
   <script src="js/listings.js"></script>
-  <script src="js/keywords.js"></script>
   <script src="js/sessions.js"></script>
   <script src="js/sales-volume.js"></script>
 </body>
