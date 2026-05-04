@@ -358,9 +358,11 @@
             <table style="border-collapse: collapse;">
               <thead>
                 <tr>
-                  <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Month</th>
+                  <th style="text-align: left;  padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Month</th>
                   <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales/Day</th>
                   <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume</th>
+                  <th style="text-align: right; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume/Day</th>
                 </tr>
               </thead>
               <tbody id="monthly-list">
@@ -370,18 +372,32 @@
           </div>
         </div>
 
-        <!-- Charts (explicit heights so the breakdown stretches to match) -->
-        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-          <div class="card card-flat" style="height: 260px; display: flex; flex-direction: column;">
+        <!-- Charts — 2×2 grid: Sales / Sales-per-Day on top, Volume /
+             Volume-per-Day below. Same explicit row heights as before
+             so the Monthly Breakdown card stretches to match. -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 260px 260px; gap: 1.5rem;">
+          <div class="card card-flat" style="display: flex; flex-direction: column;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales ($)</h3>
             <div style="flex: 1; min-height: 0;">
               <canvas id="sales-chart-sv"></canvas>
             </div>
           </div>
-          <div class="card card-flat" style="height: 260px; display: flex; flex-direction: column;">
+          <div class="card card-flat" style="display: flex; flex-direction: column;">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Sales/Day ($)</h3>
+            <div style="flex: 1; min-height: 0;">
+              <canvas id="sales-per-day-chart-sv"></canvas>
+            </div>
+          </div>
+          <div class="card card-flat" style="display: flex; flex-direction: column;">
             <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume (Units)</h3>
             <div style="flex: 1; min-height: 0;">
               <canvas id="volume-chart-sv"></canvas>
+            </div>
+          </div>
+          <div class="card card-flat" style="display: flex; flex-direction: column;">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Volume/Day (Units)</h3>
+            <div style="flex: 1; min-height: 0;">
+              <canvas id="volume-per-day-chart-sv"></canvas>
             </div>
           </div>
         </div>

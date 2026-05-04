@@ -3,6 +3,8 @@
     let svOrdersData = [];
     let svSalesChart = null;
     let svVolumeChart = null;
+    let svSalesPerDayChart = null;
+    let svVolumePerDayChart = null;
     
     async function loadSalesVolumeData() {
       if (!accessToken) return;
@@ -378,25 +380,57 @@
         byYearMonth[ym].sales  += o.itemTotal || 0;
         byYearMonth[ym].volume += o.quantity  || 0;
       }
+
+      // For per-day metrics: full-month days for past months, partial
+      // days for the anchor month if it's still in progress (i.e. the
+      // user is looking at the current month and we only have data
+      // through anchorLastDay). Future months get 0 → per-day stays 0.
+      const anchorKey = anchorLastDay.getFullYear() * 100 + (anchorLastDay.getMonth() + 1);
+      const daysInMonthCovered = (year, month1) => {
+        const ymKey = year * 100 + month1;
+        if (ymKey < anchorKey)  return new Date(year, month1, 0).getDate(); // full month
+        if (ymKey === anchorKey) return anchorLastDay.getDate();             // partial
+        return 0;                                                            // future
+      };
+
       const monthlyData = months.map(m => {
         const ym = `${m.year}-${String(m.month).padStart(2, '0')}`;
         const totals = byYearMonth[ym] || { sales: 0, volume: 0 };
-        return { ...m, sales: totals.sales, volume: totals.volume };
+        const days   = daysInMonthCovered(m.year, m.month);
+        const salesPerDay  = days > 0 ? totals.sales  / days : 0;
+        const volumePerDay = days > 0 ? totals.volume / days : 0;
+        return {
+          ...m,
+          sales: totals.sales,
+          volume: totals.volume,
+          days,
+          salesPerDay,
+          volumePerDay
+        };
       });
 
-      // Render monthly breakdown as table rows (styled like Profitability Overview tables)
+      // Render monthly breakdown as table rows (styled like Profitability Overview tables).
+      // Per-day cells use the same color treatment as the cumulative
+      // cells so the eye reads each pair (Sales / Sales/Day,
+      // Volume / Volume/Day) as related.
       const monthlyList = document.getElementById('monthly-list');
       monthlyList.innerHTML = monthlyData.map(m => `
         <tr>
           <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); font-weight: 500;">${m.label}</td>
           <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$${m.salesPerDay.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
           <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volume.toLocaleString()}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volumePerDay.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}</td>
         </tr>
       `).join('');
 
-      // Render charts
-      if (svSalesChart) svSalesChart.destroy();
-      if (svVolumeChart) svVolumeChart.destroy();
+      // Render charts. Four total: Sales / Sales-per-Day on the top
+      // row, Volume / Volume-per-Day on the bottom (matches the 2×2
+      // grid in the HTML).
+      if (svSalesChart)        svSalesChart.destroy();
+      if (svVolumeChart)       svVolumeChart.destroy();
+      if (svSalesPerDayChart)  svSalesPerDayChart.destroy();
+      if (svVolumePerDayChart) svVolumePerDayChart.destroy();
 
       const salesCtx = document.getElementById('sales-chart-sv').getContext('2d');
       svSalesChart = new Chart(salesCtx, {
@@ -432,6 +466,61 @@
           datasets: [{
             label: 'Volume (Units)',
             data: monthlyData.map(m => m.volume),
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { callback: value => value.toLocaleString() }
+            }
+          }
+        }
+      });
+
+      // Per-day variants — same colors as the cumulative versions so
+      // the eye groups Sales↔Sales/Day and Volume↔Volume/Day, with
+      // dollar / number formatting on the y-axis to match.
+      const salesPerDayCtx = document.getElementById('sales-per-day-chart-sv').getContext('2d');
+      svSalesPerDayChart = new Chart(salesPerDayCtx, {
+        type: 'line',
+        data: {
+          labels: monthlyData.map(m => m.label),
+          datasets: [{
+            label: 'Sales/Day ($)',
+            data: monthlyData.map(m => m.salesPerDay),
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { callback: value => '$' + value.toLocaleString() }
+            }
+          }
+        }
+      });
+
+      const volumePerDayCtx = document.getElementById('volume-per-day-chart-sv').getContext('2d');
+      svVolumePerDayChart = new Chart(volumePerDayCtx, {
+        type: 'line',
+        data: {
+          labels: monthlyData.map(m => m.label),
+          datasets: [{
+            label: 'Volume/Day (Units)',
+            data: monthlyData.map(m => m.volumePerDay),
             borderColor: 'rgb(59, 130, 246)',
             backgroundColor: 'rgba(59, 130, 246, 0.1)',
             tension: 0.4
