@@ -18,12 +18,12 @@
       if (svBody)   svBody.style.display = 'none';
 
       try {
-        // Try summary cache first (fast single KV read for Monthly Overview)
-        // Always load full orders too so PCI tab has individual records
-        const [summaryRes, ordersRes] = await Promise.all([
-          fetch('/api/orders?action=get-summary', { headers: { 'Authorization': `Bearer ${accessToken}` } }),
-          fetch('/api/orders?action=get',         { headers: { 'Authorization': `Bearer ${accessToken}` } })
-        ]);
+        // Single fetch — full orders array. Used for both YTD/MTD
+        // calculations and the rolling 13-month chart/list (which
+        // aggregates client-side in renderSalesVolumeData).
+        const ordersRes = await fetch('/api/orders?action=get', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
 
         if (ordersRes.ok) {
           const data = await ordersRes.json();
@@ -31,12 +31,7 @@
           updateSVDataBlurb(svOrdersData);
         }
 
-        // Store summary separately for Monthly Overview rendering
-        if (summaryRes.ok) {
-          const summaryData = await summaryRes.json();
-          window._svMonthlySummary = summaryData.summary || null;
-        }
-        
+
         // Load products from the Upstash catalog. Sales & Volume needs
         // sellable units, so the Child/Non-Variable filter (parents
         // are display rollups whose own ASINs don't actually sell on
@@ -196,34 +191,16 @@
       else if (brandSKUs)      orders = orders.filter(o => brandSKUs.has(o.sku));
       if (selectedFulfillment) orders = orders.filter(o => o.fulfillmentChannel === selectedFulfillment);
 
-      // For monthly chart/list, use the pre-aggregated summary cache if available
-      // (much faster — one KV read vs scanning thousands of records per month)
-      // Summary records: { yearMonth, sku, revenue, units }
-      // We normalize them to look like order records for the monthly aggregation below
-      const summaryCache = window._svMonthlySummary;
-      let monthlySource; // what we use for the rolling 13-month chart/list
-      // Summary cache doesn't store fulfillmentChannel, so bypass it when that filter is active
-      if (summaryCache && summaryCache.length > 0 && !selectedFulfillment) {
-        // Filter summary by SKU or brand
-        let filtered = summaryCache;
-        if (selectedSKU) {
-          filtered = filtered.filter(s => s.sku === selectedSKU);
-        } else if (brandSKUs) {
-          filtered = filtered.filter(s => brandSKUs.has(s.sku));
-        }
-        // Convert to a shape the monthly aggregation can use
-        monthlySource = filtered.map(s => ({
-          orderDate: s.yearMonth + '-01', // approximate — only month matters
-          _yearMonth: s.yearMonth,
-          sku: s.sku,
-          itemTotal: s.revenue,
-          quantity: s.units,
-          _fromSummary: true
-        }));
-      } else {
-        // Use the already-filtered orders array (includes fulfillment filter if set)
-        monthlySource = orders;
-      }
+      // For the rolling 13-month chart/list, always aggregate from the
+      // full orders array (already filtered by SKU / brand /
+      // fulfillment above). The pre-aggregated summary cache
+      // (`orders:monthly-summary` in KV) is rebuilt fire-and-forget at
+      // the end of each daily sync, but a silent rebuild failure
+      // leaves the cache stale and the most recent month invisible
+      // — using orders directly avoids that whole class of bug. The
+      // single-pass aggregation below is plenty fast even at our
+      // record volume (one walk per render, no per-month filter).
+      const monthlySource = orders;
 
       // Determine the anchor: the last day of the selected month, or yesterday
       const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -389,25 +366,22 @@
         });
       }
 
-      // Calculate monthly data — use summary cache if available, else full orders
+      // Single-pass aggregation: bucket orders by year-month string
+      // (e.g. "2026-04"), then look each rolling month up. O(N) over
+      // orders + O(13) over the rolling window — much cheaper than
+      // 13 separate filter passes the previous code did.
+      const byYearMonth = {};
+      for (const o of monthlySource) {
+        const ym = (o.orderDate || '').slice(0, 7);
+        if (!ym) continue;
+        if (!byYearMonth[ym]) byYearMonth[ym] = { sales: 0, volume: 0 };
+        byYearMonth[ym].sales  += o.itemTotal || 0;
+        byYearMonth[ym].volume += o.quantity  || 0;
+      }
       const monthlyData = months.map(m => {
         const ym = `${m.year}-${String(m.month).padStart(2, '0')}`;
-        let sales, volume;
-        if (monthlySource[0]?._fromSummary) {
-          // Summary records already aggregated per SKU-month — just sum them
-          const recs = monthlySource.filter(s => s._yearMonth === ym);
-          sales  = recs.reduce((sum, s) => sum + s.itemTotal, 0);
-          volume = recs.reduce((sum, s) => sum + s.quantity,  0);
-        } else {
-          const monthOrders = monthlySource.filter(o => {
-            const orderMonth = parseInt(o.orderDate.split('-')[1]);
-            const orderYear  = parseInt(o.orderDate.split('-')[0]);
-            return orderYear === m.year && orderMonth === m.month;
-          });
-          sales  = monthOrders.reduce((sum, o) => sum + (o.itemTotal || 0), 0);
-          volume = monthOrders.reduce((sum, o) => sum + (o.quantity  || 0), 0);
-        }
-        return { ...m, sales, volume };
+        const totals = byYearMonth[ym] || { sales: 0, volume: 0 };
+        return { ...m, sales: totals.sales, volume: totals.volume };
       });
 
       // Render monthly breakdown as table rows (styled like Profitability Overview tables)
@@ -2047,19 +2021,16 @@
     }
 
     // ── MONTHLY SUMMARY CACHE ─────────────────────────────────────────────────
-    // Stores pre-aggregated { yearMonth, sku, brand, revenue, units } in Upstash
-    // so Monthly Overview loads in one KV read instead of 12+.
+    // The pre-aggregated `orders:monthly-summary` KV cache is still
+    // maintained server-side (`/api/orders?action=rebuild-summary`,
+    // also fired automatically at the end of each daily sync), but
+    // Monthly Overview no longer reads it — the rolling 13-month
+    // aggregation in renderSalesVolumeData walks the full orders
+    // array instead, since that's already loaded and stale-cache
+    // bugs were leaving recent months invisible. The rebuild helper
+    // below remains in place because the backfill flow calls it
+    // after writing new orders.
 
-    async function loadMonthlySummaryCache() {
-      try {
-        const res = await fetch('/api/orders?action=get-summary', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data.summary || null;
-      } catch { return null; }
-    }
 
     async function rebuildMonthlySummaryCache() {
       try {
