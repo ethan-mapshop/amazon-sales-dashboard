@@ -250,8 +250,10 @@
         </div>
       </div>
 
-      <!-- YTD and MTD Comparison Tables -->
-      <div style="display: grid; grid-template-columns: 380px 380px; gap: 2rem; margin-bottom: 2rem; justify-content: start;">
+      <!-- YTD and MTD Comparison Tables. auto-fill at 380px lets the
+           three cards sit in a row on wide viewports and wrap to
+           two-then-one on narrower ones. -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, 380px); gap: 2rem; margin-bottom: 2rem; justify-content: start;">
         <div class="card card-flat">
           <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Year-to-Date Comparison</h3>
           <table class="table-fill" style="border-collapse: collapse;">
@@ -311,8 +313,42 @@
             </tbody>
           </table>
         </div>
+
+        <!-- Month-over-Month MTD card. Compares the current month's MTD
+             slice to the same calendar-day slice in the *prior* month
+             (e.g. May 1–3 vs Apr 1–3). Day count is capped at the
+             prior month's last day for short-month edge cases. -->
+        <div class="card card-flat">
+          <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-secondary);">Month-over-Month (MTD)</h3>
+          <table class="table-fill" style="border-collapse: collapse;">
+            <thead>
+              <tr>
+                <th style="text-align: left; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Period</th>
+                <th style="text-align: center; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Sales</th>
+                <th style="text-align: center; padding: 0.75rem; background: var(--bg-secondary); font-weight: 600; font-size: 0.875rem;">Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="mtd-mom-prev-label" style="padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary);">Apr 1–3</td>
+                <td id="mtd-mom-sales-prev" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace;">$0</td>
+                <td id="mtd-mom-volume-prev" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace;">0</td>
+              </tr>
+              <tr>
+                <td id="mtd-mom-curr-label" style="padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary);">May 1–3</td>
+                <td id="mtd-mom-sales-curr" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace;">$0</td>
+                <td id="mtd-mom-volume-curr" style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace;">0</td>
+              </tr>
+              <tr>
+                <td style="padding: 0.75rem; color: var(--text-secondary);">Change</td>
+                <td id="mtd-mom-sales-change" style="padding: 0.75rem; text-align: center; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                <td id="mtd-mom-volume-change" style="padding: 0.75rem; text-align: center; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-      
+
       <!-- Main Content: Monthly List and Charts -->
       <div style="display: grid; grid-template-columns: 400px 1fr; gap: 2rem; align-items: stretch;">
         <!-- Monthly Breakdown (table styled like Profitability Overview) -->

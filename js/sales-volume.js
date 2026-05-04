@@ -65,7 +65,10 @@
             name: p.name || p.sku,
             brand: p.brand || 'Unknown',
             asin: p.asin,
-            productType: p.type || ''
+            productType: p.type || '',
+            // Captured for the product dropdown's FBA/FBM disambiguation
+            // when two products share the same name + brand.
+            fulfillment: p.fulfillment || ''
           }));
 
         // Populate brand dropdown
@@ -107,21 +110,71 @@
       }
     }
     
+    // Brand → short signifier table for the product-dropdown
+    // disambiguation. Anything not in the map falls back to "Oth".
+    const SV_BRAND_SHORT = {
+      'South of Kings':       'SoK',
+      'Hubbard Scientific':   'RR',
+      'BrightWay Educational': 'BW',
+      'MapShop State Maps':   'TMS'
+    };
+    function _svBrandShort(brand) {
+      return SV_BRAND_SHORT[brand] || 'Oth';
+    }
+    function _svIsFba(p) {
+      const f = String(p?.fulfillment || '').trim().toLowerCase();
+      return f === 'amazon' || f === 'afn' || f === 'fba';
+    }
+
+    // Builds a Map<sku, displayLabel> for the dropdown. Two pass-throughs:
+    //   1. If a product's name appears under more than one brand in the
+    //      visible set, append " - <brand-short>" so the user can tell
+    //      them apart.
+    //   2. If a product's name + brand combination appears more than
+    //      once (i.e. FBA + FBM versions of the same SKU group),
+    //      append " (FBA)" or " (FBM)" — after the brand suffix if
+    //      both apply.
+    function _svBuildProductLabels(products) {
+      const byName = {};
+      for (const p of products) {
+        if (!byName[p.name]) byName[p.name] = [];
+        byName[p.name].push(p);
+      }
+      const labels = new Map();
+      for (const p of products) {
+        const sameName       = byName[p.name];
+        const crossBrand     = sameName.length > 1 && sameName.some(x => x.brand !== p.brand);
+        const sameNameBrand  = sameName.filter(x => x.brand === p.brand);
+        const dupFulfillment = sameNameBrand.length > 1;
+        let label = p.name;
+        if (crossBrand)     label += ` - ${_svBrandShort(p.brand)}`;
+        if (dupFulfillment) label += ` (${_svIsFba(p) ? 'FBA' : 'FBM'})`;
+        labels.set(p.sku, label);
+      }
+      return labels;
+    }
+
     function filterSVProducts() {
       const selectedBrand = document.getElementById('sv-brand-filter').value;
       const productSelect = document.getElementById('sv-product-filter');
-      
-      let filteredProducts = selectedBrand 
+
+      let filteredProducts = selectedBrand
         ? svAllProducts.filter(p => p.brand === selectedBrand)
         : svAllProducts;
-      
+
       filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
-      
+
+      // Disambiguation runs against the *visible* set so when the brand
+      // filter is set to one brand, we don't bother adding brand-short
+      // suffixes that would just be redundant.
+      const labels = _svBuildProductLabels(filteredProducts);
+
       productSelect.innerHTML = '<option value="">All Products</option>';
       filteredProducts.forEach(product => {
-        productSelect.innerHTML += `<option value="${product.sku}">${product.name}</option>`;
+        const label = labels.get(product.sku) || product.name;
+        productSelect.innerHTML += `<option value="${product.sku}">${label}</option>`;
       });
-      
+
       renderSalesVolumeData();
     }
     
@@ -224,6 +277,19 @@
       const mtdCurrStart = `${anchorYear}-${mtdMonthStr}-01`;
       const mtdCurrEnd = ytdCurrEnd;
 
+      // MTD-MoM: same DAY range, prior month within the anchor year.
+      // E.g. on May 3 → compare May 1–3 to Apr 1–3. Capped at the
+      // prior month's last day so a 31st in the current month doesn't
+      // try to query a non-existent Feb 31.
+      const prevMonthIdx     = anchorMonth === 0 ? 11 : anchorMonth - 1;
+      const prevMonthYear    = anchorMonth === 0 ? anchorYear - 1 : anchorYear;
+      const prevMonthLastDay = new Date(prevMonthYear, prevMonthIdx + 1, 0).getDate();
+      const anchorDay        = anchorLastDay.getDate();
+      const momDayCap        = Math.min(anchorDay, prevMonthLastDay);
+      const prevMonthStr     = String(prevMonthIdx + 1).padStart(2, '0');
+      const mtdMomPrevStart  = `${prevMonthYear}-${prevMonthStr}-01`;
+      const mtdMomPrevEnd    = `${prevMonthYear}-${prevMonthStr}-${String(momDayCap).padStart(2, '0')}`;
+
       // Calculate YTD
       const ytdPrevOrders = orders.filter(o => o.orderDate >= ytdPrevStart && o.orderDate <= ytdPrevEnd);
       const ytdCurrOrders = orders.filter(o => o.orderDate >= ytdCurrStart && o.orderDate <= ytdCurrEnd);
@@ -247,6 +313,17 @@
 
       const mtdSalesChange = mtdPrevSales > 0 ? ((mtdCurrSales - mtdPrevSales) / mtdPrevSales) * 100 : 0;
       const mtdVolumeChange = mtdPrevVolume > 0 ? ((mtdCurrVolume - mtdPrevVolume) / mtdPrevVolume) * 100 : 0;
+
+      // MTD-MoM totals — current side reuses the MTD numbers above
+      // (same window: 1st of anchor month → anchor day). Prior side
+      // is the matching slice of the previous month.
+      const mtdMomPrevOrders   = orders.filter(o => o.orderDate >= mtdMomPrevStart && o.orderDate <= mtdMomPrevEnd);
+      const mtdMomPrevSales    = mtdMomPrevOrders.reduce((s, o) => s + (o.itemTotal || 0), 0);
+      const mtdMomPrevVolume   = mtdMomPrevOrders.reduce((s, o) => s + (o.quantity  || 0), 0);
+      const mtdMomCurrSales    = mtdCurrSales;
+      const mtdMomCurrVolume   = mtdCurrVolume;
+      const mtdMomSalesChange  = mtdMomPrevSales  > 0 ? ((mtdMomCurrSales  - mtdMomPrevSales)  / mtdMomPrevSales)  * 100 : 0;
+      const mtdMomVolumeChange = mtdMomPrevVolume > 0 ? ((mtdMomCurrVolume - mtdMomPrevVolume) / mtdMomPrevVolume) * 100 : 0;
 
       // Update YTD cards
       document.getElementById('ytd-sales-prev-label').textContent = `${previousYear}`;
@@ -281,6 +358,25 @@
       document.getElementById('mtd-volume-curr').textContent = mtdCurrVolume.toLocaleString();
       document.getElementById('mtd-volume-change').textContent = (mtdVolumeChange >= 0 ? '+' : '') + mtdVolumeChange.toFixed(1) + '%';
       document.getElementById('mtd-volume-change').style.color = mtdVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
+
+      // Update Month-over-Month MTD card. Labels show the full day
+      // range (e.g. "Apr 1–3" / "May 1–3") so the user can tell at a
+      // glance which calendar slice each row is summing.
+      const prevMonthName  = monthNames[prevMonthIdx];
+      const momPrevLabel   = `${prevMonthName} 1–${momDayCap}`;
+      const momCurrLabel   = `${anchorMonthName} 1–${anchorDay}`;
+      document.getElementById('mtd-mom-prev-label').textContent = momPrevLabel;
+      document.getElementById('mtd-mom-curr-label').textContent = momCurrLabel;
+      document.getElementById('mtd-mom-sales-prev').textContent  = '$' + mtdMomPrevSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      document.getElementById('mtd-mom-sales-curr').textContent  = '$' + mtdMomCurrSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      document.getElementById('mtd-mom-volume-prev').textContent = mtdMomPrevVolume.toLocaleString();
+      document.getElementById('mtd-mom-volume-curr').textContent = mtdMomCurrVolume.toLocaleString();
+      const momSalesEl  = document.getElementById('mtd-mom-sales-change');
+      const momVolumeEl = document.getElementById('mtd-mom-volume-change');
+      momSalesEl.textContent  = (mtdMomSalesChange  >= 0 ? '+' : '') + mtdMomSalesChange.toFixed(1)  + '%';
+      momSalesEl.style.color  = mtdMomSalesChange  >= 0 ? 'var(--success)' : 'var(--error)';
+      momVolumeEl.textContent = (mtdMomVolumeChange >= 0 ? '+' : '') + mtdMomVolumeChange.toFixed(1) + '%';
+      momVolumeEl.style.color = mtdMomVolumeChange >= 0 ? 'var(--success)' : 'var(--error)';
 
       // Generate rolling 13 months ending at anchor month
       const months = [];
