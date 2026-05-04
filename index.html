@@ -383,8 +383,11 @@
              since they're entry/exit actions rather than the primary
              view. Default sub-tab is Day Analysis; switch handler
              re-renders the active view so charts with previously-
-             hidden canvases pick up fresh dimensions. -->
-        <div class="tabs" style="margin-bottom: 1.5rem;">
+             hidden canvases pick up fresh dimensions.
+             margin-top pulls the strip up to sit closer to the
+             page-header's bottom border (which already has its own
+             2rem margin baked in). -->
+        <div class="tabs" style="margin-top: -1rem; margin-bottom: 1.5rem;">
           <button id="pci-subtab-day" class="tab active" onclick="showPCISubtab('day')">Price Change Day Analysis</button>
           <button id="pci-subtab-individual" class="tab" onclick="showPCISubtab('individual')">Individual Price Change Analysis</button>
         </div>
@@ -612,8 +615,11 @@
         <!-- Bulk Export Price Change Analysis — applies to both
              sub-tabs (CSV out across a date range). Lives below the
              analyses since it's an entry/exit action, not the primary
-             view. -->
-        <div class="card card-flat" style="margin-top: 2rem; margin-bottom: 2rem;">
+             view. The border-top + padding-top pair mimics the divider
+             line that sits under the .tabs strip — visual section
+             break between the analysis above and this entry/exit
+             action below. -->
+        <div class="card card-flat" style="border-top: 2px solid var(--border); padding-top: 2rem; margin-top: 2rem; margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Bulk Export Price Change Analysis</h3>
           <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
             <div>
@@ -656,8 +662,9 @@
         <!-- Log Price Change — input form for a single new entry.
              Sits at the bottom now; users will spend most of their
              time in the analyses above and only come down here when
-             logging something new. -->
-        <div class="card card-flat" style="margin-bottom: 2rem;">
+             logging something new. Same border-top divider as Bulk
+             Export above for visual section separation. -->
+        <div class="card card-flat" style="border-top: 2px solid var(--border); padding-top: 2rem; margin-bottom: 2rem;">
           <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1.5rem;">Log Price Change</h3>
 
           <div style="max-width: 720px;">
