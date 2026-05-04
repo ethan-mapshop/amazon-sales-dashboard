@@ -456,6 +456,15 @@
         // Populate the Log Price Change form's brand/product dropdowns.
         _populatePriceChangeForm();
 
+        // Populate the Price Change Day Analysis filter dropdowns. The
+        // brand list re-derives from whatever date is selected, so a
+        // bare init only needs the date dropdown filled here.
+        _populatePCDADateDropdown();
+        _populatePCDABrandDropdown();
+        // If a date was already picked from a prior session/refresh,
+        // re-render with the latest data.
+        _renderPCDA();
+
         renderPCIFilters();
         loadPCITable();
 
@@ -1220,6 +1229,334 @@
         options: mkOpts(false)
       });
     }
+
+    // ── PRICE CHANGE DAY ANALYSIS ────────────────────────────────────────────
+    // "What was the aggregate impact of all the price changes we made on
+    // this date?" Sits between Bulk Export (range, CSV out) and
+    // Individual Analysis (single-change drill-in). Pick a date → brand
+    // dropdown narrows to brands with changes on that date → stats +
+    // chart + compact list aggregate across the matched SKUs.
+
+    let _pcdaChart = null;
+
+    function _populatePCDADateDropdown() {
+      const sel = document.getElementById('pcda-date');
+      if (!sel) return;
+      // Distinct change dates, newest first. Empty if no entries yet.
+      const dates = [...new Set(pciPriceChanges.map(pc => pc.date))]
+        .filter(Boolean)
+        .sort()
+        .reverse();
+      const current = sel.value;
+      sel.innerHTML = '<option value="">Select a date…</option>' +
+        dates.map(d => `<option value="${_pcEsc(d)}">${_pcEsc(d)}</option>`).join('');
+      // Preserve selection if still valid.
+      if (dates.includes(current)) sel.value = current;
+    }
+
+    function _populatePCDABrandDropdown() {
+      const dateSel  = document.getElementById('pcda-date');
+      const brandSel = document.getElementById('pcda-brand');
+      if (!dateSel || !brandSel) return;
+      const date = dateSel.value;
+      const current = brandSel.value;
+      if (!date) {
+        brandSel.innerHTML = '<option value="all">All Brands</option>';
+        return;
+      }
+      // Only brands that actually had a change on the picked date —
+      // otherwise the dropdown lists brands the user can't usefully
+      // pick (would yield zero matches).
+      const brands = [...new Set(
+        pciPriceChanges
+          .filter(pc => pc.date === date)
+          .map(pc => pciSkuMap[pc.sku]?.brand)
+          .filter(Boolean)
+      )].sort();
+      brandSel.innerHTML = '<option value="all">All Brands</option>' +
+        brands.map(b => `<option value="${_pcEsc(b)}">${_pcEsc(b)}</option>`).join('');
+      if (current !== 'all' && brands.includes(current)) brandSel.value = current;
+      else                                               brandSel.value = 'all';
+    }
+
+    function pcdaOnDateChange() {
+      _populatePCDABrandDropdown();
+      _renderPCDA();
+    }
+    window.pcdaOnDateChange = pcdaOnDateChange;
+
+    function pcdaOnFilterChange() {
+      _renderPCDA();
+    }
+    window.pcdaOnFilterChange = pcdaOnFilterChange;
+
+    async function _renderPCDA() {
+      const date  = document.getElementById('pcda-date').value;
+      const brand = document.getElementById('pcda-brand').value;
+      const windowDays = parseInt(document.getElementById('pcda-window').value, 10) || 30;
+      const stats = document.getElementById('pcda-stats');
+      const chartWrap = document.getElementById('pcda-chart-wrapper');
+      const list  = document.getElementById('pcda-list');
+
+      // Empty state — hide everything if no date is picked.
+      if (!date) {
+        stats.style.display = 'none';
+        chartWrap.style.display = 'none';
+        list.innerHTML = '';
+        if (_pcdaChart) { _pcdaChart.destroy(); _pcdaChart = null; }
+        return;
+      }
+
+      const matched = pciPriceChanges.filter(pc => {
+        if (pc.date !== date) return false;
+        if (brand !== 'all' && pciSkuMap[pc.sku]?.brand !== brand) return false;
+        return true;
+      });
+
+      if (matched.length === 0) {
+        stats.style.display = 'none';
+        chartWrap.style.display = 'none';
+        list.innerHTML = '<div style="padding: 1rem; color: var(--text-secondary);">No price changes match these filters.</div>';
+        if (_pcdaChart) { _pcdaChart.destroy(); _pcdaChart = null; }
+        return;
+      }
+
+      // Compute aggregates. Before/After windows are uniform here since
+      // every matched change has the same date.
+      const yesterday = offsetDate(new Date().toISOString().split('T')[0], -1);
+      const beforeStart = offsetDate(date, -windowDays);
+      const beforeEnd   = offsetDate(date, -1);
+      const afterStart  = date;
+      const afterEnd    = yesterday;
+      const daysAfter   = daysBetween(date, offsetDate(afterEnd, 1));
+
+      let revBefore = 0, unitsBefore = 0, revAfter = 0, unitsAfter = 0;
+      // Net price change %, weighted by before-period revenue so a
+      // dead-stock SKU doesn't drown the average. Falls back to equal
+      // weighting if nothing sold in the before window.
+      let oldWeighted = 0, newWeighted = 0, weights = 0;
+
+      for (const pc of matched) {
+        const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
+        const after  = calcOrderMetrics(svOrdersData, pc.sku, afterStart,  afterEnd,  windowDays);
+        revBefore   += before.revenue;
+        unitsBefore += before.units;
+        revAfter    += after.revenue;
+        unitsAfter  += after.units;
+        const w = before.revenue > 0 ? before.revenue : 1;
+        oldWeighted += pc.oldPrice * w;
+        newWeighted += pc.newPrice * w;
+        weights     += w;
+      }
+
+      const revBeforeDaily   = windowDays > 0  ? revBefore   / windowDays : 0;
+      const unitsBeforeDaily = windowDays > 0  ? unitsBefore / windowDays : 0;
+      const revAfterDaily    = daysAfter  > 0  ? revAfter    / daysAfter  : 0;
+      const unitsAfterDaily  = daysAfter  > 0  ? unitsAfter  / daysAfter  : 0;
+      const revChangePct = revBeforeDaily > 0
+        ? ((revAfterDaily - revBeforeDaily) / revBeforeDaily * 100) : 0;
+      const unitsChangePct = unitsBeforeDaily > 0
+        ? ((unitsAfterDaily - unitsBeforeDaily) / unitsBeforeDaily * 100) : 0;
+
+      const oldAvg = weights > 0 ? oldWeighted / weights : 0;
+      const newAvg = weights > 0 ? newWeighted / weights : 0;
+      const netChangePct = oldAvg > 0 ? ((newAvg - oldAvg) / oldAvg * 100) : 0;
+
+      // Stats
+      document.getElementById('pcda-rev-before').textContent  = '$' + formatNumber(revBeforeDaily);
+      document.getElementById('pcda-rev-after').textContent   = '$' + formatNumber(revAfterDaily);
+      const revChangeEl = document.getElementById('pcda-rev-change');
+      revChangeEl.textContent = (revChangePct >= 0 ? '+' : '') + revChangePct.toFixed(1) + '%';
+      revChangeEl.style.color = revChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pcda-units-before').textContent = unitsBeforeDaily.toFixed(1);
+      document.getElementById('pcda-units-after').textContent  = unitsAfterDaily.toFixed(1);
+      const unitsChangeEl = document.getElementById('pcda-units-change');
+      unitsChangeEl.textContent = (unitsChangePct >= 0 ? '+' : '') + unitsChangePct.toFixed(1) + '%';
+      unitsChangeEl.style.color = unitsChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pcda-skus-count').textContent  = matched.length;
+      document.getElementById('pcda-skus-detail').textContent =
+        `${daysAfter} day${daysAfter === 1 ? '' : 's'} of after-data`;
+
+      const netEl = document.getElementById('pcda-net-change');
+      netEl.textContent = (netChangePct >= 0 ? '+' : '') + netChangePct.toFixed(1) + '%';
+      netEl.style.color = netChangePct >= 0 ? 'var(--accent-orange)' : 'var(--accent-blue)';
+      document.getElementById('pcda-net-change-detail').textContent =
+        `$${oldAvg.toFixed(2)} → $${newAvg.toFixed(2)} (revenue-weighted)`;
+
+      stats.style.display = 'flex';
+
+      // Compact list (drives drill-through to Individual Analysis).
+      _renderPCDAList(matched);
+
+      // Chart — needs the wrapper visible BEFORE Chart.js measures the
+      // canvas (otherwise it latches onto 0×0). One rAF for layout to
+      // settle after the display flip; same trick used on Sessions.
+      chartWrap.style.display = 'block';
+      await new Promise(r => requestAnimationFrame(r));
+      _renderPCDAChart(matched, date, beforeStart, afterEnd);
+    }
+
+    function _renderPCDAChart(matched, changeDate, startDate, endDate) {
+      // Build summed daily series across all matched SKUs over the
+      // before-window through afterEnd. One pass over svOrdersData
+      // filtered to the matched SKUs — much cheaper than per-day
+      // queries when there are many SKUs.
+      const skuSet = new Set(matched.map(pc => pc.sku));
+      const dailyRev   = {};
+      const dailyUnits = {};
+      let cursor = startDate;
+      while (cursor <= endDate) {
+        dailyRev[cursor] = 0;
+        dailyUnits[cursor] = 0;
+        cursor = offsetDate(cursor, 1);
+      }
+      for (const o of svOrdersData) {
+        if (!skuSet.has(o.sku)) continue;
+        if (o.orderDate < startDate || o.orderDate > endDate) continue;
+        if (dailyRev[o.orderDate] != null) {
+          dailyRev[o.orderDate]   += o.itemTotal || 0;
+          dailyUnits[o.orderDate] += o.quantity  || 0;
+        }
+      }
+
+      const dates = Object.keys(dailyRev).sort();
+      const labels = dates.map(d => d.slice(5)); // MM-DD
+      const revData   = dates.map(d => dailyRev[d]);
+      const unitsData = dates.map(d => dailyUnits[d]);
+
+      // Mark the change date with a vertical dashed line. The label uses
+      // MM-DD form (matching the axis labels).
+      const annotations = {
+        changeLine: {
+          type: 'line',
+          xMin: changeDate.slice(5),
+          xMax: changeDate.slice(5),
+          borderColor: 'rgba(255, 99, 132, 0.8)',
+          borderWidth: 2,
+          borderDash: [5, 5]
+        }
+      };
+
+      if (_pcdaChart) _pcdaChart.destroy();
+      const ctx = document.getElementById('pcda-chart').getContext('2d');
+      _pcdaChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Revenue ($)',
+              data: revData,
+              borderColor: 'rgb(255, 159, 64)',
+              backgroundColor: 'rgba(255, 159, 64, 0.1)',
+              tension: 0.3,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Units',
+              data: unitsData,
+              borderColor: 'rgb(54, 162, 235)',
+              backgroundColor: 'rgba(54, 162, 235, 0.1)',
+              tension: 0.3,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top' },
+            annotation: { annotations }
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              position: 'left',
+              beginAtZero: true,
+              title: { display: true, text: 'Revenue ($)' }
+            },
+            y1: {
+              type: 'linear',
+              position: 'right',
+              beginAtZero: true,
+              title: { display: true, text: 'Units' },
+              grid: { drawOnChartArea: false }
+            }
+          }
+        }
+      });
+    }
+
+    function _renderPCDAList(matched) {
+      const container = document.getElementById('pcda-list');
+      if (!container) return;
+      // Sort by absolute price change %, biggest movement first — most
+      // interesting to see at the top.
+      const sorted = [...matched].sort((a, b) => {
+        const ap = a.oldPrice > 0 ? Math.abs((a.newPrice - a.oldPrice) / a.oldPrice) : 0;
+        const bp = b.oldPrice > 0 ? Math.abs((b.newPrice - b.oldPrice) / b.oldPrice) : 0;
+        return bp - ap;
+      });
+
+      let html = '<div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Changes included (' + sorted.length + '):</div>';
+      html += '<table style="border-collapse: collapse; font-size: 0.85rem;">';
+      html += '<thead><tr style="background: var(--bg-secondary);">';
+      html += '<th style="text-align: left;  padding: 0.5rem 0.75rem;">Brand</th>';
+      html += '<th style="text-align: left;  padding: 0.5rem 0.75rem;">Product</th>';
+      html += '<th style="text-align: right; padding: 0.5rem 0.75rem;">Old → New</th>';
+      html += '<th style="text-align: right; padding: 0.5rem 0.75rem;">Δ%</th>';
+      html += '<th style="text-align: center; padding: 0.5rem 0.75rem;"></th>';
+      html += '</tr></thead><tbody>';
+
+      for (const pc of sorted) {
+        const info = pciSkuMap[pc.sku] || {};
+        const pct  = pc.oldPrice > 0 ? ((pc.newPrice - pc.oldPrice) / pc.oldPrice * 100) : 0;
+        const color = pct >= 0 ? 'var(--success)' : 'var(--error)';
+        const drillBtn = pc.id
+          ? `<button onclick="pcdaDrillIntoChange('${_pcEsc(pc.id)}')" style="background: none; border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.5rem; color: var(--text-primary); cursor: pointer; font-size: 0.85rem;">View →</button>`
+          : '';
+        html += '<tr style="border-bottom: 1px solid var(--border);">';
+        html += `<td style="padding: 0.5rem 0.75rem;">${_pcEsc(shortenBrandName(info.brand || 'Unknown'))}</td>`;
+        html += `<td style="padding: 0.5rem 0.75rem;">${_pcEsc(info.productName || pc.sku)}</td>`;
+        html += `<td style="padding: 0.5rem 0.75rem; text-align: right; font-family: 'Roboto Mono', monospace; white-space: nowrap;">$${pc.oldPrice.toFixed(2)} → $${pc.newPrice.toFixed(2)}</td>`;
+        html += `<td style="padding: 0.5rem 0.75rem; text-align: right; color: ${color}; font-weight: 500;">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</td>`;
+        html += `<td style="padding: 0.5rem 0.75rem; text-align: center;">${drillBtn}</td>`;
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
+    // Click handler from the compact list. Resets Individual Analysis
+    // filters so the picked change is reachable, sets the change-select
+    // to that change's index, fires the chart render, and scrolls the
+    // Individual section into view.
+    function pcdaDrillIntoChange(id) {
+      // Reset Individual filters to "all" so _pciFilteredForSelect
+      // includes every change, then find the target by id.
+      const brandFilter = document.getElementById('pci-brand-filter');
+      if (brandFilter) brandFilter.value = 'all';
+      filterPCIProducts(); // synchronous: cascades through filterPCIChanges → loadPCITable
+
+      const list = window._pciFilteredForSelect || [];
+      const idx = list.findIndex(pc => pc?.id === id);
+      if (idx < 0) return;
+
+      const changeSelect = document.getElementById('pci-change-select');
+      if (changeSelect) {
+        changeSelect.value = idx;
+        renderPCICharts();
+      }
+      // Smooth-scroll to the Individual Analysis section so the user
+      // sees what just got selected.
+      const target = document.getElementById('pci-charts');
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    window.pcdaDrillIntoChange = pcdaDrillIntoChange;
 
     // Returns { revenue, units } for a SKU within a date range from orders data
     function calcOrderMetrics(orders, sku, startDate, endDate, windowDays) {

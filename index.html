@@ -471,6 +471,98 @@
           <div id="pci-export-feedback" style="margin-top: 1rem; display: none;"></div>
         </div>
 
+        <!-- Price Change Day Analysis — pick a single date, optionally
+             scope to a brand, see the aggregate before/after impact
+             across all SKUs that changed on that date. Sits between
+             Bulk Export (date range, CSV out) and Individual Analysis
+             (single-change drill-in). -->
+        <div class="card card-flat" style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">Price Change Day Analysis</h3>
+          <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1rem;">Aggregate impact across all SKUs that had a price change on a specific date.</p>
+
+          <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1.5rem;">
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Change Date</label>
+              <select id="pcda-date" onchange="pcdaOnDateChange()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 180px;">
+                <option value="">Select a date…</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Brand</label>
+              <select id="pcda-brand" onchange="pcdaOnFilterChange()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 160px;">
+                <option value="all">All Brands</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--text-secondary);">Comparison Window</label>
+              <select id="pcda-window" onchange="pcdaOnFilterChange()" style="padding: 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); min-width: 120px;">
+                <option value="30">30 days</option>
+                <option value="60">60 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Stats — same soft-card style as Individual Analysis. Hidden
+               until a date is picked. -->
+          <div id="pcda-stats" style="display: none; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="pcda-rev-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="pcda-rev-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="pcda-rev-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Units/Day</div>
+              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                  <span id="pcda-units-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                  <span id="pcda-units-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                </div>
+                <div id="pcda-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+              </div>
+            </div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">SKUs Changed</div>
+              <div id="pcda-skus-count" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="pcda-skus-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Net Price Change</div>
+              <div id="pcda-net-change" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
+              <div id="pcda-net-change-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
+          </div>
+
+          <!-- Chart: combined daily revenue + units across the matched
+               SKUs, with the change date marked. Dual-axis so the two
+               magnitudes don't squash each other. Hidden until a date
+               is picked. -->
+          <div id="pcda-chart-wrapper" style="display: none; margin-bottom: 1.5rem;">
+            <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Daily Revenue &amp; Units (across affected SKUs)</h4>
+            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Revenue on left axis, units on right; dashed line marks the change date.</p>
+            <div style="position: relative; height: 320px;">
+              <canvas id="pcda-chart"></canvas>
+            </div>
+          </div>
+
+          <!-- Compact list of changes included. Each row drills through
+               to Individual Analysis with that change pre-selected. -->
+          <div id="pcda-list" style="overflow-x: auto;"></div>
+        </div>
+
         <!-- Individual Price Change Analysis — single-change drill-in
              scoped to one brand/product/change. -->
         <div class="card card-flat" style="margin-bottom: 1.5rem;">
