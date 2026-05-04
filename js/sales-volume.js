@@ -113,50 +113,6 @@
       }
     }
     
-    // Brand → short signifier table for the product-dropdown
-    // disambiguation. Anything not in the map falls back to "Oth".
-    const SV_BRAND_SHORT = {
-      'South of Kings':       'SoK',
-      'Hubbard Scientific':   'RR',
-      'BrightWay Educational': 'BW',
-      'MapShop State Maps':   'TMS'
-    };
-    function _svBrandShort(brand) {
-      return SV_BRAND_SHORT[brand] || 'Oth';
-    }
-    function _svIsFba(p) {
-      const f = String(p?.fulfillment || '').trim().toLowerCase();
-      return f === 'amazon' || f === 'afn' || f === 'fba';
-    }
-
-    // Builds a Map<sku, displayLabel> for the dropdown. Two pass-throughs:
-    //   1. If a product's name appears under more than one brand in the
-    //      visible set, append " - <brand-short>" so the user can tell
-    //      them apart.
-    //   2. If a product's name + brand combination appears more than
-    //      once (i.e. FBA + FBM versions of the same SKU group),
-    //      append " (FBA)" or " (FBM)" — after the brand suffix if
-    //      both apply.
-    function _svBuildProductLabels(products) {
-      const byName = {};
-      for (const p of products) {
-        if (!byName[p.name]) byName[p.name] = [];
-        byName[p.name].push(p);
-      }
-      const labels = new Map();
-      for (const p of products) {
-        const sameName       = byName[p.name];
-        const crossBrand     = sameName.length > 1 && sameName.some(x => x.brand !== p.brand);
-        const sameNameBrand  = sameName.filter(x => x.brand === p.brand);
-        const dupFulfillment = sameNameBrand.length > 1;
-        let label = p.name;
-        if (crossBrand)     label += ` - ${_svBrandShort(p.brand)}`;
-        if (dupFulfillment) label += ` (${_svIsFba(p) ? 'FBA' : 'FBM'})`;
-        labels.set(p.sku, label);
-      }
-      return labels;
-    }
-
     function filterSVProducts() {
       const selectedBrand = document.getElementById('sv-brand-filter').value;
       const productSelect = document.getElementById('sv-product-filter');
@@ -169,8 +125,9 @@
 
       // Disambiguation runs against the *visible* set so when the brand
       // filter is set to one brand, we don't bother adding brand-short
-      // suffixes that would just be redundant.
-      const labels = _svBuildProductLabels(filteredProducts);
+      // suffixes that would just be redundant. Helper is shared with
+      // the Listing Optimization dropdowns — see core.js.
+      const labels = buildDisambiguatedProductLabels(filteredProducts, 'sku');
 
       productSelect.innerHTML = '<option value="">All Products</option>';
       filteredProducts.forEach(product => {

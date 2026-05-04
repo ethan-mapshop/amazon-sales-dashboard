@@ -144,7 +144,10 @@
             name: p.name || p.sku,
             brand: p.brand || 'Unknown',
             asin: (p.asin || '').toString().trim(),
-            productType: p.type || ''
+            productType: p.type || '',
+            // Captured for the dropdown's FBA/FBM disambiguation when
+            // two products share the same name + brand.
+            fulfillment: p.fulfillment || ''
           }));
 
         // Get unique brands
@@ -287,11 +290,18 @@
       
       // Sort alphabetically by name
       filteredProducts.sort((a, b) => a.name.localeCompare(b.name));
-      
-      // Populate product dropdown
+
+      // Disambiguate display labels using the shared helper from
+      // core.js — same rules used on the Sales & Volume product
+      // dropdown and the Change Log Log-Listing-Change form: append
+      // brand-short for cross-brand collisions, FBA/FBM for
+      // same-name same-brand. Drops the legacy ASIN suffix.
+      const labels = buildDisambiguatedProductLabels(filteredProducts, 'asin');
+
       productSelect.innerHTML = '<option value="">Select Product...</option>';
       filteredProducts.forEach(product => {
-        productSelect.innerHTML += `<option value="${product.asin}" data-name="${product.name}">${product.name} (${product.asin})</option>`;
+        const label = labels.get(product.asin) || product.name;
+        productSelect.innerHTML += `<option value="${product.asin}" data-name="${product.name}">${label}</option>`;
       });
     }
     
