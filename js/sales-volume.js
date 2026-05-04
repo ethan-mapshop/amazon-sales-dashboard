@@ -1016,10 +1016,10 @@
                 <th style="text-align:center;padding:0.5rem;">Old $</th>
                 <th style="text-align:center;padding:0.5rem;">New $</th>
                 <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Δ%</th>
-                <th style="text-align:center;padding:0.5rem;">Revenue</th>
-                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units</th>
-                <th style="text-align:center;padding:0.5rem;">Revenue</th>
-                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue/Day</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units/Day</th>
+                <th style="text-align:center;padding:0.5rem;">Revenue/Day</th>
+                <th style="text-align:center;padding:0.5rem;border-right:2px solid var(--border);">Units/Day</th>
                 <th style="text-align:center;padding:0.5rem;">Revenue Δ</th>
                 <th style="text-align:center;padding:0.5rem;">Units Δ</th>
               </tr>
@@ -1027,8 +1027,23 @@
             <tbody>`;
 
       results.forEach((r, i) => {
-        const revChange = r.before.revenue > 0 ? ((r.after.revenue - r.before.revenue) / r.before.revenue * 100) : 0;
-        const unitsChange = r.before.units > 0 ? ((r.after.units - r.before.units) / r.before.units * 100) : 0;
+        // Per-day metrics — windowDays is fixed for the Before period
+        // (configured via the Comparison Window dropdown); daysAfter
+        // varies per row (1 day if just changed, up to whatever
+        // happened until the next change or yesterday).
+        const revBeforeDaily   = windowDays > 0  ? r.before.revenue / windowDays : 0;
+        const unitsBeforeDaily = windowDays > 0  ? r.before.units   / windowDays : 0;
+        const revAfterDaily    = r.daysAfter > 0 ? r.after.revenue  / r.daysAfter : 0;
+        const unitsAfterDaily  = r.daysAfter > 0 ? r.after.units    / r.daysAfter : 0;
+
+        // Δ% compares the per-day rates so a 5-day "after" window vs
+        // a 30-day "before" window is apples-to-apples (the cumulative
+        // ratio would always read negative just because the windows
+        // are different lengths).
+        const revChange = revBeforeDaily > 0
+          ? ((revAfterDaily - revBeforeDaily) / revBeforeDaily * 100) : 0;
+        const unitsChange = unitsBeforeDaily > 0
+          ? ((unitsAfterDaily - unitsBeforeDaily) / unitsBeforeDaily * 100) : 0;
         const revColor = revChange > 0 ? 'var(--success)' : revChange < 0 ? 'var(--error)' : 'inherit';
         const unitsColor = unitsChange > 0 ? 'var(--success)' : unitsChange < 0 ? 'var(--error)' : 'inherit';
         const rowStyle = `cursor:pointer; transition: background 0.15s;`;
@@ -1048,10 +1063,10 @@
             <td style="text-align:center;padding:0.75rem;">$${r.oldPrice.toFixed(2)}</td>
             <td style="text-align:center;padding:0.75rem;">$${r.newPrice.toFixed(2)}</td>
             <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%</td>
-            <td style="text-align:center;padding:0.75rem;">$${formatNumber(r.before.revenue)}</td>
-            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.before.units}</td>
-            <td style="text-align:center;padding:0.75rem;">$${formatNumber(r.after.revenue)}</td>
-            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${r.after.units}</td>
+            <td style="text-align:center;padding:0.75rem;">$${formatNumber(revBeforeDaily)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${unitsBeforeDaily.toFixed(1)}</td>
+            <td style="text-align:center;padding:0.75rem;">$${formatNumber(revAfterDaily)}</td>
+            <td style="text-align:center;padding:0.75rem;border-right:2px solid var(--border);">${unitsAfterDaily.toFixed(1)}</td>
             <td style="text-align:center;padding:0.75rem;color:${revColor};font-weight:500;">${revChange > 0 ? '+' : ''}${revChange.toFixed(1)}%</td>
             <td style="text-align:center;padding:0.75rem;color:${unitsColor};font-weight:500;">${unitsChange > 0 ? '+' : ''}${unitsChange.toFixed(1)}%</td>
             <td style="text-align:center;padding:0.75rem;">${deleteBtn}</td>
