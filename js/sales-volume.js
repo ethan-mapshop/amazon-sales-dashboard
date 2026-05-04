@@ -416,11 +416,11 @@
       const monthlyList = document.getElementById('monthly-list');
       monthlyList.innerHTML = monthlyData.map(m => `
         <tr>
-          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); font-weight: 500;">${m.label}</td>
-          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
-          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace;">$${m.salesPerDay.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
-          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volume.toLocaleString()}</td>
-          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: right; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volumePerDay.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-weight: 500;">${m.label}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace;">$${m.sales.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace;">$${m.salesPerDay.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volume.toLocaleString()}</td>
+          <td style="padding: 0.75rem; border-bottom: 1px solid var(--border); text-align: center; font-family: 'Roboto Mono', monospace; color: var(--text-secondary);">${m.volumePerDay.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}</td>
         </tr>
       `).join('');
 
