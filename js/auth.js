@@ -122,10 +122,10 @@
                 renewBtn.disabled = false;
                 renewBtn.textContent = 'Sign In';
               }
-              // Kick off the data fetch for whichever overview tab is active
-              // so the user lands on a populated report instead of having to
-              // click a tab/button to trigger the first load.
-              triggerCurrentOverviewLoad();
+              // Kick off the data fetch for whichever page + tab is
+              // active so the user lands on a populated report instead of
+              // having to click around to trigger the first load.
+              triggerCurrentPageLoad();
             } else {
               showAuthError('Failed to get access token');
             }
@@ -158,7 +158,7 @@
       } else {
         // Default to Overview Monthly Profitability. showMonthlyV2024()
         // handles the auto-load itself via the first-view flag (gated on
-        // accessToken), so triggerCurrentOverviewLoad will fire it after
+        // accessToken), so triggerCurrentPageLoad will fire it after
         // sign-in if the user lands here pre-auth.
         showMonthlyV2024();
       }
@@ -178,19 +178,64 @@
       if (config.clientId && !tokenClient) initializeGoogleAuth();
     }
 
-    // Called from the OAuth callback after a successful sign-in. Only fires
-    // a load if the user is currently looking at the Overview page — we don't
-    // want to yank them to a different page or kick off fetches for pages
-    // they aren't viewing. Which generate function runs depends on the
-    // currently-active Overview tab.
-    function triggerCurrentOverviewLoad() {
-      const overviewPage = document.getElementById('overview-page');
-      if (!overviewPage || !overviewPage.classList.contains('active')) return;
-      const activeTab = document.querySelector('#overview-page .page-header .tabs .tab.active');
-      if (!activeTab) return;
-      const tabId = activeTab.id;
-      if (tabId === 'monthly-v2024-tab' && typeof showMonthlyV2024 === 'function') showMonthlyV2024();
-      else if (tabId === 'ytd-v2024-tab' && typeof showYTDV2024 === 'function') showYTDV2024();
+    // Called from the OAuth callback after a successful sign-in. Loads
+    // data for whichever page + tab/sub-tab the user is currently on,
+    // so signing in always populates the report in front of them rather
+    // than dropping them on a default page or leaving the active view
+    // empty. Each page-specific block below is the same dispatch logic
+    // showPage() runs when navigating into a page, but tab-aware: we
+    // honor the user's active tab instead of resetting to the default.
+    function triggerCurrentPageLoad() {
+      if (!accessToken) return;
+      const activePage = document.querySelector('.page.active');
+      if (!activePage) return;
+      const pageName = activePage.id.replace(/-page$/, '');
+
+      switch (pageName) {
+        case 'overview': {
+          const activeTab = document.querySelector('#overview-page .page-header .tabs .tab.active');
+          const tabId = activeTab ? activeTab.id : 'monthly-v2024-tab';
+          if (tabId === 'ytd-v2024-tab' && typeof showYTDV2024 === 'function') showYTDV2024();
+          else if (tabId === 'charts-v2024-tab' && typeof showChartsV2024 === 'function') showChartsV2024();
+          else if (tabId === 'brandproduct-v2024-tab' && typeof showBrandProductV2024 === 'function') showBrandProductV2024();
+          else if (typeof showMonthlyV2024 === 'function') showMonthlyV2024();
+          break;
+        }
+        case 'salesvolume': {
+          if (typeof loadSalesVolumeData !== 'function') break;
+          // loadSalesVolumeData is async and populates svAllProducts,
+          // which the Price Change Impacts sub-tab depends on. If the
+          // user's last view was that sub-tab, kick initPCI() once
+          // products are in.
+          const result = loadSalesVolumeData();
+          const activeSubtab = document.querySelector('#salesvolume-page .tabs .tab.active');
+          if (activeSubtab && activeSubtab.id === 'sv-tab-priceimpact' && typeof initPCI === 'function') {
+            Promise.resolve(result).then(() => initPCI()).catch(() => {});
+          }
+          break;
+        }
+        case 'listing': {
+          const activeTab = document.querySelector('#listing-page .tab.active');
+          const tabId = activeTab ? activeTab.id : 'listing-tab-changelog';
+          if (tabId === 'listing-tab-sessions') {
+            if (typeof loadSessionData === 'function') loadSessionData();
+          } else {
+            if (typeof loadChangeLogASINs === 'function') loadChangeLogASINs();
+            if (typeof loadChangeLog === 'function') loadChangeLog();
+          }
+          break;
+        }
+        case 'catalog':
+          if (typeof loadProductCatalog === 'function') loadProductCatalog();
+          break;
+        case 'mapping':
+          if (typeof loadMappingData === 'function') loadMappingData();
+          break;
+        case 'integrations':
+          if (typeof loadCredentialStatus === 'function') loadCredentialStatus();
+          break;
+        // upload page has no data fetch
+      }
     }
     
     document.addEventListener('DOMContentLoaded', () => {
