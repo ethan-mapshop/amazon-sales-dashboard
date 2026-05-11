@@ -454,6 +454,12 @@
       border: 1px solid var(--error);
       color: var(--error);
     }
+
+    .status-info {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
     
     .loading {
       display: inline-block;

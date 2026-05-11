@@ -31,7 +31,28 @@
     let accessToken = null;
     let tokenClient = null;
     let lastUpdatedAt = ''; // For Phase 3 - timestamp of last data refresh
-    
+
+    // Shared inline-feedback helper used by sessions.js, sales-volume.js,
+    // and anywhere else we surface "saved / error / working…" messages
+    // next to a control. Takes the target element directly (not a
+    // selector) since callers usually already have it via getElementById.
+    // `type` maps to a status-* CSS class: 'success' | 'error' | 'info'.
+    // Explicitly sets style.display so inline `display: none` on the
+    // target element (a common pattern in this repo) doesn't suppress
+    // the .active class's `display: block`.
+    function showFeedback(el, type, message) {
+      if (!el) return;
+      const cssType = type === 'info' ? 'info' : (type === 'success' ? 'success' : 'error');
+      el.className = `status-message status-${cssType} active`;
+      el.textContent = message;
+      el.style.display = 'block';
+    }
+    function hideFeedback(el) {
+      if (!el) return;
+      el.classList.remove('active');
+      el.style.display = 'none';
+    }
+
     // PHASE 1 STUB FUNCTIONS
     function triggerRefresh() {
       // Phase 3: Will call /api/refresh endpoint
