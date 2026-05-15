@@ -12,6 +12,11 @@ import { kv } from '@vercel/kv';
 //   GET  ?action=get-v2024       &month=YYYY-MM              — raw transactions, one month
 //   GET  ?action=get-range-v2024 &startMonth=&endMonth=      — raw transactions, many months
 //   GET  ?action=get-months-v2024                            — list of v2024-synced months
+//   POST ?action=upload-yearly-csv                           — backfill from
+//          Amazon "Custom Unified Transaction" CSV. Lands rows in the
+//          imported namespace (see KV layout below) so they coexist with
+//          any SP-API-synced months. Used for years older than SP-API's
+//          ~23-month listTransactions window.
 //
 // probe-v2024 is the diagnostic that confirmed v0 listFinancialEvents
 // silently excludes Deferred transactions (notably B2B Invoiced Orders).
@@ -34,6 +39,14 @@ import { kv } from '@vercel/kv';
 //   transactions:v2024:index               → ['YYYY-MM', ...]
 //   transactions:v2024:last-synced:YYYY-MM → ISO timestamp
 //   transactions:v2024:latest-posted       → { 'YYYY-MM': 'YYYY-MM-DDTHH:MM:SSZ', ... }
+//   transactions:v2024:imported:YYYY-MM    → { rows: [<_v2024BlankRow>] }
+//                                            CSV-uploaded rows in the
+//                                            already-derived flat shape. Read
+//                                            in parallel with raw chunks by
+//                                            handleGetRangeV2024 and returned
+//                                            as `importedRows`. Client merges
+//                                            them with derived rows before
+//                                            _buildStatement runs.
 //
 // Chunked storage: Upstash imposes a 10 MB per-request size limit on KV
 // writes. A single month's transactions can exceed that (notably 2025-08
@@ -67,6 +80,9 @@ export default async function handler(req, res) {
     if (action === 'get-v2024')       return handleGetV2024(req, res);
     if (action === 'get-range-v2024') return handleGetRangeV2024(req, res);
     if (action === 'get-months-v2024') return handleGetMonthsV2024(req, res);
+  }
+  if (req.method === 'POST') {
+    if (action === 'upload-yearly-csv') return handleUploadYearlyCsv(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -274,11 +290,27 @@ async function handleGetRangeV2024(req, res) {
       return res.status(400).json({ error: 'startMonth and endMonth required (YYYY-MM)' });
     }
 
-    const index = (await kv.get('transactions:v2024:index')) || [];
-    const months = index.filter(m => m >= startMonth && m <= endMonth);
-    // Read each month via readMonthV2024 so chunked + legacy layouts are
-    // both handled. Months are read in parallel.
-    const monthArrays = await Promise.all(months.map(m => readMonthV2024(m)));
+    // Union the SP-API index and the imported (CSV-uploaded) index so a
+    // month present only in imported rows still shows up in the read.
+    const [rawIndex, importedIndex] = await Promise.all([
+      kv.get('transactions:v2024:index'),
+      kv.get('transactions:v2024:imported-index')
+    ]);
+    const monthSet = new Set();
+    for (const m of (rawIndex || [])) {
+      if (m >= startMonth && m <= endMonth) monthSet.add(m);
+    }
+    for (const m of (importedIndex || [])) {
+      if (m >= startMonth && m <= endMonth) monthSet.add(m);
+    }
+    const months = [...monthSet].sort();
+
+    // Raw and imported reads run in parallel — each independent month
+    // hits two keys at most, so the join here is fast.
+    const [monthArrays, importedBuckets] = await Promise.all([
+      Promise.all(months.map(m => readMonthV2024(m))),
+      Promise.all(months.map(m => kv.get(`transactions:v2024:imported:${m}`)))
+    ]);
 
     // Flatten: all months' transactions concatenated. Dedup happens later
     // in the client-side derivation, since the dedup rule needs to inspect
@@ -287,8 +319,25 @@ async function handleGetRangeV2024(req, res) {
     for (const arr of monthArrays) {
       for (const t of arr) transactions.push(t);
     }
+    // Imported rows are already in the derived `_v2024BlankRow` shape and
+    // bypass _deriveV2024Rows on the client. We only emit imported rows
+    // for months where the raw SP-API namespace is empty — if both exist
+    // for the same month, raw wins (it's the authoritative source). This
+    // makes a future SP-API sync of a previously-imported month silently
+    // supersede the CSV without anyone having to delete the imported
+    // bucket by hand.
+    const importedRows = [];
+    for (let i = 0; i < months.length; i++) {
+      const rawHasData = monthArrays[i] && monthArrays[i].length > 0;
+      if (rawHasData) continue;
+      const b = importedBuckets[i];
+      if (!b || !Array.isArray(b.rows)) continue;
+      for (const r of b.rows) importedRows.push(r);
+    }
 
-    return res.status(200).json({ success: true, startMonth, endMonth, months, transactions });
+    return res.status(200).json({
+      success: true, startMonth, endMonth, months, transactions, importedRows
+    });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to get v2024 range: ' + error.message });
   }
@@ -298,12 +347,18 @@ async function handleGetMonthsV2024(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
-    const [index, storedMap] = await Promise.all([
+    const [index, importedIndex, storedMap] = await Promise.all([
       kv.get('transactions:v2024:index'),
+      kv.get('transactions:v2024:imported-index'),
       kv.get('transactions:v2024:latest-posted')
     ]);
     const latestPostedMap = (storedMap && typeof storedMap === 'object') ? { ...storedMap } : {};
-    const months = Array.isArray(index) ? index : [];
+    // Union with imported months so the navigation widget / data-blurb
+    // can advertise CSV-uploaded months even if the SP-API has never
+    // touched them (the only way to surface 2024 in a 2026 session).
+    const monthSet = new Set(Array.isArray(index) ? index : []);
+    for (const m of (importedIndex || [])) monthSet.add(m);
+    const months = [...monthSet].sort();
 
     // Lazy backfill: months synced before the latest-posted-by-month
     // dictionary existed have no entry. Compute the max postedDate for
@@ -746,6 +801,291 @@ function countEvents(fe) {
     if (Array.isArray(arr)) total += arr.length;
   }
   return total;
+}
+
+// ─── UPLOAD YEARLY CSV (Amazon Custom Unified Transaction Report) ───────────
+//
+// The client parses the CSV (so the API stays under Vercel's request-size
+// cap) and POSTs the rows as JSON. Each row's CSV columns are the flat
+// "Date Range Report" shape: date/time, type, order id, sku, quantity,
+// fulfillment, product sales, selling fees, fba fees, etc. We normalize to
+// the same `_v2024BlankRow` shape `_deriveV2024Rows` outputs and write per-
+// month buckets keyed `transactions:v2024:imported:YYYY-MM`.
+//
+// Why store the derived shape instead of trying to reconstruct nested
+// SP-API breakdown trees: the CSV is already flat. Reverse-engineering it
+// into the listTransactions response shape (items[].breakdowns[] with
+// breakdownType + breakdownAmount) would be lossy and brittle — the CSV
+// merges multiple breakdown leaves under one column. Flat rows skip that
+// entire path: handleGetRangeV2024 returns them as `importedRows`, the
+// client concatenates them with derived rows, and _buildStatement
+// consumes them identically.
+//
+// Marketplace-Facilitator tax handling: every order row in the CSV
+// includes both the tax Amazon collected (product sales tax, shipping
+// credits tax, etc.) and a "marketplace withheld tax" that nets the
+// collection to zero. We drop all tax columns rather than carrying them
+// through — they have no P&L impact for the seller.
+//
+// Idempotency: a re-upload of the same year overwrites the imported
+// rows for those months. The raw SP-API namespace is untouched, so any
+// 2025+ months that have *both* an SP-API sync and accidentally appear
+// in a re-uploaded CSV would double-count. The client guards against
+// this by warning if you upload a CSV that contains months already in
+// the raw index (see processUpload in js/upload.js).
+async function handleUploadYearlyCsv(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rows) return res.status(400).json({ error: 'rows array required in body' });
+    if (rows.length === 0) {
+      return res.status(200).json({ success: true, months: [], totalRows: 0 });
+    }
+
+    // Group normalized rows by YYYY-MM. Skip rows whose date doesn't
+    // parse — those are header preamble lines or malformed entries and
+    // would otherwise land in a bogus "undefined" bucket.
+    const byMonth = {};
+    const monthLatestDate = {}; // month → latest YYYY-MM-DD seen
+    let skippedNoDate = 0;
+    let skippedTransfer = 0;
+    for (const raw of rows) {
+      const norm = _normalizeYearlyCsvRow(raw);
+      if (!norm) { skippedTransfer++; continue; }
+      const date = norm.date;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skippedNoDate++; continue; }
+      const month = date.slice(0, 7);
+      if (!byMonth[month]) byMonth[month] = [];
+      byMonth[month].push(norm);
+      if (!monthLatestDate[month] || date > monthLatestDate[month]) {
+        monthLatestDate[month] = date;
+      }
+    }
+
+    const writtenMonths = Object.keys(byMonth).sort();
+    if (writtenMonths.length === 0) {
+      return res.status(200).json({
+        success: true, months: [], totalRows: 0,
+        skippedNoDate, skippedTransfer,
+        message: 'No valid rows found in the upload'
+      });
+    }
+
+    // Refuse to overwrite months that already have raw SP-API data — the
+    // SP-API is authoritative (it includes deferred/B2B detail the CSV
+    // can't reconstruct). The user can run the upload again after
+    // explicitly clearing the raw key if they really want to replace it.
+    const collisions = [];
+    for (const m of writtenMonths) {
+      const raw = await kv.get(`transactions:v2024:raw:${m}`);
+      const hasRaw = raw && (
+        Array.isArray(raw.transactions) && raw.transactions.length > 0 ||
+        Number.isFinite(raw.chunkCount) && raw.chunkCount > 0
+      );
+      if (hasRaw) collisions.push(m);
+    }
+    if (collisions.length > 0) {
+      return res.status(409).json({
+        error: `Refusing to upload: months ${collisions.join(', ')} already have SP-API data. Delete those KV keys first if you really mean to replace them.`,
+        collidingMonths: collisions
+      });
+    }
+
+    // Write per-month buckets, then update the imported-month index and
+    // the latest-posted map. Same write-data-first-then-pointer pattern
+    // as handleSyncV2024 so a partial failure doesn't corrupt the index.
+    let totalRows = 0;
+    for (const m of writtenMonths) {
+      await kv.set(`transactions:v2024:imported:${m}`, { rows: byMonth[m] });
+      totalRows += byMonth[m].length;
+    }
+    const existingIndex = (await kv.get('transactions:v2024:imported-index')) || [];
+    const mergedIndex = [...new Set([...existingIndex, ...writtenMonths])].sort();
+    await kv.set('transactions:v2024:imported-index', mergedIndex);
+
+    // Latest-posted: store as an ISO timestamp at end-of-day UTC so the
+    // overview's "Most Recent Transaction Data" label renders the right
+    // calendar date. Only updates the per-month entry; the global max
+    // is computed at read time.
+    const latestPostedMap = (await kv.get('transactions:v2024:latest-posted')) || {};
+    for (const m of writtenMonths) {
+      const date = monthLatestDate[m];
+      const iso = `${date}T23:59:59Z`;
+      if (!latestPostedMap[m] || iso > latestPostedMap[m]) {
+        latestPostedMap[m] = iso;
+      }
+    }
+    await kv.set('transactions:v2024:latest-posted', latestPostedMap);
+
+    return res.status(200).json({
+      success: true,
+      months: writtenMonths,
+      totalRows,
+      skippedNoDate,
+      skippedTransfer,
+      message: `Imported ${totalRows} rows across ${writtenMonths.length} months`
+    });
+  } catch (error) {
+    console.error('[TRANSACTIONS UPLOAD-YEARLY] Error:', error);
+    return res.status(500).json({ error: 'Upload failed: ' + error.message });
+  }
+}
+
+// Map a CSV row (keys = original column headers) to the flat
+// `_v2024BlankRow` shape used by _buildStatement. Returns null for rows
+// we want to drop entirely (Transfer = bank disbursement, not P&L).
+//
+// The CSV columns referenced here are the Amazon "Custom Unified
+// Transaction Report" headers as of 2024 — see the file
+// `2024data/2024Jan1-2024Dec31CustomUnifiedTransaction.csv` for the
+// canonical example. Header keys are matched case-insensitively against
+// a normalized alias map so future report variants still parse.
+function _normalizeYearlyCsvRow(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const get = (...keys) => {
+    for (const k of keys) {
+      // Direct hit first (fast path for already-normalized payloads)
+      if (raw[k] !== undefined) return raw[k];
+    }
+    // Case-insensitive fallback. The client may pass keys with any
+    // casing depending on how XLSX parsed the header row.
+    const lowerMap = _lowerKeyMap(raw);
+    for (const k of keys) {
+      const v = lowerMap[k.toLowerCase()];
+      if (v !== undefined) return v;
+    }
+    return undefined;
+  };
+
+  // ISO date (YYYY-MM-DD). Client should pre-parse via parseAmazonDate
+  // but accept the raw "Jan 1, 2024" form as fallback.
+  let date = String(get('date/time', 'date') || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}/.test(date)) {
+    const parsed = _parseAmazonDateServer(date);
+    if (parsed) date = parsed;
+  }
+  date = date.slice(0, 10);
+
+  const type = String(get('type') || '').trim();
+  if (!type) return null;
+  if (type === 'Transfer') return null; // disbursement, not P&L
+
+  const orderId = String(get('order id') || '').trim();
+  const sku = String(get('sku') || '').trim();
+  const description = String(get('description') || '').trim();
+  const fulfillmentRaw = String(get('fulfillment') || '').trim().toLowerCase();
+  let fulfillment = '';
+  if (fulfillmentRaw === 'amazon' || fulfillmentRaw === 'afn' || fulfillmentRaw === 'fba') fulfillment = 'FBA';
+  else if (fulfillmentRaw === 'seller' || fulfillmentRaw === 'mfn' || fulfillmentRaw === 'fbm') fulfillment = 'FBM';
+
+  const num = (k1, k2, k3) => {
+    const v = get(k1, k2, k3);
+    if (v === '' || v === null || v === undefined) return 0;
+    const n = parseFloat(String(v).replace(/[$,]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const productSales        = num('product sales');
+  const shippingCredits     = num('shipping credits');
+  const giftwrapCredits     = num('gift wrap credits', 'giftwrap credits');
+  const regulatoryFee       = num('Regulatory Fee', 'regulatory fee');
+  const promoRebates        = num('promotional rebates');
+  const sellingFees         = num('selling fees');
+  const fbaFees             = num('fba fees');
+  const otherTransactionFees= num('other transaction fees');
+  const other               = num('other');
+  const qty = parseInt(get('quantity') || '0', 10) || 0;
+
+  // Build the row according to the rules _buildStatement applies — see
+  // the section "Order routing" in overview-upstash.js for the canonical
+  // bucket map. We're matching V2024_LEAF_HANDLER's flat bucket choices.
+  const base = {
+    type: '', orderId, date, sku, qty: 0,
+    fulfillment,
+    sale: 0, otherCharges: 0, fbaFees: 0, transactionFees: 0, promotions: 0,
+    feeType: '', feeAmount: 0,
+    adjustmentType: '', adjustmentAmount: 0,
+    _src: 'v2024-imported', _transactionId: '', _transactionStatus: ''
+  };
+
+  if (type === 'Order' || type === 'Refund') {
+    const isRefund = type === 'Refund';
+    base.type = isRefund ? 'Refund' : 'Order';
+    base.qty = qty * (isRefund ? -1 : 1);
+    base.sale         = productSales;
+    base.otherCharges = shippingCredits + giftwrapCredits;
+    base.promotions   = promoRebates;
+    // selling fees + other transaction fees + regulatory fee all land in
+    // the Transaction Fees bucket in V2024_LEAF_HANDLER (Commission,
+    // VariableClosingFee, FixedClosingFee, RefundCommission).
+    base.transactionFees = sellingFees + otherTransactionFees + regulatoryFee;
+    base.fbaFees      = fbaFees;
+    return base;
+  }
+
+  if (type === 'Order_Retrocharge' || type === 'Retrocharge') {
+    // Rare. The existing _buildStatement collapses Chargeback /
+    // GuaranteeClaim / Retrocharge entirely into Other Expenses by
+    // summing sale + otherCharges + fbaFees + transactionFees +
+    // promotions. We mirror that input shape.
+    base.type = 'Retrocharge';
+    base.qty = qty;
+    base.sale         = productSales;
+    base.otherCharges = shippingCredits + giftwrapCredits;
+    base.promotions   = promoRebates;
+    base.transactionFees = sellingFees + otherTransactionFees + regulatoryFee;
+    base.fbaFees      = fbaFees;
+    return base;
+  }
+
+  // FBA Inventory Fee / Service Fee / Shipping Services / FBA Customer
+  // Return Fee → ServiceFee, with the description as feeType so it
+  // shows up in the editable unmapped-fee warning panel until the user
+  // routes it. The fee amount is whatever non-zero column carries it;
+  // sum of every monetary column except sales/credits/promos covers
+  // every case I've seen in the 2024 sample.
+  if (type === 'FBA Inventory Fee'      ||
+      type === 'Service Fee'            ||
+      type === 'Shipping Services'      ||
+      type === 'FBA Customer Return Fee') {
+    base.type = 'ServiceFee';
+    base.feeType = description || type;
+    base.feeAmount = sellingFees + fbaFees + otherTransactionFees + regulatoryFee + other;
+    return base;
+  }
+
+  if (type === 'Adjustment' || type === 'FBA Inventory Reimbursement') {
+    base.type = 'Adjustment';
+    base.adjustmentType = description || type;
+    base.adjustmentAmount = sellingFees + fbaFees + otherTransactionFees + regulatoryFee + other +
+                            productSales + shippingCredits + giftwrapCredits + promoRebates;
+    return base;
+  }
+
+  // Unknown type — drop. Surfaces in skippedTransfer count alongside
+  // genuine Transfer drops; not worth a separate counter for now.
+  return null;
+}
+
+function _lowerKeyMap(obj) {
+  const out = {};
+  for (const k of Object.keys(obj)) out[k.toLowerCase()] = obj[k];
+  return out;
+}
+
+// Server-side fallback for parseAmazonDate. Mirrors the client helper
+// in js/upload.js so the API still works if the client forgot to
+// pre-normalize.
+function _parseAmazonDateServer(s) {
+  if (!s) return null;
+  const m = String(s).match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+  if (!m) return null;
+  const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+                   jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+  const mm = months[m[1].toLowerCase().substring(0, 3)];
+  if (!mm) return null;
+  return `${m[3]}-${mm}-${m[2].padStart(2, '0')}`;
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────

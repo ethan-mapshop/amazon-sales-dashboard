@@ -24,6 +24,33 @@
         requiredColumns: ['Campaign Name'],
         skipRows: 0,
         allowUpdates: false
+      },
+      // 2024-style yearly backfill uploads. No `sheetName` since these
+      // don't round-trip through Sheets — they're file uploads only. The
+      // required-column lists determine which header row findHeaderRow
+      // accepts; pick a few columns unique to each report so the
+      // detector doesn't false-match a sibling report.
+      transactionsyearly: {
+        uniqueKey: null,
+        requiredColumns: ['date/time', 'type', 'order id', 'sku', 'product sales'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      spadspendyearly: {
+        uniqueKey: null,
+        requiredColumns: ['Date', 'Campaign Name', 'Spend'],
+        skipRows: 0,
+        allowUpdates: false
+      },
+      shippingyearly: {
+        uniqueKey: null,
+        // CarrierFee is the cost WE paid the carrier — that's the FBM
+        // Shipping Costs line on the P&L. ShippingPaid is what the
+        // buyer paid Amazon (often $0 for Prime), which is irrelevant
+        // to the seller's cost side.
+        requiredColumns: ['ShipDate', 'OrderNumber', 'CarrierFee'],
+        skipRows: 0,
+        allowUpdates: false
       }
     };
 

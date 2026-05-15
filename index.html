@@ -121,6 +121,9 @@
           <button class="tab active" data-tab="products">Products</button>
           <button class="tab" data-tab="productadmapping">Product Ad Map</button>
           <button class="tab" data-tab="brandadmapping">Brand Ad Map</button>
+          <button class="tab" data-tab="transactionsyearly">Transactions (Yearly Backfill)</button>
+          <button class="tab" data-tab="spadspendyearly">SP Ad Spend (Yearly Backfill)</button>
+          <button class="tab" data-tab="shippingyearly">Shipping (Yearly Backfill)</button>
         </div>
 
         <!-- Products Tab -->
@@ -172,6 +175,71 @@
             <button class="btn btn-primary process-btn" data-type="brandadmapping" disabled>Process & Upload</button>
           </div>
           <div class="status-message" data-type="brandadmapping"></div>
+        </div>
+
+        <!-- Transactions Yearly Backfill Tab.
+             For loading historical year-wide Amazon "Custom Unified
+             Transaction" reports that pre-date the SP-API's ~23-month
+             listTransactions window (used to seed 2024 P&L). Lands in
+             the imported namespace, not the SP-API raw namespace, so
+             nothing overwrites months that still come from the live API
+             cron. -->
+        <div class="tab-content" id="transactionsyearly-content">
+          <div class="upload-zone disabled" data-type="transactionsyearly">
+            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+            <div class="upload-icon">📅</div>
+            <div class="upload-text">Upload Yearly Transactions CSV</div>
+            <div class="upload-hint">Sign in to enable • Amazon "Custom Unified Transaction" report (date/time, type, sku, product sales, fees, etc.)</div>
+          </div>
+          <div class="file-info" data-type="transactionsyearly"></div>
+          <div class="preview-table" data-type="transactionsyearly" style="display: none;"></div>
+          <div class="button-group">
+            <button class="btn btn-secondary clear-btn" data-type="transactionsyearly" style="display: none;">Clear</button>
+            <button class="btn btn-primary process-btn" data-type="transactionsyearly" disabled>Process & Upload</button>
+          </div>
+          <div class="status-message" data-type="transactionsyearly"></div>
+        </div>
+
+        <!-- SP Ad Spend Yearly Backfill Tab.
+             Amazon Ads → Sponsored Products → Campaign Performance
+             report, year-wide. Same KV target as the live Ads API sync
+             (adspend:sp:raw:YYYY-MM) but written without a `sku` field,
+             matching the existing migrate-from-sheets row shape. -->
+        <div class="tab-content" id="spadspendyearly-content">
+          <div class="upload-zone disabled" data-type="spadspendyearly">
+            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+            <div class="upload-icon">📈</div>
+            <div class="upload-text">Upload Yearly Sponsored Products Ad Spend CSV</div>
+            <div class="upload-hint">Sign in to enable • Amazon Ads SP Campaign Performance (Date, Campaign Name, Spend)</div>
+          </div>
+          <div class="file-info" data-type="spadspendyearly"></div>
+          <div class="preview-table" data-type="spadspendyearly" style="display: none;"></div>
+          <div class="button-group">
+            <button class="btn btn-secondary clear-btn" data-type="spadspendyearly" style="display: none;">Clear</button>
+            <button class="btn btn-primary process-btn" data-type="spadspendyearly" disabled>Process & Upload</button>
+          </div>
+          <div class="status-message" data-type="spadspendyearly"></div>
+        </div>
+
+        <!-- Shipping Yearly Backfill Tab.
+             ShipStation Shipments Export (year-wide). ShipDate is an
+             Excel serial number — the server's parser handles both
+             serial and parseable string forms so the same uploader
+             works for ShipStation exports and any future CSV variants. -->
+        <div class="tab-content" id="shippingyearly-content">
+          <div class="upload-zone disabled" data-type="shippingyearly">
+            <input type="file" class="file-input" accept=".xlsx,.xls,.csv">
+            <div class="upload-icon">📦</div>
+            <div class="upload-text">Upload Yearly ShipStation CSV</div>
+            <div class="upload-hint">Sign in to enable • ShipStation Shipments Export (ShipDate, OrderNumber, CarrierFee)</div>
+          </div>
+          <div class="file-info" data-type="shippingyearly"></div>
+          <div class="preview-table" data-type="shippingyearly" style="display: none;"></div>
+          <div class="button-group">
+            <button class="btn btn-secondary clear-btn" data-type="shippingyearly" style="display: none;">Clear</button>
+            <button class="btn btn-primary process-btn" data-type="shippingyearly" disabled>Process & Upload</button>
+          </div>
+          <div class="status-message" data-type="shippingyearly"></div>
         </div>
       </div>
     </div>

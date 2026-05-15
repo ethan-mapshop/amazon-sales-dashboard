@@ -49,6 +49,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets') return handleMigrateFromSheets(req, res);
     if (action === 'delete-sheets-rows')  return handleDeleteSheetsRows(req, res);
+    if (action === 'upload-yearly-csv')   return handleUploadYearlyCsv(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -232,6 +233,153 @@ async function handleMigrateFromSheets(req, res) {
   } catch (error) {
     return res.status(500).json({ error: 'Migrate failed: ' + error.message });
   }
+}
+
+// ─── UPLOAD YEARLY CSV (ShipStation Shipments Export) ───────────────────────
+//
+// Client-parsed ShipStation export posted as JSON rows. Same KV target as
+// the live ShipStation API sync (`shipping:raw:YYYY-MM`), but rows are
+// stored without SKU/qty since the export doesn't include per-item
+// breakdown (it has an `Items` integer for shipment count but not the
+// SKU list). Total monthly shipping cost is preserved; per-SKU
+// allocation isn't, which matches the Sheets-backfill row shape.
+//
+// Body: { rows: [{ ShipDate|shipDate, OrderNumber|orderId, CarrierFee|cost, Items|qty?, Carrier? }, ...] }
+// `cost` comes from CarrierFee — what the seller paid the carrier — NOT
+// ShippingPaid, which is the buyer-side amount (typically $0 for Prime
+// orders) and irrelevant to FBM Shipping Costs on the seller's P&L.
+// ShipDate may be an Excel serial number or an ISO/parseable date string —
+// _shippingParseDateServer handles both.
+async function handleUploadYearlyCsv(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rawRows) return res.status(400).json({ error: 'rows array required in body' });
+
+    const pick = (obj, ...keys) => {
+      for (const k of keys) if (obj[k] !== undefined) return obj[k];
+      const lower = {};
+      for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
+      for (const k of keys) {
+        const v = lower[k.toLowerCase()];
+        if (v !== undefined) return v;
+      }
+      return undefined;
+    };
+
+    const byMonth = {};
+    let skippedNoDate = 0;
+    let skippedNoCost = 0;
+    let skippedFree   = 0; // ShippingPaid = 0 — Amazon-paid Prime shipments
+    for (const r of rawRows) {
+      if (!r || typeof r !== 'object') continue;
+      const shipDate = _shippingParseDateServer(pick(r, 'shipDate', 'ShipDate', 'ship date'));
+      if (!shipDate) { skippedNoDate++; continue; }
+      // Prefer CarrierFee. Tolerate Shipping Cost (the Sheets-migration
+      // column name) and `cost` (already-normalized) for forward
+      // compatibility, but DO NOT fall back to ShippingPaid — that's
+      // the buyer-paid amount and would mis-attribute Prime orders as
+      // free FBM shipping.
+      const costRaw = pick(r, 'cost', 'CarrierFee', 'carrier fee', 'Shipping Cost', 'shipping cost');
+      const cost = parseFloat(String(costRaw ?? '').replace(/[$,]/g, ''));
+      if (!Number.isFinite(cost)) { skippedNoCost++; continue; }
+      if (cost === 0) { skippedFree++; continue; } // 0 carrier fee → nothing to record
+      const orderId = String(pick(r, 'orderId', 'OrderNumber', 'order number', 'Order #', 'OrderID') || '').trim();
+      const qty = parseInt(pick(r, 'qty', 'Items', 'items'), 10) || 0;
+      const carrier = String(pick(r, 'carrier', 'Carrier') || '').trim();
+      const service = String(pick(r, 'service', 'Service', 'ServiceCode') || '').trim();
+
+      const month = shipDate.slice(0, 7);
+      if (!byMonth[month]) byMonth[month] = [];
+      byMonth[month].push({
+        shipDate,
+        orderId,
+        sku: '',     // export doesn't provide line-item breakdown
+        qty,
+        cost,
+        carrier: carrier || undefined,
+        service: service || undefined
+      });
+    }
+
+    // Same "skip month if API rows present" rule as migrate-from-sheets.
+    // API rows have a non-empty sku; CSV-uploaded rows leave it blank.
+    const index = (await kv.get('shipping:index')) || [];
+    let writtenRows = 0;
+    const writtenMonths = [];
+    const skippedMonths = [];
+    for (const [month, rows] of Object.entries(byMonth)) {
+      const existing = await kv.get(`shipping:raw:${month}`);
+      const existingRows = (existing && Array.isArray(existing.rows)) ? existing.rows : [];
+      if (existingRows.some(rw => rw && rw.sku)) {
+        skippedMonths.push(month);
+        continue;
+      }
+      await kv.set(`shipping:raw:${month}`, { rows });
+      writtenRows += rows.length;
+      writtenMonths.push(month);
+      if (!index.includes(month)) index.push(month);
+    }
+    index.sort();
+    await kv.set('shipping:index', index);
+
+    return res.status(200).json({
+      success: true,
+      writtenMonths: writtenMonths.sort(),
+      writtenRows,
+      skippedMonths,
+      skippedNoDate,
+      skippedNoCost,
+      skippedFree,
+      message: `Uploaded ${writtenRows} shipments across ${writtenMonths.length} months${skippedMonths.length ? `; skipped ${skippedMonths.length} months with API data already present` : ''}.`
+    });
+  } catch (error) {
+    console.error('[SHIPPING UPLOAD-YEARLY] Error:', error);
+    return res.status(500).json({ error: 'Upload failed: ' + error.message });
+  }
+}
+
+// Accept Excel serial dates ("45628") or parseable strings ("2024-12-28",
+// "Dec 28, 2024"). Returns YYYY-MM-DD or null. Excel's 1900-leap-year
+// bug means serials > 59 need a -1 adjustment (Excel thinks Feb 29 1900
+// exists; it doesn't).
+function _shippingParseDateServer(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const s = String(v).trim();
+  // Excel serial — purely numeric (allow decimals for time-of-day; we
+  // truncate). Decimals up to ~7 places appear in the user's
+  // ShipStation export.
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const serial = Math.floor(parseFloat(s));
+    if (serial > 0 && serial < 100000) {
+      const adjusted = serial > 59 ? serial - 1 : serial;
+      const epoch = Date.UTC(1899, 11, 31);
+      const ms = epoch + adjusted * 86400000;
+      const d = new Date(ms);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${dd}`;
+    }
+  }
+  // Already ISO-shaped.
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // "Dec 28, 2024" style.
+  const m = s.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+  if (m) {
+    const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+                     jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+    const mm = months[m[1].toLowerCase().substring(0, 3)];
+    if (mm) return `${m[3]}-${mm}-${m[2].padStart(2, '0')}`;
+  }
+  // "MM/DD/YYYY" style.
+  const m2 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m2) {
+    return `${m2[3]}-${m2[1].padStart(2, '0')}-${m2[2].padStart(2, '0')}`;
+  }
+  return null;
 }
 
 // ─── DELETE SHEETS-ONLY ROWS (same cleanup helper as adspend) ────────────────

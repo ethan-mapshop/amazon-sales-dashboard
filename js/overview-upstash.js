@@ -523,6 +523,12 @@
 
       return {
         transactions: tx.transactions || [],
+        // CSV-uploaded rows for older years (e.g. 2024 backfill). Already
+        // in the derived `_v2024BlankRow` shape — _deriveV2024Rows skips
+        // them; the compute pipeline concatenates them with the derived
+        // rows before _buildStatement runs. See handleUploadYearlyCsv in
+        // api/transactions.js for the row shape and bucket-mapping rules.
+        importedRows: Array.isArray(tx.importedRows) ? tx.importedRows : [],
         products,
         brandToSkus,
         spAdRows: spAd.rows || [],
@@ -544,8 +550,17 @@
     async function _computeV2024Period(startDate, endDate) {
       const inputs = await _fetchV2024Inputs(startDate, endDate);
       const feeMappings = inputs.feeMappings || {};
-      const { rows, unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped } =
+      const { rows: derivedRows, unmappedBreakdowns, dedupSkipped, transferSkipped, outOfWindowSkipped } =
         _deriveV2024Rows(inputs.transactions, startDate, endDate, feeMappings);
+      // Concat CSV-imported rows that fall in the period. They're already
+      // in the derived shape, so they bypass _deriveV2024Rows entirely.
+      // _buildStatement and _buildSkuSales treat them identically to live
+      // SP-API-derived rows.
+      const importedInRange = (inputs.importedRows || []).filter(r => {
+        const d = r && r.date;
+        return d && d >= startDate && d <= endDate;
+      });
+      const rows = derivedRows.concat(importedInRange);
 
       const skuSales = _buildSkuSales(rows, inputs.products);
       const adSpend = _allocateAdSpend({
@@ -850,9 +865,16 @@
         const inputs = await _fetchV2024Inputs(fullStart, fullEnd);
 
         const monthlyData = months.map(m => {
-          const { rows } = _deriveV2024Rows(
+          const { rows: derivedRows } = _deriveV2024Rows(
             inputs.transactions, m.startDate, m.endDate, inputs.feeMappings || {}
           );
+          // Same imported-row merge as _computeV2024Period — scoped to
+          // this month so the per-month bars include CSV-uploaded data.
+          const importedInRange = (inputs.importedRows || []).filter(r => {
+            const d = r && r.date;
+            return d && d >= m.startDate && d <= m.endDate;
+          });
+          const rows = derivedRows.concat(importedInRange);
           const skuSales = _buildSkuSales(rows, inputs.products);
           const adSpend = _allocateAdSpend({
             spAdRows: inputs.spAdRows,
@@ -1198,9 +1220,16 @@
       if (!accessToken) throw new Error('Please sign in first');
 
       const inputs = await _fetchV2024Inputs(startDate, endDate);
-      const { rows } = _deriveV2024Rows(
+      const { rows: derivedRows } = _deriveV2024Rows(
         inputs.transactions, startDate, endDate, inputs.feeMappings || {}
       );
+      // Merge in CSV-uploaded rows for the period so the Brand & Product
+      // breakdown reflects 2024 backfilled data identically to live months.
+      const importedInRange = (inputs.importedRows || []).filter(r => {
+        const d = r && r.date;
+        return d && d >= startDate && d <= endDate;
+      });
+      const rows = derivedRows.concat(importedInRange);
 
       // Build per-SKU lookups from the products catalog. Brands list
       // honors the brandFilter; "all" lets every brand through.

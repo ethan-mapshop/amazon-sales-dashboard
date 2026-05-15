@@ -53,6 +53,7 @@ export default async function handler(req, res) {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
     if (action === 'dedupe-sheets-vs-api')    return handleDedupeSheetsVsApi(req, res);
     if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
+    if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -418,6 +419,118 @@ async function handleMigrateFromSheets(req, res) {
     console.error('[ADSPEND MIGRATE] Error:', error);
     return res.status(500).json({ error: 'Migrate failed: ' + error.message });
   }
+}
+
+// ─── UPLOAD YEARLY CSV (Amazon Ads Sponsored Products Report) ───────────────
+//
+// Client-parsed Amazon Ads "Sponsored Products Campaign Performance" CSV
+// posted as JSON rows. Same destination as handleMigrateFromSheets — the
+// `adspend:sp:raw:YYYY-MM` bucket — but data comes from a file upload
+// instead of a Google Sheets tab. The row shape we write is the same
+// historical/Sheets shape ({ date, campaign, cost }, no SKU) which means
+// allocation falls back to the campaign→SKU mapping table on the client.
+//
+// Body: { type: 'sp' | 'sb', rows: [{Date|date, "Campaign Name"|campaign,
+// Spend|spend|cost}, ...] }. We accept either the raw CSV column casing
+// or already-normalized lowercase keys; that way the client doesn't have
+// to know which format the API expects.
+async function handleUploadYearlyCsv(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const type = String(req.body?.type || '').toLowerCase();
+    if (!['sp', 'sb'].includes(type)) {
+      return res.status(400).json({ error: 'type must be "sp" or "sb"' });
+    }
+    const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rawRows) return res.status(400).json({ error: 'rows array required in body' });
+
+    // Reuse the same casing-tolerant lookup pattern as the transactions
+    // upload — pull the three fields we care about and ignore the rest.
+    const pick = (obj, ...keys) => {
+      for (const k of keys) if (obj[k] !== undefined) return obj[k];
+      const lower = {};
+      for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
+      for (const k of keys) {
+        const v = lower[k.toLowerCase()];
+        if (v !== undefined) return v;
+      }
+      return undefined;
+    };
+
+    const byMonth = {};
+    let skippedNoDate = 0;
+    let skippedNoCost = 0;
+    for (const r of rawRows) {
+      if (!r || typeof r !== 'object') continue;
+      let date = String(pick(r, 'date', 'Date') || '').trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        // Tolerate the raw "Jan 01, 2024" form if the client didn't pre-
+        // parse it (Amazon Ads exports it that way).
+        const parsed = _adspendParseDateServer(date);
+        if (parsed) date = parsed;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skippedNoDate++; continue; }
+      const campaign = String(pick(r, 'campaign', 'Campaign Name', 'campaign name') || '').trim();
+      const costRaw = pick(r, 'cost', 'spend', 'Spend');
+      const cost = parseFloat(String(costRaw ?? '').replace(/[$,]/g, ''));
+      if (!campaign || !Number.isFinite(cost)) { skippedNoCost++; continue; }
+
+      const month = date.slice(0, 7);
+      if (!byMonth[month]) byMonth[month] = [];
+      byMonth[month].push({ date, campaign, cost });
+    }
+
+    // Same "skip if API rows present" rule as migrate-from-sheets. API
+    // rows are detected by the presence of a `sku` field on at least one
+    // row — historical/Sheets/upload rows never set sku, so this check
+    // cleanly separates the two sources.
+    const index = (await kv.get(`adspend:${type}:index`)) || [];
+    let writtenRows = 0;
+    const writtenMonths = [];
+    const skippedMonths = [];
+    for (const [month, rows] of Object.entries(byMonth)) {
+      const existing = await kv.get(`adspend:${type}:raw:${month}`);
+      const existingRows = (existing && Array.isArray(existing.rows)) ? existing.rows : [];
+      const apiRowsPresent = existingRows.some(rw => rw && rw.sku);
+      if (apiRowsPresent) {
+        skippedMonths.push(month);
+        continue;
+      }
+      await kv.set(`adspend:${type}:raw:${month}`, { rows: dedupeRows(rows) });
+      writtenRows += rows.length;
+      writtenMonths.push(month);
+      if (!index.includes(month)) index.push(month);
+    }
+    index.sort();
+    await kv.set(`adspend:${type}:index`, index);
+
+    return res.status(200).json({
+      success: true,
+      type,
+      writtenMonths: writtenMonths.sort(),
+      writtenRows,
+      skippedMonths,
+      skippedNoDate,
+      skippedNoCost,
+      message: `Uploaded ${writtenRows} ${type.toUpperCase()} rows across ${writtenMonths.length} months${skippedMonths.length ? `; skipped ${skippedMonths.length} months with API data already present` : ''}.`
+    });
+  } catch (error) {
+    console.error('[ADSPEND UPLOAD-YEARLY] Error:', error);
+    return res.status(500).json({ error: 'Upload failed: ' + error.message });
+  }
+}
+
+function _adspendParseDateServer(s) {
+  if (!s) return null;
+  const m = String(s).match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+  if (!m) return null;
+  const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+                   jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+  const mm = months[m[1].toLowerCase().substring(0, 3)];
+  if (!mm) return null;
+  return `${m[3]}-${mm}-${m[2].padStart(2, '0')}`;
 }
 
 // ─── DELETE SHEETS-MIGRATED ROWS ─────────────────────────────────────────────

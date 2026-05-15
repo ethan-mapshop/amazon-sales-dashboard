@@ -187,7 +187,7 @@
             const normalized = {};
             Object.keys(row).forEach(key => {
               let value = row[key];
-              
+
               // Convert dates based on report type
               if (type === 'transactions' && key === 'date/time') {
                 value = parseAmazonDate(value) || value;
@@ -196,7 +196,21 @@
               } else if ((type === 'productads' || type === 'brandads') && key === 'Date') {
                 value = excelSerialToISODate(value) || value;
               }
-              
+              // Yearly backfill types — pre-parse dates client-side so the
+              // server gets ISO strings (the server falls back to its own
+              // parser, but client-side parsing is cheaper for files that
+              // may contain tens of thousands of rows). For the Amazon
+              // Ads SP report the date often arrives as an Excel serial
+              // when the file is XLSX, or as "Jan 01, 2024" when it's
+              // CSV — handle both.
+              else if (type === 'transactionsyearly' && key === 'date/time') {
+                value = parseAmazonDate(value) || value;
+              } else if (type === 'spadspendyearly' && key === 'Date') {
+                value = excelSerialToISODate(value) || parseAmazonDate(value) || value;
+              } else if (type === 'shippingyearly' && key === 'ShipDate') {
+                value = excelSerialToISODate(value) || value;
+              }
+
               normalized[key] = value;
             });
             return normalized;
@@ -269,11 +283,14 @@
       const data = uploadedData[type];
 
       if (!data || !accessToken) return;
-      // Three remaining upload types — all Upstash-backed. Transactions,
-      // shipping, and ad spend used to flow through here too but moved
-      // to API-driven syncs (SP-API, ShipStation, Amazon Ads) running
-      // on the monthly cron.
-      if (!['products', 'productadmapping', 'brandadmapping'].includes(type)) return;
+      // Recognized upload types. The first three are the regular
+      // user-edited datasets (products + ad-mappings). The three
+      // *yearly types are one-off backfill paths for historical years
+      // older than the SP-API's ~23-month listTransactions window —
+      // they land in parallel KV namespaces that the Overview's read
+      // path merges with live SP-API data.
+      if (!['products', 'productadmapping', 'brandadmapping',
+            'transactionsyearly', 'spadspendyearly', 'shippingyearly'].includes(type)) return;
 
       const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
@@ -304,6 +321,86 @@
         } finally {
           btn.disabled = false;
           btn.innerHTML = 'Process';
+        }
+        return;
+      }
+
+      // Yearly backfill uploads — three thin POSTs, one per data source.
+      // Each endpoint handles its own column mapping and writes to its
+      // own KV namespace. We share the same processUpload flow because
+      // the parsing/preview UX is identical to the other upload tabs.
+      if (type === 'transactionsyearly' || type === 'spadspendyearly' || type === 'shippingyearly') {
+        const endpoint =
+          type === 'transactionsyearly' ? '/api/transactions?action=upload-yearly-csv' :
+          type === 'spadspendyearly'    ? '/api/adspend?action=upload-yearly-csv'      :
+                                          '/api/shipping?action=upload-yearly-csv';
+        // Filter to just the columns the server cares about. Vercel
+        // Hobby serverless POST bodies cap at 4.5 MB; the raw CSVs
+        // (especially the Amazon Ads SP report at ~7.5 MB) would blow
+        // through that as JSON if we forwarded every column. The lists
+        // below mirror the keys each upload endpoint reads (see
+        // handleUploadYearlyCsv in api/transactions.js, api/adspend.js,
+        // api/shipping.js). Extra fields would just be ignored on the
+        // server but the bandwidth waste is real.
+        const COLS = {
+          transactionsyearly: [
+            'date/time', 'type', 'order id', 'sku', 'description', 'quantity',
+            'fulfillment',
+            'product sales', 'shipping credits', 'gift wrap credits',
+            'Regulatory Fee', 'promotional rebates',
+            'selling fees', 'fba fees', 'other transaction fees', 'other'
+          ],
+          spadspendyearly: ['Date', 'Campaign Name', 'Spend'],
+          shippingyearly: [
+            // CarrierFee = what we paid the carrier (FBM Shipping Costs).
+            // ShippingPaid = what the buyer paid Amazon (Prime = $0),
+            // irrelevant to seller P&L — don't ship it.
+            'ShipDate', 'OrderNumber', 'CarrierFee', 'Items',
+            'Carrier', 'ServiceCode'
+          ]
+        };
+        const keep = COLS[type];
+        const slimRows = data.map(r => {
+          const out = {};
+          for (const k of keep) if (r[k] !== undefined) out[k] = r[k];
+          return out;
+        });
+        // SP report → type=sp on the adspend endpoint (the body shape
+        // accepts both 'sp' and 'sb', but only SP is hooked to a UI
+        // upload here — Sponsored Brands stays Sheets-only for now).
+        const body = type === 'spadspendyearly'
+          ? { type: 'sp', rows: slimRows }
+          : { rows: slimRows };
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          });
+          const result = await res.json();
+          if (!res.ok || !result.success) {
+            throw new Error(result.error || `Upload failed (${res.status})`);
+          }
+          // Result fields differ slightly between the three endpoints —
+          // show whichever counts the API surfaced.
+          const months = result.months || result.writtenMonths || [];
+          const skipped = result.skippedMonths || [];
+          const rowCount = result.totalRows ?? result.writtenRows ?? data.length;
+          const skipNote = skipped.length
+            ? ` (skipped ${skipped.length} month${skipped.length === 1 ? '' : 's'} with existing data: ${skipped.join(', ')})`
+            : '';
+          showStatus(type, 'success',
+            `✓ Uploaded ${rowCount} rows across ${months.length} months${skipNote}`
+          );
+        } catch (err) {
+          console.error(`${type} upload failed:`, err);
+          showStatus(type, 'error', `✗ ${err.message}`);
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = 'Process & Upload';
         }
         return;
       }
