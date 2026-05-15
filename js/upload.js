@@ -365,43 +365,109 @@
           for (const k of keep) if (r[k] !== undefined) out[k] = r[k];
           return out;
         });
-        // SP report → type=sp on the adspend endpoint (the body shape
-        // accepts both 'sp' and 'sb', but only SP is hooked to a UI
-        // upload here — Sponsored Brands stays Sheets-only for now).
-        const body = type === 'spadspendyearly'
-          ? { type: 'sp', rows: slimRows }
-          : { rows: slimRows };
-        try {
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(body)
-          });
-          const result = await res.json();
-          if (!res.ok || !result.success) {
-            throw new Error(result.error || `Upload failed (${res.status})`);
-          }
-          // Result fields differ slightly between the three endpoints —
-          // show whichever counts the API surfaced.
-          const months = result.months || result.writtenMonths || [];
-          const skipped = result.skippedMonths || [];
-          const rowCount = result.totalRows ?? result.writtenRows ?? data.length;
-          const skipNote = skipped.length
-            ? ` (skipped ${skipped.length} month${skipped.length === 1 ? '' : 's'} with existing data: ${skipped.join(', ')})`
-            : '';
-          showStatus(type, 'success',
-            `✓ Uploaded ${rowCount} rows across ${months.length} months${skipNote}`
-          );
-        } catch (err) {
-          console.error(`${type} upload failed:`, err);
-          showStatus(type, 'error', `✗ ${err.message}`);
-        } finally {
+
+        // Vercel serverless POSTs cap at 4.5 MB. A year of transactions
+        // (~5000 rows × long product descriptions) blows past that even
+        // after column slimming. Solution: group rows by month on the
+        // client and POST one month at a time — each ~400 rows, well
+        // under the cap. The server endpoint already groups by month
+        // internally, so it doesn't care whether one call carries one
+        // month or twelve.
+        //
+        // dateKey is the column we read each row's calendar date from.
+        // It differs across the three uploads — see handleFile for
+        // where each is normalized to YYYY-MM-DD before this runs.
+        const dateKey =
+          type === 'transactionsyearly' ? 'date/time' :
+          type === 'spadspendyearly'    ? 'Date'      :
+                                          'ShipDate';
+        const byMonth = {};
+        let droppedNoDate = 0;
+        for (const row of slimRows) {
+          const date = String(row[dateKey] || '').slice(0, 10);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { droppedNoDate++; continue; }
+          const month = date.slice(0, 7);
+          if (!byMonth[month]) byMonth[month] = [];
+          byMonth[month].push(row);
+        }
+        const monthList = Object.keys(byMonth).sort();
+        if (monthList.length === 0) {
+          showStatus(type, 'error',
+            `✗ Couldn't parse a date from any row. Check that the file's date column matches "${dateKey}".`);
           btn.disabled = false;
           btn.innerHTML = 'Process & Upload';
+          return;
         }
+
+        // Aggregate results across the per-month POSTs so the final
+        // status message looks like the original single-shot version.
+        let aggRows = 0;
+        const aggMonths = [];
+        const aggSkipped = [];
+        let aggErr = null;
+
+        try {
+          for (let i = 0; i < monthList.length; i++) {
+            const m = monthList[i];
+            const body = type === 'spadspendyearly'
+              ? { type: 'sp', rows: byMonth[m] }
+              : { rows: byMonth[m] };
+            // Surface per-month progress so a 12-month transactions
+            // upload doesn't look frozen mid-loop.
+            btn.innerHTML = `Uploading ${m} (${i + 1}/${monthList.length})<span class="loading"></span>`;
+
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(body)
+            });
+            // Vercel's 413 responses are plain text ("Request Entity Too
+            // Large"), not JSON. res.json() would throw a confusing
+            // SyntaxError without context. Read as text first and only
+            // attempt JSON parse if it looks like JSON.
+            const text = await res.text();
+            let result;
+            try {
+              result = text ? JSON.parse(text) : {};
+            } catch {
+              throw new Error(
+                res.status === 413
+                  ? `Month ${m}: payload too large (${(JSON.stringify(body).length / 1024 / 1024).toFixed(1)} MB). Try a smaller chunk.`
+                  : `Month ${m}: server returned non-JSON (${res.status}): ${text.slice(0, 100)}`
+              );
+            }
+            if (!res.ok || !result.success) {
+              throw new Error(`Month ${m}: ${result.error || `failed (${res.status})`}`);
+            }
+            const monthsWritten = result.months || result.writtenMonths || [];
+            const skipped = result.skippedMonths || [];
+            for (const w of monthsWritten) if (!aggMonths.includes(w)) aggMonths.push(w);
+            for (const s of skipped) if (!aggSkipped.includes(s)) aggSkipped.push(s);
+            aggRows += (result.totalRows ?? result.writtenRows ?? 0);
+          }
+        } catch (err) {
+          aggErr = err;
+        }
+
+        if (aggErr) {
+          console.error(`${type} upload failed:`, aggErr);
+          showStatus(type, 'error', `✗ ${aggErr.message}`);
+        } else {
+          const skipNote = aggSkipped.length
+            ? ` (skipped ${aggSkipped.length} month${aggSkipped.length === 1 ? '' : 's'} with existing data: ${aggSkipped.join(', ')})`
+            : '';
+          const dateNote = droppedNoDate
+            ? `, dropped ${droppedNoDate} row${droppedNoDate === 1 ? '' : 's'} without a parseable date`
+            : '';
+          showStatus(type, 'success',
+            `✓ Uploaded ${aggRows} rows across ${aggMonths.length} months${skipNote}${dateNote}`
+          );
+        }
+        btn.disabled = false;
+        btn.innerHTML = 'Process & Upload';
         return;
       }
 
