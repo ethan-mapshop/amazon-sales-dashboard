@@ -1,8 +1,12 @@
 {
   "crons": [
     {
-      "path": "/api/orders?action=sync",
+      "path": "/api/orders?action=sync&days=14",
       "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/orders?action=sync-month",
+      "schedule": "0 14 5 * *"
     },
     {
       "path": "/api/sessions?action=sync",
@@ -26,6 +30,9 @@
     }
   ],
   "functions": {
+    "api/orders.js": {
+      "maxDuration": 300
+    },
     "api/transactions.js": {
       "maxDuration": 300
     }

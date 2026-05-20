@@ -18,6 +18,7 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     if (action === 'get')             return handleGet(req, res);
     if (action === 'sync')            return handleSync(req, res);
+    if (action === 'sync-month')      return handleSyncMonth(req, res);
     if (action === 'get-summary')     return handleGetSummary(req, res);
     if (action === 'rebuild-summary') return handleRebuildSummary(req, res);
   }
@@ -65,39 +66,136 @@ async function handleGet(req, res) {
 }
 
 // ─── SYNC ─────────────────────────────────────────────────────────────────────
-// Daily cron calls with no params → fetches yesterday.
-// Backfill calls with ?date=YYYY-MM-DD → fetches that specific day.
+// Two call patterns, chosen by query param:
+//   ?date=YYYY-MM-DD           — fetch exactly that day (manual backfill)
+//   ?days=N                    — fetch trailing N days [today-N .. yesterday]
+//   neither                    — defaults to days=1 (yesterday only)
+//
+// `date` wins if both are present (explicit single-day overrides window). The
+// daily cron now passes `&days=14` so each run re-fetches the last 2 weeks and
+// catches SP-API order data that has settled since the original sync (Pending
+// → Shipped transitions, returns, refunds). The dedup key in upsertOrdersToKV
+// (`${orderId}:${sku}`) makes re-fetching idempotent — a re-fetched order
+// just overwrites its previous record.
+//
+// The window also enables cancellation reconciliation: orders that were in KV
+// for dates in the window but no longer come back from SP-API (because they
+// were canceled) get evicted by upsertOrdersToKV. Without this, the trailing
+// window would leave zombie canceled orders inflating revenue.
 async function handleSync(req, res) {
   try {
-    let dateStr = req.query.date || null;
+    const dateParam = req.query.date || null;
+    const daysParam = req.query.days || null;
 
-    if (!dateStr) {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      dateStr = yesterday.toISOString().split('T')[0];
+    let windowStart;  // inclusive YYYY-MM-DD
+    let windowEnd;    // inclusive YYYY-MM-DD
+
+    if (dateParam) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+      }
+      windowStart = dateParam;
+      windowEnd = dateParam;
+    } else {
+      // Default 1 day (= yesterday). Clamp days to [1, 60] — bigger ranges
+      // belong on the monthly consolidation cron, which uses sync-month.
+      let n = parseInt(daysParam || '1', 10);
+      if (!Number.isFinite(n) || n < 1) n = 1;
+      if (n > 60) n = 60;
+
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const start = new Date(today);
+      start.setUTCDate(start.getUTCDate() - n);
+
+      windowStart = start.toISOString().slice(0, 10);
+      windowEnd = yesterday.toISOString().slice(0, 10);
     }
 
-    console.log(`[ORDERS SYNC] Starting sync for ${dateStr}`);
+    console.log(`[ORDERS SYNC] Starting sync for ${windowStart} → ${windowEnd}`);
 
-    const orders = await fetchOrdersForDateRange(dateStr, dateStr);
-    console.log(`[ORDERS SYNC] Fetched ${orders.length} line items for ${dateStr}`);
+    const orders = await fetchOrdersForDateRange(windowStart, windowEnd);
+    console.log(`[ORDERS SYNC] Fetched ${orders.length} line items for ${windowStart} → ${windowEnd}`);
 
-    await upsertOrdersToKV(orders);
+    await upsertOrdersToKV(orders, windowStart, windowEnd);
 
     // Rebuild summary cache in the background (fire and forget)
     rebuildSummaryCache().catch(e => console.warn('[SYNC] Summary rebuild failed:', e.message));
 
     return res.status(200).json({
       success: true,
-      date: dateStr,
+      startDate: windowStart,
+      endDate: windowEnd,
+      // Preserve the legacy field shape for runOrdersBackfill (single-day
+      // callers used to read `data.date` and `data.newRecords`). The new
+      // `date` field aliases startDate when start==end.
+      date: windowStart === windowEnd ? windowStart : undefined,
       newRecords: orders.length,
-      message: `Orders sync complete for ${dateStr}`
+      message: `Orders sync complete for ${windowStart} → ${windowEnd}`
     });
 
   } catch (error) {
     console.error('[ORDERS SYNC] Error:', error);
     return res.status(500).json({ success: false, error: 'Sync failed: ' + error.message });
   }
+}
+
+// ─── SYNC MONTH ──────────────────────────────────────────────────────────────
+// Monthly consolidation cron — re-fetches a whole calendar month and lets
+// upsertOrdersToKV reconcile (overwrites updated records, evicts canceled
+// ones). Defaults to the previous calendar month, which is what the cron
+// hits on the 5th of each following month.
+//
+// `?month=YYYY-MM` overrides the default for manual reruns.
+async function handleSyncMonth(req, res) {
+  try {
+    const month = req.query.month || previousMonthISO();
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'month must be YYYY-MM' });
+    }
+
+    const monthStart = `${month}-01`;
+    const monthEnd   = lastDayOfMonth(month);
+
+    console.log(`[ORDERS SYNC MONTH] Starting sync for ${month} (${monthStart} → ${monthEnd})`);
+
+    const orders = await fetchOrdersForDateRange(monthStart, monthEnd);
+    console.log(`[ORDERS SYNC MONTH] Fetched ${orders.length} line items for ${month}`);
+
+    await upsertOrdersToKV(orders, monthStart, monthEnd);
+    await kv.set(`orders:last-synced:${month}`, new Date().toISOString());
+
+    rebuildSummaryCache().catch(e => console.warn('[SYNC-MONTH] Summary rebuild failed:', e.message));
+
+    return res.status(200).json({
+      success: true,
+      month,
+      startDate: monthStart,
+      endDate: monthEnd,
+      newRecords: orders.length,
+      message: `Orders monthly consolidation complete for ${month}`
+    });
+  } catch (error) {
+    console.error('[ORDERS SYNC MONTH] Error:', error);
+    return res.status(500).json({ success: false, error: 'Sync failed: ' + error.message });
+  }
+}
+
+// Returns "YYYY-MM" for the calendar month preceding today (UTC).
+function previousMonthISO() {
+  const now = new Date();
+  const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// Returns "YYYY-MM-DD" for the last calendar day of the given YYYY-MM.
+// Day 0 of (month + 1) = last day of (month) — the JS Date trick that
+// handles 28/29/30/31-day months without a lookup table.
+function lastDayOfMonth(yyyymm) {
+  const [y, m] = yyyymm.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m, 0));
+  return d.toISOString().slice(0, 10);
 }
 
 // ─── GET SUMMARY ─────────────────────────────────────────────────────────────
@@ -212,7 +310,14 @@ async function fetchOrdersForDateRange(startDate, endDate) {
   return lineItems;
 }
 
-async function fetchOrderItems(sp, orderId) {
+// Retry on SP-API rate-limit (429 / QuotaExceeded). Without this, a
+// throttled getOrderItems silently dropped the order's items — meaning the
+// trailing-window re-fetch (14× more calls/run than the old yesterday-only
+// cron) would re-introduce the same silent data loss this plan is meant to
+// fix. Exponential backoff: 2s, 4s, 8s; 3 retries max before falling back
+// to the original silent-failure path (so a persistent outage doesn't kill
+// the whole sync, just the orders that won't respond).
+async function fetchOrderItems(sp, orderId, attempt = 0) {
   try {
     const response = await sp.callAPI({
       operation: 'getOrderItems',
@@ -221,13 +326,37 @@ async function fetchOrderItems(sp, orderId) {
     });
     return response.OrderItems || [];
   } catch (error) {
+    const is429 = error?.statusCode === 429
+                  || error?.code === 'QuotaExceeded'
+                  || /quota|throttl|too many|rate.?limit/i.test(error?.message || '');
+    if (is429 && attempt < 3) {
+      const wait = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s
+      console.warn(`[ORDERS] Throttled on ${orderId}, retry ${attempt + 1}/3 in ${wait}ms`);
+      await sleep(wait);
+      return fetchOrderItems(sp, orderId, attempt + 1);
+    }
     console.error(`Error fetching items for order ${orderId}:`, error);
     return [];
   }
 }
 
-async function upsertOrdersToKV(newOrders) {
-  if (newOrders.length === 0) return;
+// Writes newOrders to KV month-by-month, deduping by `${orderId}:${sku}` so
+// re-fetched orders overwrite their previous records. Optional window params
+// enable cancellation reconciliation: when handleSync / handleSyncMonth pass
+// `[windowStart, windowEnd]`, any KV record whose orderDate falls in that
+// window but whose orderId is missing from the new fetch is considered
+// canceled-since-original-sync and gets evicted. Without this, the daily
+// 14-day re-fetch would leave canceled orders in place as zombie revenue.
+//
+// `windowStart`/`windowEnd` are optional — when omitted (no current caller,
+// kept for forward-compatibility), the function preserves its pre-change
+// add-only behavior. handleSync and handleSyncMonth always supply them.
+async function upsertOrdersToKV(newOrders, windowStart, windowEnd) {
+  // When a window was supplied we still need to run the reconciliation
+  // pass even if zero new orders came back — the empty result is itself
+  // a signal that everything in that window was canceled. Skip only if
+  // the caller didn't provide a window AND there's nothing to write.
+  if (newOrders.length === 0 && !windowStart) return;
 
   const byMonth = {};
   for (const order of newOrders) {
@@ -236,18 +365,61 @@ async function upsertOrdersToKV(newOrders) {
     byMonth[month].push(order);
   }
 
+  // When reconciling we also need to touch any month that the window
+  // straddles, even if zero new orders for that month came back. Add
+  // those months to the work list with an empty bucket — the eviction
+  // pass below handles them.
+  if (windowStart && windowEnd) {
+    const ws = windowStart.slice(0, 7);
+    const we = windowEnd.slice(0, 7);
+    // Most windows span 1–2 months; this loop runs at most ~3× even
+    // for the monthly cron (Feb has 28–29 days, etc.).
+    let cur = ws;
+    while (cur <= we) {
+      if (!byMonth[cur]) byMonth[cur] = [];
+      // Increment to next month (string math via Date to keep edge
+      // cases — Dec→Jan, leap years — out of this code).
+      const [y, m] = cur.split('-').map(Number);
+      const next = new Date(Date.UTC(y, m, 1));
+      cur = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+  }
+
   const index = await kv.get('orders:index') || [];
   const updatedIndex = [...new Set([...index, ...Object.keys(byMonth)])].sort();
   await kv.set('orders:index', updatedIndex);
+
+  const fetchedOrderIds = (windowStart && windowEnd)
+    ? new Set(newOrders.map(o => o.orderId))
+    : null;
 
   for (const [month, orders] of Object.entries(byMonth)) {
     const existing = await kv.get(`orders:${month}`) || [];
     const dedupeMap = {};
     for (const o of existing) dedupeMap[`${o.orderId}:${o.sku}`] = o;
     for (const o of orders) dedupeMap[`${o.orderId}:${o.sku}`] = o;
+
+    // Cancellation reconciliation: drop KV records whose orderDate is
+    // inside the re-fetched window but whose orderId is not in the new
+    // result set. fetchOrdersForDateRange already filters out Canceled
+    // orders (`api/orders.js` activeOrders filter), so a missing orderId
+    // means "canceled or otherwise disappeared on Amazon's side".
+    let evictedCount = 0;
+    if (fetchedOrderIds) {
+      for (const key of Object.keys(dedupeMap)) {
+        const o = dedupeMap[key];
+        if (o.orderDate >= windowStart && o.orderDate <= windowEnd
+            && !fetchedOrderIds.has(o.orderId)) {
+          delete dedupeMap[key];
+          evictedCount++;
+        }
+      }
+    }
+
     const merged = Object.values(dedupeMap).sort((a, b) => a.orderDate.localeCompare(b.orderDate));
     await kv.set(`orders:${month}`, merged);
-    console.log(`[ORDERS] Saved ${merged.length} records for ${month}`);
+    const evictedNote = evictedCount > 0 ? ` (evicted ${evictedCount} canceled)` : '';
+    console.log(`[ORDERS] Saved ${merged.length} records for ${month}${evictedNote}`);
   }
 }
 
