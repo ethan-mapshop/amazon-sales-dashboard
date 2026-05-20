@@ -5,10 +5,6 @@
       "schedule": "0 10 * * *"
     },
     {
-      "path": "/api/orders?action=sync-month",
-      "schedule": "0 14 5 * *"
-    },
-    {
       "path": "/api/sessions?action=sync",
       "schedule": "0 11 * * *"
     },

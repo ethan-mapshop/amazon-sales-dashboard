@@ -18,7 +18,6 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     if (action === 'get')             return handleGet(req, res);
     if (action === 'sync')            return handleSync(req, res);
-    if (action === 'sync-month')      return handleSyncMonth(req, res);
     if (action === 'get-summary')     return handleGetSummary(req, res);
     if (action === 'rebuild-summary') return handleRebuildSummary(req, res);
   }
@@ -97,8 +96,9 @@ async function handleSync(req, res) {
       windowStart = dateParam;
       windowEnd = dateParam;
     } else {
-      // Default 1 day (= yesterday). Clamp days to [1, 60] — bigger ranges
-      // belong on the monthly consolidation cron, which uses sync-month.
+      // Default 1 day (= yesterday). Clamp days to [1, 60] — anything
+      // larger doesn't make sense for "trailing window" semantics and
+      // risks pushing wall time toward the 300s function timeout.
       let n = parseInt(daysParam || '1', 10);
       if (!Number.isFinite(n) || n < 1) n = 1;
       if (n > 60) n = 60;
@@ -141,62 +141,6 @@ async function handleSync(req, res) {
   }
 }
 
-// ─── SYNC MONTH ──────────────────────────────────────────────────────────────
-// Monthly consolidation cron — re-fetches a whole calendar month and lets
-// upsertOrdersToKV reconcile (overwrites updated records, evicts canceled
-// ones). Defaults to the previous calendar month, which is what the cron
-// hits on the 5th of each following month.
-//
-// `?month=YYYY-MM` overrides the default for manual reruns.
-async function handleSyncMonth(req, res) {
-  try {
-    const month = req.query.month || previousMonthISO();
-    if (!/^\d{4}-\d{2}$/.test(month)) {
-      return res.status(400).json({ error: 'month must be YYYY-MM' });
-    }
-
-    const monthStart = `${month}-01`;
-    const monthEnd   = lastDayOfMonth(month);
-
-    console.log(`[ORDERS SYNC MONTH] Starting sync for ${month} (${monthStart} → ${monthEnd})`);
-
-    const orders = await fetchOrdersForDateRange(monthStart, monthEnd);
-    console.log(`[ORDERS SYNC MONTH] Fetched ${orders.length} line items for ${month}`);
-
-    await upsertOrdersToKV(orders, monthStart, monthEnd);
-    await kv.set(`orders:last-synced:${month}`, new Date().toISOString());
-
-    rebuildSummaryCache().catch(e => console.warn('[SYNC-MONTH] Summary rebuild failed:', e.message));
-
-    return res.status(200).json({
-      success: true,
-      month,
-      startDate: monthStart,
-      endDate: monthEnd,
-      newRecords: orders.length,
-      message: `Orders monthly consolidation complete for ${month}`
-    });
-  } catch (error) {
-    console.error('[ORDERS SYNC MONTH] Error:', error);
-    return res.status(500).json({ success: false, error: 'Sync failed: ' + error.message });
-  }
-}
-
-// Returns "YYYY-MM" for the calendar month preceding today (UTC).
-function previousMonthISO() {
-  const now = new Date();
-  const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-// Returns "YYYY-MM-DD" for the last calendar day of the given YYYY-MM.
-// Day 0 of (month + 1) = last day of (month) — the JS Date trick that
-// handles 28/29/30/31-day months without a lookup table.
-function lastDayOfMonth(yyyymm) {
-  const [y, m] = yyyymm.split('-').map(Number);
-  const d = new Date(Date.UTC(y, m, 0));
-  return d.toISOString().slice(0, 10);
-}
 
 // ─── GET SUMMARY ─────────────────────────────────────────────────────────────
 // Returns pre-aggregated monthly summary from cache. Fast single KV read.
@@ -342,7 +286,7 @@ async function fetchOrderItems(sp, orderId, attempt = 0) {
 
 // Writes newOrders to KV month-by-month, deduping by `${orderId}:${sku}` so
 // re-fetched orders overwrite their previous records. Optional window params
-// enable cancellation reconciliation: when handleSync / handleSyncMonth pass
+// enable cancellation reconciliation: when handleSync passes
 // `[windowStart, windowEnd]`, any KV record whose orderDate falls in that
 // window but whose orderId is missing from the new fetch is considered
 // canceled-since-original-sync and gets evicted. Without this, the daily
@@ -350,7 +294,7 @@ async function fetchOrderItems(sp, orderId, attempt = 0) {
 //
 // `windowStart`/`windowEnd` are optional — when omitted (no current caller,
 // kept for forward-compatibility), the function preserves its pre-change
-// add-only behavior. handleSync and handleSyncMonth always supply them.
+// add-only behavior. handleSync always supplies them.
 async function upsertOrdersToKV(newOrders, windowStart, windowEnd) {
   // When a window was supplied we still need to run the reconciliation
   // pass even if zero new orders came back — the empty result is itself
