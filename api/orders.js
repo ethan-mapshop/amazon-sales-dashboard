@@ -115,10 +115,10 @@ async function handleSync(req, res) {
 
     console.log(`[ORDERS SYNC] Starting sync for ${windowStart} → ${windowEnd}`);
 
-    const orders = await fetchOrdersForDateRange(windowStart, windowEnd);
-    console.log(`[ORDERS SYNC] Fetched ${orders.length} line items for ${windowStart} → ${windowEnd}`);
+    const { lineItems, seenOrderIds } = await fetchOrdersForDateRange(windowStart, windowEnd);
+    console.log(`[ORDERS SYNC] Captured ${lineItems.length} new line items across ${seenOrderIds.size} orders for ${windowStart} → ${windowEnd}`);
 
-    await upsertOrdersToKV(orders, windowStart, windowEnd);
+    await upsertOrdersToKV(lineItems, seenOrderIds, windowStart, windowEnd);
 
     // Rebuild summary cache in the background (fire and forget)
     rebuildSummaryCache().catch(e => console.warn('[SYNC] Summary rebuild failed:', e.message));
@@ -131,7 +131,8 @@ async function handleSync(req, res) {
       // callers used to read `data.date` and `data.newRecords`). The new
       // `date` field aliases startDate when start==end.
       date: windowStart === windowEnd ? windowStart : undefined,
-      newRecords: orders.length,
+      newRecords: lineItems.length,
+      ordersSeen: seenOrderIds.size,
       message: `Orders sync complete for ${windowStart} → ${windowEnd}`
     });
 
@@ -207,13 +208,42 @@ function createSellingPartner() {
   });
 }
 
+// Returns { lineItems, seenOrderIds }.
+//
+// `lineItems` are the per-SKU rows for orders newly captured during this
+// run. `seenOrderIds` is every order ID returned by SP-API's getOrders in
+// the window (whether or not we re-fetched its items) — needed by
+// upsertOrdersToKV's cancellation-reconciliation pass to tell "this order
+// still exists" apart from "this order was canceled and should be evicted".
+//
+// Why we skip getOrderItems for orders we already have:
+//   - getOrderItems is the slow part (200ms sleep + 200–500ms network per
+//     call). On a 14-day window with hundreds of orders, calling it for
+//     every order pushes wall time past Vercel's 300s function timeout
+//     — that's the bug we're fixing here.
+//   - Once an order has any line items in KV, its existence is captured.
+//     The bug that justified the trailing window was orders silently
+//     missing because getOrderItems returned empty while they were
+//     Pending. Re-checking an order whose items are already in KV adds
+//     no information (orders' line items don't materially change after
+//     they leave Pending; quantity drift after first capture is rare
+//     enough that the user can manually backfill if they spot it).
+//
+// Trade-off: line-item-level value updates (e.g. quantity change on a B2B
+// order after partial cancellation) won't propagate after first capture.
+// For Sales & Volume (order existence + initial captured volume), this
+// is acceptable. Profitability uses a different data pipeline entirely
+// and is unaffected.
 async function fetchOrdersForDateRange(startDate, endDate) {
   const sp = createSellingPartner();
   const marketplaceId = process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
 
-  const lineItems = [];
+  // Pass 1: pull every order header in the window from getOrders. This is
+  // the cheap part — paginated, no per-order API call. We need the full
+  // list before we can decide which ones to re-fetch items for, since the
+  // "already have items?" check is keyed on orderId.
+  const allOrders = []; // [{ AmazonOrderId, PurchaseDate, FulfillmentChannel }]
   let nextToken = null;
-
   do {
     const query = {
       MarketplaceIds: marketplaceId,
@@ -231,27 +261,64 @@ async function fetchOrdersForDateRange(startDate, endDate) {
     const orders = response.Orders || [];
     nextToken = response.NextToken || null;
 
-    const activeOrders = orders.filter(o => o.OrderStatus !== 'Canceled');
-
-    for (const order of activeOrders) {
-      const items = await fetchOrderItems(sp, order.AmazonOrderId);
-      for (const item of items) {
-        lineItems.push({
-          orderDate: order.PurchaseDate.split('T')[0],
-          orderId: order.AmazonOrderId,
-          sku: item.SellerSKU,
-          asin: item.ASIN,
-          quantity: parseInt(item.QuantityOrdered) || 0,
-          itemTotal: parseFloat(item.ItemPrice?.Amount || 0),
-          fulfillmentChannel: order.FulfillmentChannel // AFN = FBA, MFN = Seller
-        });
-      }
-      await sleep(200);
+    // Filter Canceled here so they don't enter seenOrderIds either — the
+    // reconciliation pass in upsertOrdersToKV then correctly evicts them
+    // from KV (any prior captured record without a matching seenOrderId
+    // in the window is treated as canceled).
+    for (const o of orders) {
+      if (o.OrderStatus !== 'Canceled') allOrders.push(o);
     }
-
   } while (nextToken);
 
-  return lineItems;
+  const seenOrderIds = new Set(allOrders.map(o => o.AmazonOrderId));
+
+  // Pass 2: build the set of orderIds we already have line items for in
+  // KV. Read every month bucket the window could touch (almost always 1
+  // or 2). The Set lets us skip getOrderItems for orders that are
+  // already fully captured.
+  const monthsInWindow = new Set();
+  for (const o of allOrders) {
+    const month = o.PurchaseDate.slice(0, 7);
+    monthsInWindow.add(month);
+  }
+  const existingOrderIds = new Set();
+  for (const month of monthsInWindow) {
+    const bucket = (await kv.get(`orders:${month}`)) || [];
+    for (const row of bucket) {
+      if (row && row.orderId) existingOrderIds.add(row.orderId);
+    }
+  }
+
+  // Pass 3: fetch items only for orders we don't already have. Sleeps and
+  // throttle retries scale with new-orders count, not total-orders count
+  // — so a 14-day window with mostly-already-captured orders runs in
+  // seconds instead of minutes.
+  const lineItems = [];
+  let fetchedCount = 0;
+  let skippedCount = 0;
+  for (const order of allOrders) {
+    if (existingOrderIds.has(order.AmazonOrderId)) {
+      skippedCount++;
+      continue;
+    }
+    fetchedCount++;
+    const items = await fetchOrderItems(sp, order.AmazonOrderId);
+    for (const item of items) {
+      lineItems.push({
+        orderDate: order.PurchaseDate.split('T')[0],
+        orderId: order.AmazonOrderId,
+        sku: item.SellerSKU,
+        asin: item.ASIN,
+        quantity: parseInt(item.QuantityOrdered) || 0,
+        itemTotal: parseFloat(item.ItemPrice?.Amount || 0),
+        fulfillmentChannel: order.FulfillmentChannel // AFN = FBA, MFN = Seller
+      });
+    }
+    await sleep(200);
+  }
+  console.log(`[ORDERS] Items pass: fetched=${fetchedCount} skipped-already-captured=${skippedCount} (${allOrders.length} orders in window)`);
+
+  return { lineItems, seenOrderIds };
 }
 
 // Retry on SP-API rate-limit (429 / QuotaExceeded). Without this, a
@@ -284,26 +351,32 @@ async function fetchOrderItems(sp, orderId, attempt = 0) {
   }
 }
 
-// Writes newOrders to KV month-by-month, deduping by `${orderId}:${sku}` so
-// re-fetched orders overwrite their previous records. Optional window params
-// enable cancellation reconciliation: when handleSync passes
-// `[windowStart, windowEnd]`, any KV record whose orderDate falls in that
-// window but whose orderId is missing from the new fetch is considered
-// canceled-since-original-sync and gets evicted. Without this, the daily
-// 14-day re-fetch would leave canceled orders in place as zombie revenue.
+// Writes newLineItems to KV month-by-month, deduping by `${orderId}:${sku}`.
+// `seenOrderIds` is the set of every active order ID returned by getOrders
+// for the window (NOT just orders whose items were re-fetched this run —
+// fetchOrdersForDateRange now skips re-fetching items for orders already
+// captured, so newLineItems alone is no longer a complete view of "which
+// orders exist for this window"). seenOrderIds is what cancellation
+// reconciliation uses to tell "still on Amazon" apart from "canceled".
 //
-// `windowStart`/`windowEnd` are optional — when omitted (no current caller,
-// kept for forward-compatibility), the function preserves its pre-change
-// add-only behavior. handleSync always supplies them.
-async function upsertOrdersToKV(newOrders, windowStart, windowEnd) {
-  // When a window was supplied we still need to run the reconciliation
-  // pass even if zero new orders came back — the empty result is itself
-  // a signal that everything in that window was canceled. Skip only if
-  // the caller didn't provide a window AND there's nothing to write.
-  if (newOrders.length === 0 && !windowStart) return;
+// When a window is provided, any KV record whose orderDate falls in
+// `[windowStart, windowEnd]` AND whose orderId is missing from
+// seenOrderIds is considered canceled-since-original-sync and gets
+// evicted. Without this, the trailing window would leave canceled
+// orders in place as zombie revenue.
+//
+// `seenOrderIds`/`windowStart`/`windowEnd` are optional — when omitted
+// (no current caller, kept for forward-compatibility), the function
+// preserves its pre-change add-only behavior.
+async function upsertOrdersToKV(newLineItems, seenOrderIds, windowStart, windowEnd) {
+  // Skip only if there's nothing to write AND no reconciliation work
+  // (no window means no eviction pass). When a window IS supplied, even
+  // an empty newLineItems still triggers the per-month read so eviction
+  // can run.
+  if (newLineItems.length === 0 && !windowStart) return;
 
   const byMonth = {};
-  for (const order of newOrders) {
+  for (const order of newLineItems) {
     const month = order.orderDate.slice(0, 7);
     if (!byMonth[month]) byMonth[month] = [];
     byMonth[month].push(order);
@@ -317,7 +390,7 @@ async function upsertOrdersToKV(newOrders, windowStart, windowEnd) {
     const ws = windowStart.slice(0, 7);
     const we = windowEnd.slice(0, 7);
     // Most windows span 1–2 months; this loop runs at most ~3× even
-    // for the monthly cron (Feb has 28–29 days, etc.).
+    // for a 30-day window crossing a month boundary.
     let cur = ws;
     while (cur <= we) {
       if (!byMonth[cur]) byMonth[cur] = [];
@@ -333,9 +406,7 @@ async function upsertOrdersToKV(newOrders, windowStart, windowEnd) {
   const updatedIndex = [...new Set([...index, ...Object.keys(byMonth)])].sort();
   await kv.set('orders:index', updatedIndex);
 
-  const fetchedOrderIds = (windowStart && windowEnd)
-    ? new Set(newOrders.map(o => o.orderId))
-    : null;
+  const reconcile = !!(seenOrderIds && windowStart && windowEnd);
 
   for (const [month, orders] of Object.entries(byMonth)) {
     const existing = await kv.get(`orders:${month}`) || [];
@@ -344,16 +415,16 @@ async function upsertOrdersToKV(newOrders, windowStart, windowEnd) {
     for (const o of orders) dedupeMap[`${o.orderId}:${o.sku}`] = o;
 
     // Cancellation reconciliation: drop KV records whose orderDate is
-    // inside the re-fetched window but whose orderId is not in the new
-    // result set. fetchOrdersForDateRange already filters out Canceled
-    // orders (`api/orders.js` activeOrders filter), so a missing orderId
-    // means "canceled or otherwise disappeared on Amazon's side".
+    // inside the re-fetched window but whose orderId is NOT in
+    // seenOrderIds. fetchOrdersForDateRange filters out Canceled orders
+    // before building seenOrderIds, so a missing orderId means "canceled
+    // or otherwise disappeared on Amazon's side".
     let evictedCount = 0;
-    if (fetchedOrderIds) {
+    if (reconcile) {
       for (const key of Object.keys(dedupeMap)) {
         const o = dedupeMap[key];
         if (o.orderDate >= windowStart && o.orderDate <= windowEnd
-            && !fetchedOrderIds.has(o.orderId)) {
+            && !seenOrderIds.has(o.orderId)) {
           delete dedupeMap[key];
           evictedCount++;
         }
