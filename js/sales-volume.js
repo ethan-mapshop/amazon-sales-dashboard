@@ -1598,13 +1598,13 @@
         const abs = Math.abs(elasticity);
         pciElasticityEl.textContent = (elasticity >= 0 ? '+' : '') + elasticity.toFixed(2) + '×';
         if (Math.abs(r.changePercent) < 1) {
-          pciElasticityLabel.textContent = 'Small Δprice — interpret with care';
+          pciElasticityLabel.textContent = 'Price moved < 1% — number not reliable';
         } else if (abs < 0.9) {
-          pciElasticityLabel.textContent = 'Inelastic — price had more leverage than volume';
+          pciElasticityLabel.textContent = 'Small volume reaction to price';
         } else if (abs <= 1.1) {
-          pciElasticityLabel.textContent = 'Unit-elastic — revenue ≈ neutral';
+          pciElasticityLabel.textContent = 'Volume tracks price 1:1';
         } else {
-          pciElasticityLabel.textContent = 'Elastic — volume reaction outweighed price';
+          pciElasticityLabel.textContent = 'Big volume reaction to price';
         }
       }
 
@@ -1870,14 +1870,14 @@
       const brand = document.getElementById('pcda-brand').value;
       const windowDays = parseInt(document.getElementById('pcda-window').value, 10) || 30;
       const stats = document.getElementById('pcda-stats');
-      const breakdown = document.getElementById('pcda-breakdown');
       const chartWrap = document.getElementById('pcda-chart-wrapper');
       const list  = document.getElementById('pcda-list');
 
-      // Empty state — hide everything if no date is picked.
+      // Empty state — hide everything if no date is picked. The
+      // breakdown lives inside #pcda-stats now, so hiding stats also
+      // hides it; no separate breakdown toggle needed.
       if (!date) {
         stats.style.display = 'none';
-        if (breakdown) breakdown.style.display = 'none';
         chartWrap.style.display = 'none';
         list.innerHTML = '';
         if (_pcdaChart) { _pcdaChart.destroy(); _pcdaChart = null; }
@@ -1895,7 +1895,6 @@
 
       if (matched.length === 0) {
         stats.style.display = 'none';
-        if (breakdown) breakdown.style.display = 'none';
         chartWrap.style.display = 'none';
         list.innerHTML = '<div style="padding: 1rem; color: var(--text-secondary);">No price changes match these filters.</div>';
         if (_pcdaChart) { _pcdaChart.destroy(); _pcdaChart = null; }
@@ -2051,13 +2050,13 @@
         const abs = Math.abs(elasticity);
         elasticityEl.textContent = (elasticity >= 0 ? '+' : '') + elasticity.toFixed(2) + '×';
         if (Math.abs(netChangePct) < 1) {
-          elasticityLabel.textContent = 'Small Δprice — interpret with care';
+          elasticityLabel.textContent = 'Price moved < 1% — number not reliable';
         } else if (abs < 0.9) {
-          elasticityLabel.textContent = 'Inelastic — price had more leverage than volume';
+          elasticityLabel.textContent = 'Small volume reaction to price';
         } else if (abs <= 1.1) {
-          elasticityLabel.textContent = 'Unit-elastic — revenue ≈ neutral';
+          elasticityLabel.textContent = 'Volume tracks price 1:1';
         } else {
-          elasticityLabel.textContent = 'Elastic — volume reaction outweighed price';
+          elasticityLabel.textContent = 'Big volume reaction to price';
         }
       }
 
@@ -2075,9 +2074,14 @@
       setBreakdownCell('pcda-breakdown-vol-profit',    volumeEffectProfit);
       setBreakdownCell('pcda-breakdown-total-rev',     totalRevDelta);
       setBreakdownCell('pcda-breakdown-total-profit',  totalProfitDelta);
-      breakdown.style.display = 'block';
+      // The breakdown lives inside #pcda-stats now (analytics row), so
+      // showing/hiding #pcda-stats also shows/hides the breakdown — no
+      // separate toggle needed.
 
-      stats.style.display = 'flex';
+      // #pcda-stats wraps two flex rows; set its display to `block`
+      // (not `flex`) so the rows stack normally and each row's own
+      // `display: flex` handles its inner card layout.
+      stats.style.display = 'block';
 
       // Compact list (drives drill-through to Individual Analysis).
       _renderPCDAList(matched);

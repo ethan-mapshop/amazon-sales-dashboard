@@ -551,111 +551,126 @@
             </div>
           </div>
 
-          <!-- Stats — same soft-card style as Individual Analysis. Hidden
-               until a date is picked. -->
-          <div id="pcda-stats" style="display: none; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
-                  <span id="pcda-rev-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
-                </div>
-                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
-                  <span id="pcda-rev-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
-                </div>
-                <div id="pcda-rev-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+          <!-- Stats — two rows. Row 1 = context cards (what's the change
+               set, how big, how old). Row 2 = analytical cards (what
+               were the effects on revenue/profit/units, plus the
+               elasticity number and the breakdown table). The outer
+               wrapper is what gets toggled visible/hidden by JS; the
+               inner rows are independent flex containers so they wrap
+               their own children naturally. -->
+          <div id="pcda-stats" style="display: none; margin-bottom: 1.5rem;">
+            <!-- Row 1: context -->
+            <div style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">SKUs Changed</div>
+                <div id="pcda-skus-count" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+                <div id="pcda-skus-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+              </div>
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Net Price Change</div>
+                <div id="pcda-net-change" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
+                <div id="pcda-net-change-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+              </div>
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
+                <div id="pcda-days-since" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+                <div id="pcda-days-since-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
               </div>
             </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Profit/Day</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
-                  <span id="pcda-profit-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
-                </div>
-                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
-                  <span id="pcda-profit-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
-                </div>
-                <div id="pcda-profit-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
-              </div>
-            </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Units/Day</div>
-              <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
-                  <span id="pcda-units-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
-                </div>
-                <div style="display: flex; align-items: baseline; gap: 0.5rem;">
-                  <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
-                  <span id="pcda-units-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
-                </div>
-                <div id="pcda-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
-              </div>
-            </div>
-            <!-- Price elasticity: (% Δ units) / (% Δ price). The headline
-                 pricing-decision number. |val| < 1 = inelastic (raising
-                 price wins); |val| > 1 = elastic (raising price loses).
-                 Sub-label translates the number for non-analysts. -->
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Elasticity</div>
-              <div id="pcda-elasticity-value" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
-              <div id="pcda-elasticity-label" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
-            </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">SKUs Changed</div>
-              <div id="pcda-skus-count" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
-              <div id="pcda-skus-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
-            </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Net Price Change</div>
-              <div id="pcda-net-change" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
-              <div id="pcda-net-change-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
-            </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
-              <div id="pcda-days-since" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
-              <div id="pcda-days-since-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
-            </div>
-          </div>
 
-          <!-- Change Breakdown: splits the daily revenue/profit delta
-               into "price effect" (what the price move alone would have
-               done at old volume) and "volume effect" (what volume's
-               reaction added/subtracted at the new price). Together
-               they should sum to the observed After-Before delta. Hidden
-               with the rest of the stats until a date is picked. -->
-          <div id="pcda-breakdown" style="display: none; padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 1.5rem;">
-            <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Change Breakdown — per day</div>
-            <table style="width: 100%; max-width: 480px; font-size: 0.875rem;">
-              <thead>
-                <tr style="color: var(--text-secondary); font-weight: 600;">
-                  <th style="text-align: left; padding: 0.25rem 0.75rem 0.5rem 0;"></th>
-                  <th style="text-align: right; padding: 0.25rem 0.75rem 0.5rem 0;">Revenue</th>
-                  <th style="text-align: right; padding: 0.25rem 0 0.5rem 0;">Profit</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Price effect</td>
-                  <td id="pcda-breakdown-price-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                  <td id="pcda-breakdown-price-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                </tr>
-                <tr>
-                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Volume effect</td>
-                  <td id="pcda-breakdown-vol-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                  <td id="pcda-breakdown-vol-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                </tr>
-                <tr style="border-top: 1px solid var(--border);">
-                  <td style="padding: 0.5rem 0.75rem 0.25rem 0; font-weight: 600;">Total Δ</td>
-                  <td id="pcda-breakdown-total-rev"    style="text-align: right; padding: 0.5rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
-                  <td id="pcda-breakdown-total-profit" style="text-align: right; padding: 0.5rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
-                </tr>
-              </tbody>
-            </table>
+            <!-- Row 2: analytics. align-items: stretch (default) keeps
+                 the cards visually consistent in height even when the
+                 elasticity card's sub-label wraps to 2 lines. -->
+            <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                    <span id="pcda-rev-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                  </div>
+                  <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                    <span id="pcda-rev-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                  </div>
+                  <div id="pcda-rev-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+                </div>
+              </div>
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Profit/Day</div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                    <span id="pcda-profit-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                  </div>
+                  <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                    <span id="pcda-profit-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                  </div>
+                  <div id="pcda-profit-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+                </div>
+              </div>
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Units/Day</div>
+                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                  <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">Before:</span>
+                    <span id="pcda-units-before" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                  </div>
+                  <div style="display: flex; align-items: baseline; gap: 0.5rem;">
+                    <span style="font-size: 0.75rem; color: var(--text-secondary);">After:</span>
+                    <span id="pcda-units-after" style="font-size: 1.25rem; font-weight: 600;">-</span>
+                  </div>
+                  <div id="pcda-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
+                </div>
+              </div>
+              <!-- Price elasticity: (% Δ units) / (% Δ price). Sub-label
+                   uses plain-English description of the magnitude. Card
+                   is narrower than the others (140px min, 180px max) so
+                   it sits compactly alongside; the sub-label is allowed
+                   to wrap onto multiple lines. -->
+              <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 140px; max-width: 180px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Elasticity</div>
+                <div id="pcda-elasticity-value" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+                <div id="pcda-elasticity-label" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.3;">-</div>
+              </div>
+              <!-- Change Breakdown: splits the daily revenue/profit delta
+                   into "price effect" (what the price move alone would
+                   have done at old volume) and "volume effect" (what
+                   volume's reaction added/subtracted at the new price).
+                   Together they sum to the observed After-Before delta.
+                   Lives in the analytics row alongside the impact cards
+                   it explains. -->
+              <div id="pcda-breakdown" style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Change Breakdown — per day</div>
+                <table style="font-size: 0.875rem;">
+                  <thead>
+                    <tr style="color: var(--text-secondary); font-weight: 600;">
+                      <th style="text-align: left; padding: 0.25rem 0.75rem 0.5rem 0;"></th>
+                      <th style="text-align: right; padding: 0.25rem 0.75rem 0.5rem 0;">Revenue</th>
+                      <th style="text-align: right; padding: 0.25rem 0 0.5rem 0;">Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Price effect</td>
+                      <td id="pcda-breakdown-price-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                      <td id="pcda-breakdown-price-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Volume effect</td>
+                      <td id="pcda-breakdown-vol-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                      <td id="pcda-breakdown-vol-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                    </tr>
+                    <tr style="border-top: 1px solid var(--border);">
+                      <td style="padding: 0.5rem 0.75rem 0.25rem 0; font-weight: 600;">Total Δ</td>
+                      <td id="pcda-breakdown-total-rev"    style="text-align: right; padding: 0.5rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                      <td id="pcda-breakdown-total-profit" style="text-align: right; padding: 0.5rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           <!-- Charts: Revenue / Units / Profit panels for the matched
@@ -673,12 +688,12 @@
                 <canvas id="pcda-rev-chart"></canvas>
               </div>
               <div>
-                <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Units</h4>
-                <canvas id="pcda-units-chart"></canvas>
-              </div>
-              <div>
                 <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Profit</h4>
                 <canvas id="pcda-profit-chart"></canvas>
+              </div>
+              <div>
+                <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Units</h4>
+                <canvas id="pcda-units-chart"></canvas>
               </div>
             </div>
           </div>
@@ -731,12 +746,30 @@
         <!-- Detail: Summary Cards + Charts (shown when a change is selected) -->
         <div id="pci-charts" style="margin-bottom: 2rem;">
 
-          <!-- Summary stats — soft chrome (subtle bg + rounded corners)
-               so each metric reads as its own card without the heavy
-               full-card chrome. Same flex-wrap-natural layout as
-               Session & CVR. The shared inline style is kept verbose
-               on each cell rather than refactored into a class so a
-               quick visual tweak doesn't require hunting the CSS. -->
+          <!-- Summary stats — two rows. Row 1 = context cards
+               (what's the change, how old). Row 2 = analytical cards
+               (effect on revenue/profit/units, elasticity, breakdown).
+               Matches the two-row pattern on PCDA so the layout reads
+               consistently across both sub-tabs. -->
+          <!-- Row 1: context -->
+          <div style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Change</div>
+              <div id="pci-summary-price" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
+              <div id="pci-summary-price-pct" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">-</div>
+            </div>
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <!-- Label has an id so renderPCICharts can flip its text
+                   between "Days Since Change" / "Days to Next Change"
+                   without needing a `.closest('.card')` lookup (the
+                   stat box no longer wraps in `.card`). -->
+              <div id="pci-summary-days-label" style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
+              <div id="pci-summary-days" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="pci-summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
+          </div>
+
+          <!-- Row 2: analytics -->
           <div style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem;">
             <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Avg Revenue/Day</div>
@@ -780,62 +813,45 @@
                 <div id="pci-summary-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
-            <!-- Price elasticity for this single SKU's change. Same card
-                 shape as PCDA's aggregate version. -->
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+            <!-- Price elasticity (single SKU). Narrower card, label
+                 wraps onto multiple lines. -->
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 140px; max-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Elasticity</div>
               <div id="pci-summary-elasticity-value" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
-              <div id="pci-summary-elasticity-label" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+              <div id="pci-summary-elasticity-label" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.3;">-</div>
             </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Change</div>
-              <div id="pci-summary-price" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
-              <div id="pci-summary-price-pct" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">-</div>
+            <!-- Change Breakdown — single-SKU version, same shape as
+                 PCDA's. Lives in the analytics row alongside the impact
+                 cards it explains. -->
+            <div id="pci-summary-breakdown" style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Change Breakdown — per day</div>
+              <table style="font-size: 0.875rem;">
+                <thead>
+                  <tr style="color: var(--text-secondary); font-weight: 600;">
+                    <th style="text-align: left; padding: 0.25rem 0.75rem 0.5rem 0;"></th>
+                    <th style="text-align: right; padding: 0.25rem 0.75rem 0.5rem 0;">Revenue</th>
+                    <th style="text-align: right; padding: 0.25rem 0 0.5rem 0;">Profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Price effect</td>
+                    <td id="pci-summary-breakdown-price-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                    <td id="pci-summary-breakdown-price-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Volume effect</td>
+                    <td id="pci-summary-breakdown-vol-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                    <td id="pci-summary-breakdown-vol-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                  </tr>
+                  <tr style="border-top: 1px solid var(--border);">
+                    <td style="padding: 0.5rem 0.75rem 0.25rem 0; font-weight: 600;">Total Δ</td>
+                    <td id="pci-summary-breakdown-total-rev"    style="text-align: right; padding: 0.5rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                    <td id="pci-summary-breakdown-total-profit" style="text-align: right; padding: 0.5rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
-              <!-- Label has an id so renderPCICharts can flip its text
-                   between "Days Since Change" / "Days to Next Change"
-                   without needing a `.closest('.card')` lookup (the
-                   stat box no longer wraps in `.card`). -->
-              <div id="pci-summary-days-label" style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Days Since Change</div>
-              <div id="pci-summary-days" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
-              <div id="pci-summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
-            </div>
-          </div>
-
-          <!-- Change Breakdown — same shape and meaning as PCDA's, just
-               scoped to this single SKU's change. Price effect = the
-               revenue/profit move from the price change alone (at old
-               volume); volume effect = the revenue/profit move from
-               volume's reaction (at new price). Sum = observed Δ/day. -->
-          <div id="pci-summary-breakdown" style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 2rem;">
-            <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Change Breakdown — per day</div>
-            <table style="width: 100%; max-width: 480px; font-size: 0.875rem;">
-              <thead>
-                <tr style="color: var(--text-secondary); font-weight: 600;">
-                  <th style="text-align: left; padding: 0.25rem 0.75rem 0.5rem 0;"></th>
-                  <th style="text-align: right; padding: 0.25rem 0.75rem 0.5rem 0;">Revenue</th>
-                  <th style="text-align: right; padding: 0.25rem 0 0.5rem 0;">Profit</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Price effect</td>
-                  <td id="pci-summary-breakdown-price-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                  <td id="pci-summary-breakdown-price-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                </tr>
-                <tr>
-                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Volume effect</td>
-                  <td id="pci-summary-breakdown-vol-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                  <td id="pci-summary-breakdown-vol-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
-                </tr>
-                <tr style="border-top: 1px solid var(--border);">
-                  <td style="padding: 0.5rem 0.75rem 0.25rem 0; font-weight: 600;">Total Δ</td>
-                  <td id="pci-summary-breakdown-total-rev"    style="text-align: right; padding: 0.5rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
-                  <td id="pci-summary-breakdown-total-profit" style="text-align: right; padding: 0.5rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
-                </tr>
-              </tbody>
-            </table>
           </div>
 
           <!-- Charts: 7-day rolling avg with counterfactual reference.
@@ -850,14 +866,14 @@
               <canvas id="pci-rolling-rev-chart"></canvas>
             </div>
             <div>
-              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — 7-Day Rolling Avg</h3>
-              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily units. Dashed line = before-period avg.</p>
-              <canvas id="pci-rolling-units-chart"></canvas>
-            </div>
-            <div>
               <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Profit — 7-Day Rolling Avg</h3>
               <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily profit. Dashed line = before-period avg.</p>
               <canvas id="pci-rolling-profit-chart"></canvas>
+            </div>
+            <div>
+              <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem;">Units — 7-Day Rolling Avg</h3>
+              <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 1rem;">Smoothed daily units. Dashed line = before-period avg.</p>
+              <canvas id="pci-rolling-units-chart"></canvas>
             </div>
           </div>
         </div>
