@@ -1636,12 +1636,22 @@
         document.getElementById('pci-summary-change-date').textContent = `Changed ${r.date}`;
       }
 
-      // Build daily data series: windowDays before + days until afterEnd.
+      // Build daily data series: windowDays before + symmetric after.
       // Daily profit = sum(itemTotal) − feePerUnit × sum(quantity); the
       // feePerUnit was already computed above for the profit card and
       // is reused here so chart and card share one source of truth.
       const startDate = offsetDate(r.date, -windowDays);
-      const endDate = afterEnd;
+      // Symmetric chart: clip the after-period at `windowDays` past the
+      // change so the chart's after region is at most as wide as the
+      // before region. Cards above still average over the full
+      // `afterEnd` (yesterday or pre-next-change), so card numbers
+      // don't shift — only the chart visual range narrows for old
+      // changes. If `afterEnd` is already closer than the symmetric
+      // cap (recent change, or nextChange clipping), the cap is a
+      // no-op and the chart shows everything available.
+      const endDate = afterEnd <= offsetDate(r.date, windowDays)
+                      ? afterEnd
+                      : offsetDate(r.date, windowDays);
       const dailyLabels = [];
       const dailyRevenue = [];
       const dailyUnits = [];
@@ -2077,19 +2087,28 @@
       // settle after the display flip; same trick used on Sessions.
       chartWrap.style.display = 'block';
       await new Promise(r => requestAnimationFrame(r));
+      // Symmetric chart: cap the after-period at `windowDays` past the
+      // change so both sides of the change line get equal visual weight.
+      // Cards above still use the full `afterEnd` (yesterday) for their
+      // averages — that's unchanged. Picking a wider window expands both
+      // the baseline AND the post-change comparison horizon.
+      const chartAfterEnd = afterEnd <= offsetDate(date, windowDays)
+                            ? afterEnd
+                            : offsetDate(date, windowDays);
       // Pass the before-period daily averages so the chart can draw the
       // counterfactual reference line at the exact same value the cards
       // show as "Before" — chart and cards visually agree.
-      _renderPCDAChart(matched, date, beforeStart, afterEnd, {
+      _renderPCDAChart(matched, date, beforeStart, chartAfterEnd, {
         revBeforeDaily, unitsBeforeDaily, profitBeforeDaily
       });
     }
 
     function _renderPCDAChart(matched, changeDate, startDate, endDate, beforeAvgs) {
       // Build summed daily series across all matched SKUs over the
-      // before-window through afterEnd. One pass over svOrdersData
-      // filtered to the matched SKUs — much cheaper than per-day
-      // queries when there are many SKUs.
+      // symmetric chart window (startDate..endDate, capped at
+      // change_date + windowDays by the caller). One pass over
+      // svOrdersData filtered to the matched SKUs — much cheaper
+      // than per-day queries when there are many SKUs.
       const skuSet = new Set(matched.map(pc => pc.sku));
 
       // Pre-build per-SKU fee lookup so the profit series can be summed
