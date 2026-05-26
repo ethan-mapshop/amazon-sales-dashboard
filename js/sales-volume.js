@@ -775,7 +775,19 @@
         pciSkuMap = {};
         for (const p of products) {
           if (!p?.sku) continue;
-          pciSkuMap[p.sku] = { brand: p.brand || 'Unknown', productName: p.name || p.sku };
+          // Pull the per-unit cost components out of the catalog so the
+          // Avg Profit/Day cards (in both PCDA and Individual Analysis)
+          // can compute profit without re-fetching products. Missing /
+          // unparseable values default to 0, matching the catalog's
+          // normalize behavior — an unfilled product just contributes
+          // revenue with no fee deduction.
+          pciSkuMap[p.sku] = {
+            brand: p.brand || 'Unknown',
+            productName: p.name || p.sku,
+            transactionFees: Number(p.transactionFees) || 0,
+            fbaFees: Number(p.fbaFees) || 0,
+            avgShipping: Number(p.avgShipping) || 0
+          };
         }
 
         // Populate the Log Price Change form's brand/product dropdowns.
@@ -1500,13 +1512,32 @@
       const unitsBefore = daysBefore > 0 ? freshBefore.units   / daysBefore : 0;
       const unitsAfter  = daysAfter  > 0 ? freshAfter.units    / daysAfter  : 0;
 
+      // Profit per day = (period revenue − units × (txFees + fbaFees + avgShipping)) / period days.
+      // Fee components pulled from the product catalog via pciSkuMap.
+      // FBA-zero avgShipping and FBM-zero fbaFees make this one formula
+      // work for both fulfillment channels.
+      const info = pciSkuMap[r.sku] || {};
+      const feePerUnit = (info.transactionFees || 0) + (info.fbaFees || 0) + (info.avgShipping || 0);
+      const profitBeforePeriod = freshBefore.revenue - freshBefore.units * feePerUnit;
+      const profitAfterPeriod  = freshAfter.revenue  - freshAfter.units  * feePerUnit;
+      const profitBefore = daysBefore > 0 ? profitBeforePeriod / daysBefore : 0;
+      const profitAfter  = daysAfter  > 0 ? profitAfterPeriod  / daysAfter  : 0;
+
       const revChangePct   = revBefore   > 0 ? ((revAfter   - revBefore)   / revBefore   * 100) : 0;
       const unitsChangePct = unitsBefore > 0 ? ((unitsAfter - unitsBefore) / unitsBefore * 100) : 0;
+      // Absolute denominator so a swing through zero produces a sane sign.
+      const profitChangePct = profitBefore !== 0
+        ? ((profitAfter - profitBefore) / Math.abs(profitBefore) * 100) : 0;
 
       document.getElementById('pci-summary-rev-before').textContent = '$' + revBefore.toFixed(2);
       document.getElementById('pci-summary-rev-after').textContent = '$' + revAfter.toFixed(2);
       document.getElementById('pci-summary-rev-change').textContent = (revChangePct >= 0 ? '+' : '') + revChangePct.toFixed(1) + '%';
       document.getElementById('pci-summary-rev-change').style.color = revChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pci-summary-profit-before').textContent = '$' + profitBefore.toFixed(2);
+      document.getElementById('pci-summary-profit-after').textContent = '$' + profitAfter.toFixed(2);
+      document.getElementById('pci-summary-profit-change').textContent = (profitChangePct >= 0 ? '+' : '') + profitChangePct.toFixed(1) + '%';
+      document.getElementById('pci-summary-profit-change').style.color = profitChangePct >= 0 ? 'var(--success)' : 'var(--error)';
 
       document.getElementById('pci-summary-units-before').textContent = unitsBefore.toFixed(1);
       document.getElementById('pci-summary-units-after').textContent = unitsAfter.toFixed(1);
@@ -1768,6 +1799,12 @@
       const daysAfter   = daysBetween(date, offsetDate(afterEnd, 1));
 
       let revBefore = 0, unitsBefore = 0, revAfter = 0, unitsAfter = 0;
+      // Profit aggregates. Per-SKU per-period profit =
+      //   revenue − units × (transactionFees + fbaFees + avgShipping)
+      // Fee totals come from the product catalog. avgShipping is FBA-zero
+      // and fbaFees is FBM-zero (per user catalog convention), so the
+      // single formula works regardless of fulfillment channel.
+      let profitBefore = 0, profitAfter = 0;
       // Net price change %, weighted by before-period revenue so a
       // dead-stock SKU doesn't drown the average. Falls back to equal
       // weighting if nothing sold in the before window.
@@ -1780,20 +1817,32 @@
         unitsBefore += before.units;
         revAfter    += after.revenue;
         unitsAfter  += after.units;
+
+        const info = pciSkuMap[pc.sku] || {};
+        const feePerUnit = (info.transactionFees || 0) + (info.fbaFees || 0) + (info.avgShipping || 0);
+        profitBefore += before.revenue - before.units * feePerUnit;
+        profitAfter  += after.revenue  - after.units  * feePerUnit;
+
         const w = before.revenue > 0 ? before.revenue : 1;
         oldWeighted += pc.oldPrice * w;
         newWeighted += pc.newPrice * w;
         weights     += w;
       }
 
-      const revBeforeDaily   = windowDays > 0  ? revBefore   / windowDays : 0;
-      const unitsBeforeDaily = windowDays > 0  ? unitsBefore / windowDays : 0;
-      const revAfterDaily    = daysAfter  > 0  ? revAfter    / daysAfter  : 0;
-      const unitsAfterDaily  = daysAfter  > 0  ? unitsAfter  / daysAfter  : 0;
+      const revBeforeDaily    = windowDays > 0  ? revBefore    / windowDays : 0;
+      const unitsBeforeDaily  = windowDays > 0  ? unitsBefore  / windowDays : 0;
+      const profitBeforeDaily = windowDays > 0  ? profitBefore / windowDays : 0;
+      const revAfterDaily     = daysAfter  > 0  ? revAfter     / daysAfter  : 0;
+      const unitsAfterDaily   = daysAfter  > 0  ? unitsAfter   / daysAfter  : 0;
+      const profitAfterDaily  = daysAfter  > 0  ? profitAfter  / daysAfter  : 0;
       const revChangePct = revBeforeDaily > 0
         ? ((revAfterDaily - revBeforeDaily) / revBeforeDaily * 100) : 0;
       const unitsChangePct = unitsBeforeDaily > 0
         ? ((unitsAfterDaily - unitsBeforeDaily) / unitsBeforeDaily * 100) : 0;
+      // Profit % change uses absolute denominator so a swing through zero
+      // (e.g. before = -$5, after = +$10) doesn't produce a weird sign.
+      const profitChangePct = profitBeforeDaily !== 0
+        ? ((profitAfterDaily - profitBeforeDaily) / Math.abs(profitBeforeDaily) * 100) : 0;
 
       const oldAvg = weights > 0 ? oldWeighted / weights : 0;
       const newAvg = weights > 0 ? newWeighted / weights : 0;
@@ -1805,6 +1854,12 @@
       const revChangeEl = document.getElementById('pcda-rev-change');
       revChangeEl.textContent = (revChangePct >= 0 ? '+' : '') + revChangePct.toFixed(1) + '%';
       revChangeEl.style.color = revChangePct >= 0 ? 'var(--success)' : 'var(--error)';
+
+      document.getElementById('pcda-profit-before').textContent = '$' + formatNumber(profitBeforeDaily);
+      document.getElementById('pcda-profit-after').textContent  = '$' + formatNumber(profitAfterDaily);
+      const profitChangeEl = document.getElementById('pcda-profit-change');
+      profitChangeEl.textContent = (profitChangePct >= 0 ? '+' : '') + profitChangePct.toFixed(1) + '%';
+      profitChangeEl.style.color = profitChangePct >= 0 ? 'var(--success)' : 'var(--error)';
 
       document.getElementById('pcda-units-before').textContent = unitsBeforeDaily.toFixed(1);
       document.getElementById('pcda-units-after').textContent  = unitsAfterDaily.toFixed(1);
