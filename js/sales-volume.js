@@ -1529,6 +1529,30 @@
       const profitChangePct = profitBefore !== 0
         ? ((profitAfter - profitBefore) / Math.abs(profitBefore) * 100) : 0;
 
+      // Price elasticity = (% Δ units) / (% Δ price). Null when no price
+      // change. r.changePercent was computed at price-change ingest time
+      // (oldPrice → newPrice), so it's safe to consume directly here.
+      const elasticity = r.changePercent !== 0 ? (unitsChangePct / r.changePercent) : null;
+
+      // Revenue / profit decomposition. Same math as PCDA but scalar —
+      // single SKU, no weighting needed. fees stay constant across the
+      // change so priceEffect on profit equals priceEffect on revenue.
+      const dUnits = unitsAfter - unitsBefore;
+      const priceEffectRev    = (r.newPrice - r.oldPrice) * unitsBefore;
+      const volumeEffectRev   = r.newPrice * dUnits;
+      const totalRevDelta     = revAfter - revBefore;
+      const newMargin = r.newPrice - feePerUnit;
+      const priceEffectProfit  = (r.newPrice - r.oldPrice) * unitsBefore;  // = priceEffectRev
+      const volumeEffectProfit = newMargin * dUnits;
+      const totalProfitDelta   = profitAfter - profitBefore;
+
+      // Self-check parallel to PCDA's.
+      const revSelfCheck    = Math.abs(priceEffectRev    + volumeEffectRev    - totalRevDelta);
+      const profitSelfCheck = Math.abs(priceEffectProfit + volumeEffectProfit - totalProfitDelta);
+      if (revSelfCheck > 0.01 || profitSelfCheck > 0.01) {
+        console.warn(`[PCI] Decomposition self-check failed: rev Δ=${revSelfCheck.toFixed(4)}, profit Δ=${profitSelfCheck.toFixed(4)}`);
+      }
+
       document.getElementById('pci-summary-rev-before').textContent = '$' + revBefore.toFixed(2);
       document.getElementById('pci-summary-rev-after').textContent = '$' + revAfter.toFixed(2);
       document.getElementById('pci-summary-rev-change').textContent = (revChangePct >= 0 ? '+' : '') + revChangePct.toFixed(1) + '%';
@@ -1546,6 +1570,43 @@
 
       document.getElementById('pci-summary-price').textContent = `$${r.oldPrice.toFixed(2)} → $${r.newPrice.toFixed(2)}`;
       document.getElementById('pci-summary-price-pct').textContent = (r.changePercent >= 0 ? '+' : '') + r.changePercent.toFixed(1) + '%';
+
+      // Elasticity card. Same interpretation logic as PCDA's aggregate
+      // version; reads cleanly because we have a single SKU's actual
+      // % Δ price (r.changePercent) instead of a revenue-weighted avg.
+      const pciElasticityEl = document.getElementById('pci-summary-elasticity-value');
+      const pciElasticityLabel = document.getElementById('pci-summary-elasticity-label');
+      if (elasticity === null) {
+        pciElasticityEl.textContent = '—';
+        pciElasticityLabel.textContent = 'No price change';
+      } else {
+        const abs = Math.abs(elasticity);
+        pciElasticityEl.textContent = (elasticity >= 0 ? '+' : '') + elasticity.toFixed(2) + '×';
+        if (Math.abs(r.changePercent) < 1) {
+          pciElasticityLabel.textContent = 'Small Δprice — interpret with care';
+        } else if (abs < 0.9) {
+          pciElasticityLabel.textContent = 'Inelastic — price had more leverage than volume';
+        } else if (abs <= 1.1) {
+          pciElasticityLabel.textContent = 'Unit-elastic — revenue ≈ neutral';
+        } else {
+          pciElasticityLabel.textContent = 'Elastic — volume reaction outweighed price';
+        }
+      }
+
+      // Decomposition table — same formatter pattern as PCDA.
+      const pciFmtSigned = (n) => (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(2);
+      const pciColorFor = (n) => n >= 0 ? 'var(--success)' : 'var(--error)';
+      const setPciBreakdownCell = (id, val) => {
+        const el = document.getElementById(id);
+        el.textContent = pciFmtSigned(val);
+        el.style.color = pciColorFor(val);
+      };
+      setPciBreakdownCell('pci-summary-breakdown-price-rev',    priceEffectRev);
+      setPciBreakdownCell('pci-summary-breakdown-price-profit', priceEffectProfit);
+      setPciBreakdownCell('pci-summary-breakdown-vol-rev',      volumeEffectRev);
+      setPciBreakdownCell('pci-summary-breakdown-vol-profit',   volumeEffectProfit);
+      setPciBreakdownCell('pci-summary-breakdown-total-rev',    totalRevDelta);
+      setPciBreakdownCell('pci-summary-breakdown-total-profit', totalProfitDelta);
 
       document.getElementById('pci-summary-days').textContent = r.daysAfter;
       // Direct id lookup on the label — the stat box no longer wraps
@@ -1760,12 +1821,14 @@
       const brand = document.getElementById('pcda-brand').value;
       const windowDays = parseInt(document.getElementById('pcda-window').value, 10) || 30;
       const stats = document.getElementById('pcda-stats');
+      const breakdown = document.getElementById('pcda-breakdown');
       const chartWrap = document.getElementById('pcda-chart-wrapper');
       const list  = document.getElementById('pcda-list');
 
       // Empty state — hide everything if no date is picked.
       if (!date) {
         stats.style.display = 'none';
+        if (breakdown) breakdown.style.display = 'none';
         chartWrap.style.display = 'none';
         list.innerHTML = '';
         if (_pcdaChart) { _pcdaChart.destroy(); _pcdaChart = null; }
@@ -1783,6 +1846,7 @@
 
       if (matched.length === 0) {
         stats.style.display = 'none';
+        if (breakdown) breakdown.style.display = 'none';
         chartWrap.style.display = 'none';
         list.innerHTML = '<div style="padding: 1rem; color: var(--text-secondary);">No price changes match these filters.</div>';
         if (_pcdaChart) { _pcdaChart.destroy(); _pcdaChart = null; }
@@ -1809,6 +1873,10 @@
       // dead-stock SKU doesn't drown the average. Falls back to equal
       // weighting if nothing sold in the before window.
       let oldWeighted = 0, newWeighted = 0, weights = 0;
+      // Weighted-average fee across matched SKUs — used by the profit
+      // decomposition below so the aggregate margin reflects the actual
+      // SKU mix rather than an unweighted average.
+      let feeWeighted = 0;
 
       for (const pc of matched) {
         const before = calcOrderMetrics(svOrdersData, pc.sku, beforeStart, beforeEnd, windowDays);
@@ -1826,6 +1894,7 @@
         const w = before.revenue > 0 ? before.revenue : 1;
         oldWeighted += pc.oldPrice * w;
         newWeighted += pc.newPrice * w;
+        feeWeighted += feePerUnit  * w;
         weights     += w;
       }
 
@@ -1846,7 +1915,41 @@
 
       const oldAvg = weights > 0 ? oldWeighted / weights : 0;
       const newAvg = weights > 0 ? newWeighted / weights : 0;
+      const feeAvg = weights > 0 ? feeWeighted / weights : 0;
       const netChangePct = oldAvg > 0 ? ((newAvg - oldAvg) / oldAvg * 100) : 0;
+
+      // Price elasticity = (% Δ units) / (% Δ price). Null when the
+      // denominator is zero (no net price change → elasticity undefined).
+      // Tiny price changes (<1%) produce wildly amplified elasticities
+      // from noise; flag those in the sub-label rather than hide them.
+      const elasticity = netChangePct !== 0 ? (unitsChangePct / netChangePct) : null;
+
+      // Revenue / profit decomposition.
+      //   priceEffect  = (Δprice) × old daily units    (revenue-side; for
+      //                  profit it's (Δmargin) × old daily units, but
+      //                  Δmargin == Δprice since fees are constant)
+      //   volumeEffect = new price × (Δ daily units)   (revenue-side)
+      //                = new margin × (Δ daily units)  (profit-side)
+      // Together they should sum to (afterDaily − beforeDaily) within
+      // floating-point noise. We compute the observed totals separately
+      // and self-check at the bottom.
+      const dUnitsDaily = unitsAfterDaily - unitsBeforeDaily;
+      const priceEffectRev    = (newAvg - oldAvg) * unitsBeforeDaily;
+      const volumeEffectRev   = newAvg * dUnitsDaily;
+      const totalRevDelta     = revAfterDaily - revBeforeDaily;
+      const newMargin = newAvg - feeAvg;
+      const priceEffectProfit  = (newAvg - oldAvg) * unitsBeforeDaily;  // = priceEffectRev (fees constant)
+      const volumeEffectProfit = newMargin * dUnitsDaily;
+      const totalProfitDelta   = profitAfterDaily - profitBeforeDaily;
+
+      // Self-check: warn (don't throw) if decomposition doesn't sum to
+      // observed delta within a penny per day. Either side is suspect
+      // when this fires.
+      const revSelfCheck    = Math.abs(priceEffectRev    + volumeEffectRev    - totalRevDelta);
+      const profitSelfCheck = Math.abs(priceEffectProfit + volumeEffectProfit - totalProfitDelta);
+      if (revSelfCheck > 0.01 || profitSelfCheck > 0.01) {
+        console.warn(`[PCDA] Decomposition self-check failed: rev Δ=${revSelfCheck.toFixed(4)}, profit Δ=${profitSelfCheck.toFixed(4)}`);
+      }
 
       // Stats
       document.getElementById('pcda-rev-before').textContent  = '$' + formatNumber(revBeforeDaily);
@@ -1885,6 +1988,45 @@
       const daysSince = daysBetween(date, today);
       document.getElementById('pcda-days-since').textContent = daysSince;
       document.getElementById('pcda-days-since-detail').textContent = `Changed ${date}`;
+
+      // Elasticity card. `—` when undefined (no price change). Sub-label
+      // translates the number for non-analysts. When the price change
+      // is tiny (<1%), the elasticity is signal-vs-noise unreliable —
+      // surface that explicitly rather than show a misleading "−12.4×".
+      const elasticityEl = document.getElementById('pcda-elasticity-value');
+      const elasticityLabel = document.getElementById('pcda-elasticity-label');
+      if (elasticity === null) {
+        elasticityEl.textContent = '—';
+        elasticityLabel.textContent = 'No net price change';
+      } else {
+        const abs = Math.abs(elasticity);
+        elasticityEl.textContent = (elasticity >= 0 ? '+' : '') + elasticity.toFixed(2) + '×';
+        if (Math.abs(netChangePct) < 1) {
+          elasticityLabel.textContent = 'Small Δprice — interpret with care';
+        } else if (abs < 0.9) {
+          elasticityLabel.textContent = 'Inelastic — price had more leverage than volume';
+        } else if (abs <= 1.1) {
+          elasticityLabel.textContent = 'Unit-elastic — revenue ≈ neutral';
+        } else {
+          elasticityLabel.textContent = 'Elastic — volume reaction outweighed price';
+        }
+      }
+
+      // Decomposition table. Color each cell by sign.
+      const fmtSigned = (n) => (n >= 0 ? '+$' : '-$') + formatNumber(Math.abs(n));
+      const colorFor = (n) => n >= 0 ? 'var(--success)' : 'var(--error)';
+      const setBreakdownCell = (id, val) => {
+        const el = document.getElementById(id);
+        el.textContent = fmtSigned(val);
+        el.style.color = colorFor(val);
+      };
+      setBreakdownCell('pcda-breakdown-price-rev',     priceEffectRev);
+      setBreakdownCell('pcda-breakdown-price-profit',  priceEffectProfit);
+      setBreakdownCell('pcda-breakdown-vol-rev',       volumeEffectRev);
+      setBreakdownCell('pcda-breakdown-vol-profit',    volumeEffectProfit);
+      setBreakdownCell('pcda-breakdown-total-rev',     totalRevDelta);
+      setBreakdownCell('pcda-breakdown-total-profit',  totalProfitDelta);
+      breakdown.style.display = 'block';
 
       stats.style.display = 'flex';
 

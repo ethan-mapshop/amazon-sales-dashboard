@@ -596,6 +596,15 @@
                 <div id="pcda-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
+            <!-- Price elasticity: (% Δ units) / (% Δ price). The headline
+                 pricing-decision number. |val| < 1 = inelastic (raising
+                 price wins); |val| > 1 = elastic (raising price loses).
+                 Sub-label translates the number for non-analysts. -->
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Elasticity</div>
+              <div id="pcda-elasticity-value" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="pcda-elasticity-label" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
             <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">SKUs Changed</div>
               <div id="pcda-skus-count" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
@@ -611,6 +620,42 @@
               <div id="pcda-days-since" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
               <div id="pcda-days-since-detail" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
             </div>
+          </div>
+
+          <!-- Change Breakdown: splits the daily revenue/profit delta
+               into "price effect" (what the price move alone would have
+               done at old volume) and "volume effect" (what volume's
+               reaction added/subtracted at the new price). Together
+               they should sum to the observed After-Before delta. Hidden
+               with the rest of the stats until a date is picked. -->
+          <div id="pcda-breakdown" style="display: none; padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 1.5rem;">
+            <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Change Breakdown — per day</div>
+            <table style="width: 100%; max-width: 480px; font-size: 0.875rem;">
+              <thead>
+                <tr style="color: var(--text-secondary); font-weight: 600;">
+                  <th style="text-align: left; padding: 0.25rem 0.75rem 0.5rem 0;"></th>
+                  <th style="text-align: right; padding: 0.25rem 0.75rem 0.5rem 0;">Revenue</th>
+                  <th style="text-align: right; padding: 0.25rem 0 0.5rem 0;">Profit</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Price effect</td>
+                  <td id="pcda-breakdown-price-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                  <td id="pcda-breakdown-price-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Volume effect</td>
+                  <td id="pcda-breakdown-vol-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                  <td id="pcda-breakdown-vol-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                </tr>
+                <tr style="border-top: 1px solid var(--border);">
+                  <td style="padding: 0.5rem 0.75rem 0.25rem 0; font-weight: 600;">Total Δ</td>
+                  <td id="pcda-breakdown-total-rev"    style="text-align: right; padding: 0.5rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                  <td id="pcda-breakdown-total-profit" style="text-align: right; padding: 0.5rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <!-- Charts: separate Revenue + Units panels for the matched
@@ -729,6 +774,13 @@
                 <div id="pci-summary-units-change" style="font-size: 0.875rem; font-weight: 600; margin-top: 0.25rem;">-</div>
               </div>
             </div>
+            <!-- Price elasticity for this single SKU's change. Same card
+                 shape as PCDA's aggregate version. -->
+            <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Elasticity</div>
+              <div id="pci-summary-elasticity-value" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
+              <div id="pci-summary-elasticity-label" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
+            </div>
             <div style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; min-width: 180px;">
               <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Price Change</div>
               <div id="pci-summary-price" style="font-size: 1.5rem; font-weight: 700; color: var(--accent-orange);">-</div>
@@ -743,6 +795,41 @@
               <div id="pci-summary-days" style="font-size: 1.75rem; font-weight: 700; color: var(--accent-blue);">-</div>
               <div id="pci-summary-change-date" style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">-</div>
             </div>
+          </div>
+
+          <!-- Change Breakdown — same shape and meaning as PCDA's, just
+               scoped to this single SKU's change. Price effect = the
+               revenue/profit move from the price change alone (at old
+               volume); volume effect = the revenue/profit move from
+               volume's reaction (at new price). Sum = observed Δ/day. -->
+          <div id="pci-summary-breakdown" style="padding: 1rem 1.25rem; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 2rem;">
+            <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Change Breakdown — per day</div>
+            <table style="width: 100%; max-width: 480px; font-size: 0.875rem;">
+              <thead>
+                <tr style="color: var(--text-secondary); font-weight: 600;">
+                  <th style="text-align: left; padding: 0.25rem 0.75rem 0.5rem 0;"></th>
+                  <th style="text-align: right; padding: 0.25rem 0.75rem 0.5rem 0;">Revenue</th>
+                  <th style="text-align: right; padding: 0.25rem 0 0.5rem 0;">Profit</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Price effect</td>
+                  <td id="pci-summary-breakdown-price-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                  <td id="pci-summary-breakdown-price-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0.25rem 0.75rem 0.25rem 0;">Volume effect</td>
+                  <td id="pci-summary-breakdown-vol-rev"    style="text-align: right; padding: 0.25rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                  <td id="pci-summary-breakdown-vol-profit" style="text-align: right; padding: 0.25rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace;">-</td>
+                </tr>
+                <tr style="border-top: 1px solid var(--border);">
+                  <td style="padding: 0.5rem 0.75rem 0.25rem 0; font-weight: 600;">Total Δ</td>
+                  <td id="pci-summary-breakdown-total-rev"    style="text-align: right; padding: 0.5rem 0.75rem 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                  <td id="pci-summary-breakdown-total-profit" style="text-align: right; padding: 0.5rem 0 0.25rem 0; font-family: 'Roboto Mono', monospace; font-weight: 600;">-</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <!-- Charts: 7-day rolling average with linear trendline. Flat
