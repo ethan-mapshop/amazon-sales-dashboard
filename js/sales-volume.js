@@ -728,11 +728,26 @@
 
     // ── PRICE CHANGE IMPACTS ──────────────────────────────────────────────────
 
-    // PCI charts stored on window (pciRollingRevChart, pciRollingUnitsChart, pciCumRevChart, pciCumUnitsChart)
+    // PCI charts stored on window (pciRollingRevChart, pciRollingUnitsChart, pciRollingProfitChart)
     let pciPriceChanges = []; // entries from /api/pricechanges
-    let pciSkuMap = {};       // sku -> { brand, productName }
+    let pciSkuMap = {};       // sku -> { brand, productName, transactionFees, fbaFees, avgShipping }
     let pciAllProducts = [];  // full Upstash product list for the Log
                               // form's brand/product dropdowns
+
+    // Centered 7-day rolling average. Used by both PCDA aggregate charts
+    // and the Individual Analysis single-SKU charts so the smoothing
+    // approach is identical across sub-tabs. Window edges average over
+    // fewer than `w` points (the half-window is clipped), so early /
+    // late points are smoothed less aggressively — visually unobtrusive
+    // and avoids artificial dips at the start/end of the series.
+    function _pciRollingAvg(arr, w) {
+      const half = Math.floor(w / 2);
+      return arr.map((_, i) => {
+        const slice = arr.slice(Math.max(0, i - half),
+                                Math.min(arr.length, i + half + 1));
+        return slice.reduce((a, b) => a + b, 0) / slice.length;
+      });
+    }
 
     // Pagination state for the Individual Analysis Summary Table.
     // Reset to page 1 whenever the user changes brand/product filters
@@ -1621,32 +1636,46 @@
         document.getElementById('pci-summary-change-date').textContent = `Changed ${r.date}`;
       }
 
-      // Build daily data series: windowDays before + days until afterEnd
+      // Build daily data series: windowDays before + days until afterEnd.
+      // Daily profit = sum(itemTotal) − feePerUnit × sum(quantity); the
+      // feePerUnit was already computed above for the profit card and
+      // is reused here so chart and card share one source of truth.
       const startDate = offsetDate(r.date, -windowDays);
       const endDate = afterEnd;
       const dailyLabels = [];
       const dailyRevenue = [];
       const dailyUnits = [];
+      const dailyProfit = [];
 
       let cursor = startDate;
       while (cursor <= endDate) {
         const dayOrders = svOrdersData.filter(o => o.sku === r.sku && o.orderDate === cursor);
+        const dayRev   = dayOrders.reduce((s, o) => s + (o.itemTotal || 0), 0);
+        const dayUnits = dayOrders.reduce((s, o) => s + (o.quantity  || 0), 0);
         dailyLabels.push(cursor.slice(5)); // MM-DD
-        dailyRevenue.push(dayOrders.reduce((s, o) => s + (o.itemTotal || 0), 0));
-        dailyUnits.push(dayOrders.reduce((s, o) => s + (o.quantity || 0), 0));
+        dailyRevenue.push(dayRev);
+        dailyUnits.push(dayUnits);
+        dailyProfit.push(dayRev - feePerUnit * dayUnits);
         cursor = offsetDate(cursor, 1);
       }
 
       const changeIdx = windowDays; // index of change date in the series
 
-      // 7-day centred rolling average
-      const rolling = (arr, w) => arr.map((_, i) => {
-        const slice = arr.slice(Math.max(0, i - Math.floor(w / 2)), Math.min(arr.length, i + Math.floor(w / 2) + 1));
-        return slice.reduce((a, b) => a + b, 0) / slice.length;
-      });
-      const rollingRev   = rolling(dailyRevenue, 7);
-      const rollingUnits = rolling(dailyUnits, 7);
+      // 7-day centered rolling average via the shared helper. The PCDA
+      // chart uses the same function, so smoothing is identical across
+      // sub-tabs.
+      const rollingRev    = _pciRollingAvg(dailyRevenue, 7);
+      const rollingUnits  = _pciRollingAvg(dailyUnits,   7);
+      const rollingProfit = _pciRollingAvg(dailyProfit,  7);
 
+      // Counterfactual = before-period daily average extended across
+      // the after-period. Null before the change date so Chart.js
+      // doesn't draw a misleading slope. Values match the cards'
+      // `Before` lines exactly — chart and card visually agree.
+      const cfFor = (avg) => dailyLabels.map((_, i) => i >= changeIdx ? avg : null);
+      const cfRev    = cfFor(revBefore);
+      const cfUnits  = cfFor(unitsBefore);
+      const cfProfit = cfFor(profitBefore);
 
       // Annotation: subtle white dashed vertical line at change date
       const annotationLine = {
@@ -1672,25 +1701,34 @@
         }
       });
 
-      const mkDatasets = (rolling, color) => ([
-        { data: rolling, borderColor: color, backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'), tension: 0.4, pointRadius: 0, borderWidth: 2 }
+      // Two datasets per chart: actual rolling series + counterfactual
+      // reference (dashed gray, after-period only).
+      const mkDatasets = (rolling, color, counterfactual) => ([
+        { data: rolling, borderColor: color, backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'), tension: 0.4, pointRadius: 0, borderWidth: 2 },
+        { data: counterfactual, borderColor: 'rgba(160, 160, 160, 0.7)', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, tension: 0, spanGaps: false }
       ]);
 
-      // Destroy old charts
-      ['pciRollingRevChart','pciRollingUnitsChart'].forEach(k => {
+      // Destroy old charts (now three of them).
+      ['pciRollingRevChart','pciRollingUnitsChart','pciRollingProfitChart'].forEach(k => {
         if (window[k]) { window[k].destroy(); window[k] = null; }
       });
 
       window.pciRollingRevChart = new Chart(document.getElementById('pci-rolling-rev-chart').getContext('2d'), {
         type: 'line',
-        data: { labels: dailyLabels, datasets: mkDatasets(rollingRev, 'rgb(34, 197, 94)') },
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingRev, 'rgb(34, 197, 94)', cfRev) },
         options: mkOpts(true)
       });
 
       window.pciRollingUnitsChart = new Chart(document.getElementById('pci-rolling-units-chart').getContext('2d'), {
         type: 'line',
-        data: { labels: dailyLabels, datasets: mkDatasets(rollingUnits, 'rgb(59, 130, 246)') },
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingUnits, 'rgb(59, 130, 246)', cfUnits) },
         options: mkOpts(false)
+      });
+
+      window.pciRollingProfitChart = new Chart(document.getElementById('pci-rolling-profit-chart').getContext('2d'), {
+        type: 'line',
+        data: { labels: dailyLabels, datasets: mkDatasets(rollingProfit, 'rgb(168, 85, 247)', cfProfit) },
+        options: mkOpts(true)
       });
     }
 
@@ -1741,6 +1779,7 @@
     // the Individual Analysis presentation).
     let _pcdaRevChart = null;
     let _pcdaUnitsChart = null;
+    let _pcdaProfitChart = null;
 
     // Pagination state for the Day Analysis compact list. 25/page
     // matches the Listing Change History pager. Reset to page 1 on
@@ -2038,40 +2077,82 @@
       // settle after the display flip; same trick used on Sessions.
       chartWrap.style.display = 'block';
       await new Promise(r => requestAnimationFrame(r));
-      _renderPCDAChart(matched, date, beforeStart, afterEnd);
+      // Pass the before-period daily averages so the chart can draw the
+      // counterfactual reference line at the exact same value the cards
+      // show as "Before" — chart and cards visually agree.
+      _renderPCDAChart(matched, date, beforeStart, afterEnd, {
+        revBeforeDaily, unitsBeforeDaily, profitBeforeDaily
+      });
     }
 
-    function _renderPCDAChart(matched, changeDate, startDate, endDate) {
+    function _renderPCDAChart(matched, changeDate, startDate, endDate, beforeAvgs) {
       // Build summed daily series across all matched SKUs over the
       // before-window through afterEnd. One pass over svOrdersData
       // filtered to the matched SKUs — much cheaper than per-day
       // queries when there are many SKUs.
       const skuSet = new Set(matched.map(pc => pc.sku));
-      const dailyRev   = {};
-      const dailyUnits = {};
+
+      // Pre-build per-SKU fee lookup so the profit series can be summed
+      // in the same pass as revenue and units. avgShipping is FBA-zero
+      // and fbaFees is FBM-zero per the catalog convention, so this
+      // single formula covers both fulfillment channels.
+      const feeBySku = {};
+      for (const pc of matched) {
+        const info = pciSkuMap[pc.sku] || {};
+        feeBySku[pc.sku] = (info.transactionFees || 0)
+                         + (info.fbaFees || 0)
+                         + (info.avgShipping || 0);
+      }
+
+      const dailyRev    = {};
+      const dailyUnits  = {};
+      const dailyProfit = {};
       let cursor = startDate;
       while (cursor <= endDate) {
         dailyRev[cursor] = 0;
         dailyUnits[cursor] = 0;
+        dailyProfit[cursor] = 0;
         cursor = offsetDate(cursor, 1);
       }
       for (const o of svOrdersData) {
         if (!skuSet.has(o.sku)) continue;
         if (o.orderDate < startDate || o.orderDate > endDate) continue;
         if (dailyRev[o.orderDate] != null) {
-          dailyRev[o.orderDate]   += o.itemTotal || 0;
-          dailyUnits[o.orderDate] += o.quantity  || 0;
+          const rev = o.itemTotal || 0;
+          const qty = o.quantity  || 0;
+          dailyRev[o.orderDate]    += rev;
+          dailyUnits[o.orderDate]  += qty;
+          dailyProfit[o.orderDate] += rev - (feeBySku[o.sku] || 0) * qty;
         }
       }
 
       const dates = Object.keys(dailyRev).sort();
       const labels = dates.map(d => d.slice(5)); // MM-DD
-      const revData   = dates.map(d => dailyRev[d]);
-      const unitsData = dates.map(d => dailyUnits[d]);
+      // Apply honest 7-day rolling smoothing (matches the Individual
+      // Analysis charts). The previous version used Chart.js's
+      // `tension: 0.4` which is just visual curve-fitting through noisy
+      // daily points — looked smooth but lied about the underlying data.
+      const revDataDaily    = dates.map(d => dailyRev[d]);
+      const unitsDataDaily  = dates.map(d => dailyUnits[d]);
+      const profitDataDaily = dates.map(d => dailyProfit[d]);
+      const revData    = _pciRollingAvg(revDataDaily,    7);
+      const unitsData  = _pciRollingAvg(unitsDataDaily,  7);
+      const profitData = _pciRollingAvg(profitDataDaily, 7);
+
+      // Counterfactual = the before-period average extended across the
+      // after-period. Null before the change date so the line only
+      // appears on the after side, where its visual gap from the actual
+      // series is the price change's impact. Uses the same averages the
+      // cards show, so chart and cards visually agree.
+      const changeIdx = dates.indexOf(changeDate);
+      const cfFor = (avg) => dates.map((_, i) => (changeIdx >= 0 && i >= changeIdx) ? avg : null);
+      const cfRev    = cfFor((beforeAvgs && beforeAvgs.revBeforeDaily)    || 0);
+      const cfUnits  = cfFor((beforeAvgs && beforeAvgs.unitsBeforeDaily)  || 0);
+      const cfProfit = cfFor((beforeAvgs && beforeAvgs.profitBeforeDaily) || 0);
 
       // Mark the change date with a vertical dashed line. The label
       // uses MM-DD form (matching the axis labels). Same annotation
-      // shape applied to both charts.
+      // shape applied to all three charts.
       const annotations = {
         changeLine: {
           type: 'line',
@@ -2099,25 +2180,46 @@
         }
       });
 
-      const mkDataset = (data, color) => [{
-        data,
-        borderColor: color,
-        backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'),
-        tension: 0.4,
-        pointRadius: 0,
-        borderWidth: 2
-      }];
+      // Two datasets per chart: the actual rolling-avg series and the
+      // counterfactual reference line (dashed gray). Counterfactual is
+      // a flat horizontal line over the after-period; nulls before the
+      // change date keep Chart.js from drawing a misleading slope.
+      const mkDatasets = (data, color, counterfactual) => [
+        {
+          data,
+          borderColor: color,
+          backgroundColor: color.replace('rgb', 'rgba').replace(')', ', 0.1)'),
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 2
+        },
+        {
+          data: counterfactual,
+          borderColor: 'rgba(160, 160, 160, 0.7)',
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          tension: 0,
+          spanGaps: false
+        }
+      ];
 
-      if (_pcdaRevChart)   { _pcdaRevChart.destroy();   _pcdaRevChart = null; }
-      if (_pcdaUnitsChart) { _pcdaUnitsChart.destroy(); _pcdaUnitsChart = null; }
+      if (_pcdaRevChart)    { _pcdaRevChart.destroy();    _pcdaRevChart = null; }
+      if (_pcdaUnitsChart)  { _pcdaUnitsChart.destroy();  _pcdaUnitsChart = null; }
+      if (_pcdaProfitChart) { _pcdaProfitChart.destroy(); _pcdaProfitChart = null; }
 
       _pcdaRevChart = new Chart(
         document.getElementById('pcda-rev-chart').getContext('2d'),
-        { type: 'line', data: { labels, datasets: mkDataset(revData, 'rgb(255, 159, 64)') }, options: mkOpts(true) }
+        { type: 'line', data: { labels, datasets: mkDatasets(revData, 'rgb(255, 159, 64)', cfRev) }, options: mkOpts(true) }
       );
       _pcdaUnitsChart = new Chart(
         document.getElementById('pcda-units-chart').getContext('2d'),
-        { type: 'line', data: { labels, datasets: mkDataset(unitsData, 'rgb(54, 162, 235)') }, options: mkOpts(false) }
+        { type: 'line', data: { labels, datasets: mkDatasets(unitsData, 'rgb(54, 162, 235)', cfUnits) }, options: mkOpts(false) }
+      );
+      _pcdaProfitChart = new Chart(
+        document.getElementById('pcda-profit-chart').getContext('2d'),
+        { type: 'line', data: { labels, datasets: mkDatasets(profitData, 'rgb(168, 85, 247)', cfProfit) }, options: mkOpts(true) }
       );
     }
 
