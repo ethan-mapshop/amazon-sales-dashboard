@@ -7,7 +7,20 @@ import { kv } from '@vercel/kv';
 //  POST ?action=migrate                      — one-time: copy from Sheets Products tab
 //  GET  ?action=last-updated                 — when was the catalog last written
 //
-// Schema per product: { sku, name, brand, fulfillment, cost, asin, type, status }
+// Schema per product:
+//   { sku, name, brand, fulfillment, cost, asin, type, status,
+//     transactionFees, fbaFees, avgShipping }
+// The three trailing dollar-amount fields feed the estimated-profit
+// calculation on the Price Change Impacts tab:
+//   transactionFees — Amazon referral / variable closing fees per unit
+//                     (applies to both FBA and FBM)
+//   fbaFees         — FBA pick/pack/ship per unit (FBA-only; leave 0 for FBM)
+//   avgShipping     — average outbound carrier cost per shipment (FBM-only;
+//                     leave 0 for FBA — Amazon handles shipping out of the
+//                     FBA fee on those)
+// All three default to 0 so products that pre-date this column addition
+// (and any product whose fees the user hasn't filled in yet) just don't
+// contribute to estimated profit until the value is set.
 // KV layout:
 //   products            → array of product objects (source of truth)
 //   products:updated-at → ISO timestamp of the last write
@@ -170,9 +183,12 @@ async function handleMigrate(req, res) {
     // columns the user described. "status" is optional — it was added later
     // and the legacy Sheet may not have it yet.
     const headerRow = rows[0].map(h => String(h || '').trim().toLowerCase());
-    const FIELDS = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status'];
+    // Map each known field to its column index. PRODUCT_FIELDS may contain
+    // camelCase names; the legacy Sheet has all lowercase headers, so
+    // lowercase both sides for the match.
+    const FIELDS = PRODUCT_FIELDS;
     const colIdx = {};
-    for (const f of FIELDS) colIdx[f] = headerRow.indexOf(f);
+    for (const f of FIELDS) colIdx[f] = headerRow.indexOf(f.toLowerCase());
 
     if (colIdx.sku === -1) {
       return res.status(400).json({ error: 'Products tab missing a "sku" column' });
@@ -208,25 +224,38 @@ async function handleMigrate(req, res) {
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 // Known product fields. Order matters for CSV/migration.
-const PRODUCT_FIELDS = ['sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status'];
+const PRODUCT_FIELDS = [
+  'sku', 'name', 'brand', 'fulfillment', 'cost', 'asin', 'type', 'status',
+  // Numeric per-unit / per-shipment cost components used for estimated
+  // profit. See the schema comment at the top of this file.
+  'transactionFees', 'fbaFees', 'avgShipping'
+];
+
+// Fields that should be parsed and stored as numbers (defaulting to 0 when
+// missing / unparseable). Anything not in this set is treated as a string.
+const NUMERIC_FIELDS = new Set(['cost', 'transactionFees', 'fbaFees', 'avgShipping']);
 
 // Shape each incoming product consistently. In { partial: true } mode we
 // only emit fields that were actually present on the input — useful for
 // bulk-upsert so a CSV that omits a column doesn't wipe that field on
 // existing products. In full mode every known field is emitted, defaulting
-// strings to '' and cost to 0.
+// strings to '' and numerics to 0.
+//
+// Numeric fields (cost, transactionFees, fbaFees, avgShipping) accept
+// strings with currency symbols / commas so a CSV with "$1.25" or "1,234.56"
+// parses correctly — anything that fails parseFloat becomes 0.
 function normalizeProduct(p, { partial = false } = {}) {
   const str = (v) => (v == null ? '' : String(v).trim());
+  const num = (v) => {
+    if (v == null || v === '') return 0;
+    const n = parseFloat(String(v).replace(/[$,]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  };
   const out = {};
   for (const f of PRODUCT_FIELDS) {
     const present = Object.prototype.hasOwnProperty.call(p, f);
     if (partial && !present) continue;
-    if (f === 'cost') {
-      const cost = parseFloat(p.cost);
-      out.cost = Number.isFinite(cost) ? cost : 0;
-    } else {
-      out[f] = str(p[f]);
-    }
+    out[f] = NUMERIC_FIELDS.has(f) ? num(p[f]) : str(p[f]);
   }
   return out;
 }
@@ -237,7 +266,8 @@ function normalizeProduct(p, { partial = false } = {}) {
 function defaultsFor(_partial) {
   return {
     sku: '', name: '', brand: '', fulfillment: '',
-    cost: 0, asin: '', type: '', status: ''
+    cost: 0, asin: '', type: '', status: '',
+    transactionFees: 0, fbaFees: 0, avgShipping: 0
   };
 }
 

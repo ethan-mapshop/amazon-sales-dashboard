@@ -10,15 +10,26 @@
     let catalogOnlyActive = false;
 
     // Column order shown in the table and used for CSV export.
+    //
+    // The three trailing cost columns feed the Price Change Impacts
+    // estimated-profit calculation. Each is a dollar amount formatted via
+    // formatCost (blank when 0/empty so it's obvious which cells the user
+    // hasn't filled in). transactionFees applies to both FBA and FBM;
+    // fbaFees is FBA-only (leave 0 for FBM); avgShipping is FBM-only
+    // (leave 0 for FBA — Amazon's fulfillment fee covers outbound
+    // shipping there).
     const CATALOG_COLUMNS = [
-      { field: 'brand',       label: 'Brand',       filter: true },
-      { field: 'name',        label: 'Name',        filter: false },
-      { field: 'sku',         label: 'SKU',         filter: false, mono: true },
-      { field: 'asin',        label: 'ASIN',        filter: false, mono: true },
-      { field: 'fulfillment', label: 'Fulfillment', filter: true },
-      { field: 'cost',        label: 'Cost',        filter: false, align: 'right', mono: true },
-      { field: 'type',        label: 'Type',        filter: true },
-      { field: 'status',      label: 'Status',      filter: true }
+      { field: 'brand',           label: 'Brand',              filter: true },
+      { field: 'name',            label: 'Name',               filter: false },
+      { field: 'sku',             label: 'SKU',                filter: false, mono: true },
+      { field: 'asin',            label: 'ASIN',               filter: false, mono: true },
+      { field: 'fulfillment',     label: 'Fulfillment',        filter: true },
+      { field: 'cost',            label: 'Cost',               filter: false, align: 'right', mono: true, format: 'cost' },
+      { field: 'transactionFees', label: 'Transaction Fees',   filter: false, align: 'right', mono: true, format: 'cost' },
+      { field: 'fbaFees',         label: 'FBA Fees',           filter: false, align: 'right', mono: true, format: 'cost' },
+      { field: 'avgShipping',     label: 'Avg Shipping (FBM)', filter: false, align: 'right', mono: true, format: 'cost' },
+      { field: 'type',            label: 'Type',               filter: true },
+      { field: 'status',          label: 'Status',             filter: true }
     ];
 
     // Sort order applied on load: brand → status → sku → fulfillment, all A-Z.
@@ -193,7 +204,7 @@
         const mono  = col.mono ? "font-family: 'Roboto Mono', monospace;" : '';
         const style = `padding: 0.75rem; border-bottom: 1px solid var(--border); ${align} ${mono}`;
         const raw   = p[col.field];
-        const value = col.field === 'cost' ? formatCost(raw) : escapeHtml(raw);
+        const value = col.format === 'cost' ? formatCost(raw) : escapeHtml(raw);
         return `<td style="${style}">${value}</td>`;
       }).join('');
       return `<tr>${cells}</tr>`;
