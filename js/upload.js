@@ -632,19 +632,25 @@
           }).join('');
       }
 
-      // Last results, sorted by month desc (most recent first)
+      // Last results, sorted by month desc (most recent first). During a
+      // long backfill the list can grow — display all of them; the panel
+      // scrolls naturally in the surrounding layout.
       const resultMonths = Object.keys(lastResults || {}).sort((a, b) => b.localeCompare(a));
       if (resultMonths.length === 0) {
         resultsEl.innerHTML = '';
       } else {
         resultsEl.innerHTML = '<div style="margin-bottom: 0.5rem; color: var(--text-secondary);"><strong>Recent results:</strong></div>' +
-          resultMonths.slice(0, 24).map(m => {
+          resultMonths.map(m => {
             const r = lastResults[m];
             if (r.status === 'DONE') {
               const skipNote = r.skippedCancelled ? `, ${r.skippedCancelled} cancelled skipped` : '';
               return `<div style="color: var(--success);">✓ ${m}: ${r.rowCount} rows${skipNote}</div>`;
             }
-            return `<div style="color: var(--error);">✗ ${m}: ${r.error || 'failed'}</div>`;
+            // Escape the error text so an angle bracket or ampersand in
+            // Amazon's message doesn't break the render. Small helper
+            // inline; no need for a full HTML escaper.
+            const errText = String(r.error || 'failed').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+            return `<div style="color: var(--error); word-break: break-word;">✗ ${m}: ${errText}</div>`;
           }).join('');
       }
     }
@@ -751,7 +757,9 @@
       }
 
       // Uncheck the boxes we successfully queued so a follow-on click
-      // doesn't accidentally re-queue them.
+      // doesn't accidentally re-queue them. Failed months stay checked
+      // so the user can hit Pull again after fixing whatever went
+      // wrong (or after ticking the overwrite box).
       const queuedMonths = new Set([...results.requested, ...results.alreadyPending]);
       grid.querySelectorAll('.ordersreport-month-cb').forEach(cb => {
         if (queuedMonths.has(cb.value)) cb.checked = false;
@@ -764,7 +772,11 @@
         console.error('Some requests failed:', results.failed);
       }
 
-      _orStartPolling();
+      // Refresh the status panel from the server (which now includes any
+      // request-time failures the server persisted to lastResults). This
+      // also kicks off polling if there's newly-pending work — so we
+      // don't need a separate _orStartPolling() call.
+      await _orFetchInitialStatus();
     }
 
     // Wire up controls on DOMContentLoaded — module-level so it runs

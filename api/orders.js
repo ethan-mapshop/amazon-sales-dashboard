@@ -449,13 +449,17 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 //
 // Body: { month: 'YYYY-MM' }
 async function handleRequestFlatFileReport(req, res) {
+  // Declared outside the try so the catch can record a per-month
+  // failure to orders:v2:report-lastresult (so it surfaces in the UI's
+  // status panel and survives a page reload).
+  let month;
   try {
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
     if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
     const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
     if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
 
-    const month = req.body?.month;
+    month = req.body?.month;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ error: 'month=YYYY-MM required in body' });
     }
@@ -530,6 +534,15 @@ async function handleRequestFlatFileReport(req, res) {
     }];
     await kv.set('orders:v2:pending-reports', updated);
 
+    // Clear any stale lastResults entry for this month — a previous
+    // failure shouldn't linger in the UI now that we've successfully
+    // re-queued the report.
+    const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+    if (lastResults[month]) {
+      delete lastResults[month];
+      await kv.set('orders:v2:report-lastresult', lastResults);
+    }
+
     return res.status(200).json({
       success: true,
       reportId,
@@ -537,9 +550,48 @@ async function handleRequestFlatFileReport(req, res) {
       alreadyPending: false
     });
   } catch (error) {
-    console.error('[ORDERS REQUEST-REPORT] Error:', error);
-    return res.status(500).json({ error: 'Request failed: ' + error.message });
+    const errorMsg = _extractSpApiErrorMessage(error);
+    console.error('[ORDERS REQUEST-REPORT] Error:', errorMsg);
+
+    // Persist request-time failures to lastResults so the status panel
+    // can render them. Without this, request-time failures were only
+    // visible via a raw JSON response in DevTools — users never saw
+    // "why did July 2024 fail?" in the UI. Best-effort; a KV write
+    // failure here shouldn't mask the underlying error we return.
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      try {
+        const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+        lastResults[month] = {
+          status: 'FAILED',
+          error: errorMsg,
+          completedAt: new Date().toISOString(),
+          phase: 'request'
+        };
+        await kv.set('orders:v2:report-lastresult', lastResults);
+      } catch { /* best-effort */ }
+    }
+
+    return res.status(500).json({ error: 'Request failed: ' + errorMsg, month });
   }
+}
+
+// SP-API errors from the amazon-sp-api npm package come in a few shapes
+// depending on version. This walker pulls the user-facing message from
+// wherever it lives. Prefers structured errors[] over raw .message so
+// we get e.g. "InvalidInput: dataStartTime must be within the last 2
+// years" instead of the wrapper's opaque "Request failed" string.
+function _extractSpApiErrorMessage(err) {
+  if (!err) return 'Unknown error';
+  const body = err?.response?.data || err?.body || err?.data;
+  if (body?.errors && Array.isArray(body.errors) && body.errors.length > 0) {
+    return body.errors.map(e => {
+      const code = e.code ? `${e.code}: ` : '';
+      const msg = e.message || e.details || '';
+      return `${code}${msg}`.trim();
+    }).filter(Boolean).join('; ');
+  }
+  if (typeof err.message === 'string' && err.message) return err.message;
+  return String(err);
 }
 
 // ─── POLL FLAT-FILE REPORT (SP-API getReport + getReportDocument) ───────────
