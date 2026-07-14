@@ -335,11 +335,15 @@
     <!-- SALES & VOLUME PAGE -->
     <div id="salesvolume-page" class="page">
       <div class="page-header">
+        <!-- Phase 3 alert banner. Hidden until loadSalesVolumeData
+             populates it from /api/orders?action=get-alerts. Each alert
+             renders as one row with a Dismiss button. -->
+        <div id="sv-alert-banner" style="display: none; margin-bottom: 1rem;"></div>
         <div class="page-header-top">
           <h2 class="section-title">Sales & Volume</h2>
           <div id="sv-data-blurb" class="header-data-blurb">
             <span>ℹ️</span>
-            <span>Amazon data auto-synced daily through yesterday. Most recent data available: <strong id="sv-latest-date">—</strong></span>
+            <span>Amazon data auto-synced daily through yesterday. Most recent data available: <strong id="sv-latest-date">—</strong>. <span id="sv-last-sync" style="color: var(--text-secondary);"></span></span>
           </div>
         </div>
 

@@ -23,6 +23,18 @@
     {
       "path": "/api/shipping?action=sync",
       "schedule": "0 13 3 * *"
+    },
+    {
+      "path": "/api/orders?action=cron-daily-request",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/orders?action=cron-collect",
+      "schedule": "0 10,14,18 * * *"
+    },
+    {
+      "path": "/api/orders?action=cron-data-check",
+      "schedule": "0 20 * * *"
     }
   ],
   "functions": {

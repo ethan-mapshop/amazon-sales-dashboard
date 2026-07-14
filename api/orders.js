@@ -23,11 +23,17 @@ export default async function handler(req, res) {
     if (action === 'rebuild-summary')        return handleRebuildSummary(req, res);
     if (action === 'poll-flat-file-report')  return handlePollFlatFileReport(req, res);
     if (action === 'list-pending-reports')   return handleListPendingReports(req, res);
+    if (action === 'cron-daily-request')     return handleCronDailyRequest(req, res);
+    if (action === 'cron-collect')           return handleCronCollect(req, res);
+    if (action === 'cron-data-check')        return handleCronDataCheck(req, res);
+    if (action === 'get-alerts')             return handleGetAlerts(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'upload-orders-report')    return handleUploadOrdersReport(req, res);
     if (action === 'request-flat-file-report') return handleRequestFlatFileReport(req, res);
     if (action === 'delete-v2-months')        return handleDeleteV2Months(req, res);
+    if (action === 'cron-daily-request')      return handleCronDailyRequest(req, res);
+    if (action === 'dismiss-alert')           return handleDismissAlert(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -328,74 +334,14 @@ async function handleUploadOrdersReport(req, res) {
 // top of this, so this helper only returns the aggregates. The caller
 // wraps them into an HTTP response.
 async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}) {
-  const pick = (obj, ...keys) => {
-    for (const k of keys) if (obj[k] !== undefined) return obj[k];
-    const lower = {};
-    for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
-    for (const k of keys) {
-      const v = lower[k.toLowerCase()];
-      if (v !== undefined) return v;
-    }
-    return undefined;
-  };
-
-  const byMonth = {};
-  let skippedCancelled = 0;
-  let skippedNoDate = 0;
-  let skippedNoOrder = 0;
-  for (const r of rawRows) {
-    if (!r || typeof r !== 'object') continue;
-
-    // Drop cancelled rows at ingest — matches existing filter behavior
-    // in fetchOrdersForDateRange. Amazon spells it "Cancelled" (two Ls)
-    // in the flat file; belt-and-braces check for both spellings.
-    const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
-    if (status === 'Cancelled' || status === 'Canceled') { skippedCancelled++; continue; }
-
-    const orderDateRaw = String(pick(r, 'purchase-date', 'purchaseDate') || '').trim();
-    const orderDate = orderDateRaw.slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
-
-    const orderId = String(pick(r, 'amazon-order-id', 'amazonOrderId', 'orderId') || '').trim();
-    if (!orderId) { skippedNoOrder++; continue; }
-
-    const sku = String(pick(r, 'sku') || '').trim();
-    const asin = String(pick(r, 'asin') || '').trim();
-    const qtyRaw = pick(r, 'quantity');
-    const quantity = parseInt(String(qtyRaw ?? '0').replace(/[,]/g, ''), 10) || 0;
-
-    // item-price is the actual transacted line total (unit price × qty,
-    // reflecting business-buyer discounts and any other Amazon-side
-    // pricing adjustments). Strip $ / commas defensively.
-    const priceRaw = pick(r, 'item-price', 'itemPrice');
-    const itemTotal = parseFloat(String(priceRaw ?? '0').replace(/[$,]/g, '')) || 0;
-
-    // fulfillment-channel is already AFN/MFN in the flat file — same
-    // shape we store today. Fall through as-is; downstream filters
-    // compare exactly against 'AFN' and 'MFN'.
-    const fulfillmentChannel = String(pick(r, 'fulfillment-channel', 'fulfillmentChannel') || '').trim();
-
-    const isBusinessRaw = pick(r, 'is-business-order', 'isBusinessOrder');
-    const isBusinessOrder = isBusinessRaw === true ||
-                            isBusinessRaw === 'true' ||
-                            isBusinessRaw === 'True' ||
-                            isBusinessRaw === 'TRUE' ||
-                            isBusinessRaw === 1 ||
-                            isBusinessRaw === '1';
-
-    const month = orderDate.slice(0, 7);
-    if (!byMonth[month]) byMonth[month] = [];
-    byMonth[month].push({
-      orderDate, orderId, sku, asin, quantity,
-      itemTotal, fulfillmentChannel, isBusinessOrder
-    });
-  }
+  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder, rawRowCount } =
+    _normalizeReportRows(rawRows);
 
   const monthsToWrite = Object.keys(byMonth).sort();
   if (monthsToWrite.length === 0) {
     return {
       collision: false,
-      writtenMonths: [], totalRows: 0, rawRowCount: rawRows.length,
+      writtenMonths: [], totalRows: 0, rawRowCount,
       skippedCancelled, skippedNoDate, skippedNoOrder
     };
   }
@@ -429,8 +375,125 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 
   return {
     collision: false,
-    writtenMonths: monthsToWrite, totalRows, rawRowCount: rawRows.length,
+    writtenMonths: monthsToWrite, totalRows, rawRowCount,
     skippedCancelled, skippedNoDate, skippedNoOrder
+  };
+}
+
+// Merge-mode ingestion — used by the Phase 3 cron-collect path when
+// pulling a single day's data. Unlike _normalizeAndWriteOrdersMonth
+// (which replaces the entire target month bucket), this READ-modifies-
+// WRITEs: reads existing rows, merges the new rows in, dedupes by
+// ${orderId}:${sku} (new rows win on conflict), writes back. Safe to
+// re-run — same day twice just re-overwrites the same rows.
+//
+// Never returns a collision result — merges by definition don't collide.
+async function _mergeOrdersDay(rawRows) {
+  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder, rawRowCount } =
+    _normalizeReportRows(rawRows);
+
+  const monthsToWrite = Object.keys(byMonth).sort();
+  if (monthsToWrite.length === 0) {
+    return {
+      collision: false,
+      writtenMonths: [], totalRows: 0, rawRowCount,
+      skippedCancelled, skippedNoDate, skippedNoOrder
+    };
+  }
+
+  let totalRows = 0;
+  for (const m of monthsToWrite) {
+    const existing = (await kv.get(`orders:v2:${m}`)) || [];
+    // Dedupe map keyed by orderId+sku. Existing rows loaded first, then
+    // new rows overwrite matches — new rows win on conflict, matching
+    // the semantic "the freshest report is authoritative for the rows
+    // it covers." Rows the new report doesn't touch (e.g., other days
+    // in the same month) stay intact.
+    const dedup = new Map();
+    for (const r of existing) if (r && r.orderId) dedup.set(`${r.orderId}:${r.sku}`, r);
+    for (const r of byMonth[m])                  dedup.set(`${r.orderId}:${r.sku}`, r);
+    const merged = [...dedup.values()].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
+    await kv.set(`orders:v2:${m}`, merged);
+    totalRows += byMonth[m].length; // count of NEW rows, not merged total
+  }
+  const existingIndex = (await kv.get('orders:v2:index')) || [];
+  const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
+  if (mergedIndex.length !== existingIndex.length) {
+    await kv.set('orders:v2:index', mergedIndex);
+  }
+
+  return {
+    collision: false,
+    writtenMonths: monthsToWrite, totalRows, rawRowCount,
+    skippedCancelled, skippedNoDate, skippedNoOrder
+  };
+}
+
+// Shared row-normalization used by both _normalizeAndWriteOrdersMonth
+// (replace mode) and _mergeOrdersDay (merge mode). Takes raw flat-file
+// rows (case-tolerant keys), drops cancelled, extracts our canonical
+// per-row shape, groups by YYYY-MM. Pure — no KV I/O.
+function _normalizeReportRows(rawRows) {
+  const pick = (obj, ...keys) => {
+    for (const k of keys) if (obj[k] !== undefined) return obj[k];
+    const lower = {};
+    for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
+    for (const k of keys) {
+      const v = lower[k.toLowerCase()];
+      if (v !== undefined) return v;
+    }
+    return undefined;
+  };
+
+  const byMonth = {};
+  let skippedCancelled = 0;
+  let skippedNoDate = 0;
+  let skippedNoOrder = 0;
+  for (const r of rawRows) {
+    if (!r || typeof r !== 'object') continue;
+
+    const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
+    if (status === 'Cancelled' || status === 'Canceled') { skippedCancelled++; continue; }
+
+    const orderDateRaw = String(pick(r, 'purchase-date', 'purchaseDate') || '').trim();
+    const orderDate = orderDateRaw.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
+
+    const orderId = String(pick(r, 'amazon-order-id', 'amazonOrderId', 'orderId') || '').trim();
+    if (!orderId) { skippedNoOrder++; continue; }
+
+    const sku = String(pick(r, 'sku') || '').trim();
+    const asin = String(pick(r, 'asin') || '').trim();
+    const qtyRaw = pick(r, 'quantity');
+    const quantity = parseInt(String(qtyRaw ?? '0').replace(/[,]/g, ''), 10) || 0;
+
+    const priceRaw = pick(r, 'item-price', 'itemPrice');
+    const itemTotal = parseFloat(String(priceRaw ?? '0').replace(/[$,]/g, '')) || 0;
+
+    const fulfillmentChannel = String(pick(r, 'fulfillment-channel', 'fulfillmentChannel') || '').trim();
+
+    const isBusinessRaw = pick(r, 'is-business-order', 'isBusinessOrder');
+    const isBusinessOrder = isBusinessRaw === true ||
+                            isBusinessRaw === 'true' ||
+                            isBusinessRaw === 'True' ||
+                            isBusinessRaw === 'TRUE' ||
+                            isBusinessRaw === 1 ||
+                            isBusinessRaw === '1';
+
+    const month = orderDate.slice(0, 7);
+    if (!byMonth[month]) byMonth[month] = [];
+    byMonth[month].push({
+      orderDate, orderId, sku, asin, quantity,
+      itemTotal, fulfillmentChannel, isBusinessOrder
+    });
+  }
+
+  return {
+    byMonth,
+    skippedCancelled,
+    skippedNoDate,
+    skippedNoOrder,
+    rawRowCount: rawRows.length
   };
 }
 
@@ -450,9 +513,8 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 //
 // Body: { month: 'YYYY-MM' }
 async function handleRequestFlatFileReport(req, res) {
-  // Declared outside the try so the catch can record a per-month
-  // failure to orders:v2:report-lastresult (so it surfaces in the UI's
-  // status panel and survives a page reload).
+  // month declared outside the try so the catch can record a per-month
+  // failure to lastResults (surfaces in the UI status panel).
   let month;
   try {
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
@@ -465,100 +527,45 @@ async function handleRequestFlatFileReport(req, res) {
       return res.status(400).json({ error: 'month=YYYY-MM required in body' });
     }
 
-    // If a report for this month is already in the pending queue, reuse
-    // it instead of requesting a duplicate from Amazon.
-    const pending = (await kv.get('orders:v2:pending-reports')) || [];
-    const existing = pending.find(p => p.month === month);
-    if (existing) {
-      return res.status(200).json({
-        success: true,
-        reportId: existing.reportId,
-        month,
-        alreadyPending: true,
-        message: `Report for ${month} already pending since ${existing.requestedAt}`
-      });
-    }
-
-    // ISO 8601 UTC bounds for the calendar month. Amazon's report is
-    // by-order-date (PurchaseDate); using UTC month boundaries gives us
-    // a clean per-month partition.
+    // ISO 8601 UTC bounds for the calendar month.
     const [y, m] = month.split('-').map(Number);
     const dataStartTime = new Date(Date.UTC(y, m - 1, 1)).toISOString();
-    // Last millisecond of the month — inclusive end. Matches sessions.js
-    // which uses `endDate + 'T23:59:59Z'` for the same purpose.
+    // Last millisecond of the month — inclusive end.
     const dataEndTime = new Date(Date.UTC(y, m, 1) - 1).toISOString();
 
-    const sp = createSellingPartner();
-    const marketplaceId = process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
-
-    let reportId;
-    try {
-      const response = await sp.callAPI({
-        operation: 'createReport',
-        endpoint: 'reports',
-        body: {
-          reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
-          marketplaceIds: [marketplaceId],
-          dataStartTime,
-          dataEndTime
-        }
-      });
-      reportId = response.reportId;
-    } catch (err) {
-      // SP-API 425 (Duplicate) means Amazon still has an identical
-      // request in flight and won't create a new one. The response body
-      // typically embeds the existing reportId in the errors array.
-      // Best-effort extract; if we can't find it, surface the error so
-      // the user can see what happened.
-      const isDuplicate = err?.statusCode === 425 ||
-                          /duplicate|already.+request/i.test(err?.message || '');
-      if (isDuplicate) {
-        const errBody = err?.response?.data || err?.body || {};
-        const errArr = Array.isArray(errBody?.errors) ? errBody.errors : [];
-        const numMatch = (s) => (typeof s === 'string' && s.match(/[0-9]{12,}/)) ? s.match(/[0-9]{12,}/)[0] : null;
-        const dupId = errArr.map(e => numMatch(e.details) || numMatch(e.message)).find(Boolean);
-        if (dupId) {
-          reportId = dupId;
-        } else {
-          throw new Error(`SP-API 425 duplicate but no reportId extractable: ${JSON.stringify(errBody).slice(0, 300)}`);
-        }
-      } else {
-        throw err;
-      }
-    }
-
-    const updated = [...pending, {
-      reportId,
-      month,
-      requestedAt: new Date().toISOString(),
-      name: `AllOrders ${month}`
-    }];
-    await kv.set('orders:v2:pending-reports', updated);
+    const result = await _requestReportForMonth({
+      tag: month,
+      name: `AllOrders ${month}`,
+      dataStartTime,
+      dataEndTime
+    });
 
     // Clear any stale lastResults entry for this month — a previous
     // failure shouldn't linger in the UI now that we've successfully
     // re-queued the report.
-    const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
-    if (lastResults[month]) {
-      delete lastResults[month];
-      await kv.set('orders:v2:report-lastresult', lastResults);
+    if (!result.alreadyPending) {
+      const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+      if (lastResults[month]) {
+        delete lastResults[month];
+        await kv.set('orders:v2:report-lastresult', lastResults);
+      }
     }
 
     return res.status(200).json({
       success: true,
-      reportId,
+      reportId: result.reportId,
       month,
-      alreadyPending: false
+      alreadyPending: result.alreadyPending,
+      ...(result.alreadyPending
+        ? { message: `Report for ${month} already pending since ${result.requestedAt}` }
+        : {})
     });
   } catch (error) {
     const errorMsg = _extractSpApiErrorMessage(error);
     console.error('[ORDERS REQUEST-REPORT] Error:', errorMsg);
 
     // Persist request-time failures to lastResults so the status panel
-    // can render them. Without this, request-time failures were only
-    // visible via a raw JSON response in DevTools — users never saw
-    // "why did July 2024 fail?" in the UI. Best-effort; a KV write
-    // failure here shouldn't mask the underlying error we return.
+    // can render them.
     if (month && /^\d{4}-\d{2}$/.test(month)) {
       try {
         const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
@@ -574,6 +581,77 @@ async function handleRequestFlatFileReport(req, res) {
 
     return res.status(500).json({ error: 'Request failed: ' + errorMsg, month });
   }
+}
+
+// Shared request-side helper. Callable from both the user-facing
+// handleRequestFlatFileReport (Phase 2 Pull UI, per-month) and the
+// Phase 3 cron actions (per-day). Returns:
+//   { reportId, tag, alreadyPending, requestedAt? }
+// Throws on any SP-API error the caller should treat as failure.
+//
+// The `tag` is a string identifier stored in the pending queue as
+// `p.month`. Phase 2 uses "2026-07" (month); Phase 3 cron uses
+// "2026-07-13" (date). Same field, different granularity — the poll
+// path treats it as an opaque string.
+async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime }) {
+  // If a report with this tag is already pending, reuse rather than
+  // firing a duplicate at Amazon.
+  const pending = (await kv.get('orders:v2:pending-reports')) || [];
+  const existing = pending.find(p => p.month === tag);
+  if (existing) {
+    return {
+      reportId: existing.reportId,
+      tag,
+      alreadyPending: true,
+      requestedAt: existing.requestedAt
+    };
+  }
+
+  const sp = createSellingPartner();
+  const marketplaceId = process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
+
+  let reportId;
+  try {
+    const response = await sp.callAPI({
+      operation: 'createReport',
+      endpoint: 'reports',
+      body: {
+        reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+        marketplaceIds: [marketplaceId],
+        dataStartTime,
+        dataEndTime
+      }
+    });
+    reportId = response.reportId;
+  } catch (err) {
+    // SP-API 425 (Duplicate) — reuse the existing reportId from the
+    // errors array if we can extract it.
+    const isDuplicate = err?.statusCode === 425 ||
+                        /duplicate|already.+request/i.test(err?.message || '');
+    if (isDuplicate) {
+      const errBody = err?.response?.data || err?.body || {};
+      const errArr = Array.isArray(errBody?.errors) ? errBody.errors : [];
+      const numMatch = (s) => (typeof s === 'string' && s.match(/[0-9]{12,}/)) ? s.match(/[0-9]{12,}/)[0] : null;
+      const dupId = errArr.map(e => numMatch(e.details) || numMatch(e.message)).find(Boolean);
+      if (dupId) {
+        reportId = dupId;
+      } else {
+        throw new Error(`SP-API 425 duplicate but no reportId extractable: ${JSON.stringify(errBody).slice(0, 300)}`);
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  const updated = [...pending, {
+    reportId,
+    month: tag,
+    requestedAt: new Date().toISOString(),
+    name
+  }];
+  await kv.set('orders:v2:pending-reports', updated);
+
+  return { reportId, tag, alreadyPending: false };
 }
 
 // SP-API errors from the amazon-sp-api npm package come in a few shapes
@@ -617,129 +695,147 @@ async function handlePollFlatFileReport(req, res) {
     if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
 
     const overwrite = req.query.overwrite === 'true';
-    const pending = (await kv.get('orders:v2:pending-reports')) || [];
-    if (pending.length === 0) {
-      return res.status(200).json({
-        success: true, collected: [], stillPending: [], failed: [], remaining: 0
-      });
-    }
-
-    const sp = createSellingPartner();
-    const MAX_PER_CALL = 5;
-    const toProcess = pending.slice(0, MAX_PER_CALL);
-    const untouchedTail = pending.slice(MAX_PER_CALL);
-
-    const collected = [];
-    const failed = [];
-    const stillPending = [];
-    const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
-
-    for (const p of toProcess) {
-      try {
-        const statusResp = await sp.callAPI({
-          operation: 'getReport',
-          endpoint: 'reports',
-          path: { reportId: p.reportId }
-        });
-        const status = statusResp.processingStatus;
-
-        if (status === 'DONE') {
-          const docId = statusResp.reportDocumentId;
-          const doc = await sp.callAPI({
-            operation: 'getReportDocument',
-            endpoint: 'reports',
-            path: { reportDocumentId: docId }
-          });
-          const dlResp = await fetch(doc.url);
-          if (!dlResp.ok) throw new Error(`Report download failed (${dlResp.status})`);
-          const buf = Buffer.from(await dlResp.arrayBuffer());
-          // Amazon says GZIP is the default compression for this report
-          // type, but be defensive — some documents come uncompressed.
-          const { gunzipSync } = await import('zlib');
-          const text = doc.compressionAlgorithm === 'GZIP'
-            ? gunzipSync(buf).toString('utf-8')
-            : buf.toString('utf-8');
-          const rows = _parseTsv(text);
-          const result = await _normalizeAndWriteOrdersMonth(rows, { overwrite });
-
-          if (result.collision) {
-            failed.push({
-              reportId: p.reportId,
-              month: p.month,
-              status: 'COLLISION',
-              error: `Month ${p.month} already has data. Re-run with overwrite=true to replace.`
-            });
-            lastResults[p.month] = {
-              status: 'FAILED',
-              error: 'Refused to overwrite existing month',
-              completedAt: new Date().toISOString()
-            };
-          } else {
-            collected.push({
-              reportId: p.reportId,
-              month: p.month,
-              status: 'DONE',
-              rowCount: result.totalRows,
-              rawRowCount: result.rawRowCount,
-              skippedCancelled: result.skippedCancelled
-            });
-            lastResults[p.month] = {
-              status: 'DONE',
-              rowCount: result.totalRows,
-              // Raw row count = what the parser produced (post-header). Lets
-              // the UI distinguish "Amazon returned empty" from "we filtered
-              // everything." A 0/0 is almost always Amazon returning an
-              // empty report — either genuinely no orders that month or
-              // (much more likely for older months) the month is outside
-              // the ~2-year order-report retention window.
-              rawRowCount: result.rawRowCount,
-              skippedCancelled: result.skippedCancelled,
-              skippedNoDate: result.skippedNoDate,
-              skippedNoOrder: result.skippedNoOrder,
-              completedAt: new Date().toISOString()
-            };
-          }
-        } else if (status === 'CANCELLED' || status === 'FATAL') {
-          failed.push({
-            reportId: p.reportId,
-            month: p.month,
-            status,
-            error: `Amazon returned processingStatus=${status}`
-          });
-          lastResults[p.month] = {
-            status: 'FAILED',
-            error: `Amazon returned processingStatus=${status}`,
-            completedAt: new Date().toISOString()
-          };
-        } else {
-          // IN_QUEUE / IN_PROGRESS — keep waiting.
-          stillPending.push({ ...p, currentStatus: status });
-        }
-      } catch (err) {
-        console.error(`[ORDERS POLL] Error processing reportId ${p.reportId}:`, err);
-        // Don't drop on transient errors — leave in queue with the last
-        // error recorded so a subsequent poll retries.
-        stillPending.push({ ...p, lastError: err.message });
-      }
-    }
-
-    // Reconstruct queue: newly stillPending (from processed batch) +
-    // untouched tail. Collected and failed are removed.
-    const nextQueue = [...stillPending, ...untouchedTail];
-    await kv.set('orders:v2:pending-reports', nextQueue);
-    await kv.set('orders:v2:report-lastresult', lastResults);
+    const result = await _pollPendingReports({ overwrite, mergeMode: false });
 
     return res.status(200).json({
       success: true,
-      collected,
-      stillPending: nextQueue,
-      failed,
-      remaining: nextQueue.length
+      collected: result.collected,
+      stillPending: result.stillPending,
+      failed: result.failed,
+      remaining: result.remaining
     });
   } catch (error) {
     console.error('[ORDERS POLL-REPORT] Error:', error);
     return res.status(500).json({ error: 'Poll failed: ' + error.message });
   }
+}
+
+// Shared collect-side helper. Callable from both the user-facing
+// handlePollFlatFileReport (Phase 2 Pull UI) and the Phase 3 cron-collect
+// action. Processes up to 5 pending reports per call to stay well within
+// the 300s Vercel timeout — subsequent calls drain the tail.
+//
+// Options:
+//   overwrite: passed to _normalizeAndWriteOrdersMonth. Ignored in merge mode.
+//   mergeMode: if true, use _mergeOrdersDay (append into existing month
+//     bucket, dedupe by orderId+sku). If false, use
+//     _normalizeAndWriteOrdersMonth (whole-month replace with collision
+//     guard). Phase 3 cron uses mergeMode=true because it fetches single
+//     days that should stack into the current month's data rather than
+//     replacing it.
+//
+// Returns { collected, stillPending, failed, remaining }.
+async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}) {
+  const pending = (await kv.get('orders:v2:pending-reports')) || [];
+  if (pending.length === 0) {
+    return { collected: [], stillPending: [], failed: [], remaining: 0 };
+  }
+
+  const sp = createSellingPartner();
+  const MAX_PER_CALL = 5;
+  const toProcess = pending.slice(0, MAX_PER_CALL);
+  const untouchedTail = pending.slice(MAX_PER_CALL);
+
+  const collected = [];
+  const failed = [];
+  const stillPending = [];
+  const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+
+  for (const p of toProcess) {
+    try {
+      const statusResp = await sp.callAPI({
+        operation: 'getReport',
+        endpoint: 'reports',
+        path: { reportId: p.reportId }
+      });
+      const status = statusResp.processingStatus;
+
+      if (status === 'DONE') {
+        const docId = statusResp.reportDocumentId;
+        const doc = await sp.callAPI({
+          operation: 'getReportDocument',
+          endpoint: 'reports',
+          path: { reportDocumentId: docId }
+        });
+        const dlResp = await fetch(doc.url);
+        if (!dlResp.ok) throw new Error(`Report download failed (${dlResp.status})`);
+        const buf = Buffer.from(await dlResp.arrayBuffer());
+        const { gunzipSync } = await import('zlib');
+        const text = doc.compressionAlgorithm === 'GZIP'
+          ? gunzipSync(buf).toString('utf-8')
+          : buf.toString('utf-8');
+        const rows = _parseTsv(text);
+        const result = mergeMode
+          ? await _mergeOrdersDay(rows)
+          : await _normalizeAndWriteOrdersMonth(rows, { overwrite });
+
+        if (result.collision) {
+          failed.push({
+            reportId: p.reportId,
+            month: p.month,
+            status: 'COLLISION',
+            error: `Month ${p.month} already has data. Re-run with overwrite=true to replace.`
+          });
+          lastResults[p.month] = {
+            status: 'FAILED',
+            error: 'Refused to overwrite existing month',
+            completedAt: new Date().toISOString()
+          };
+        } else {
+          collected.push({
+            reportId: p.reportId,
+            month: p.month,
+            status: 'DONE',
+            rowCount: result.totalRows,
+            rawRowCount: result.rawRowCount,
+            skippedCancelled: result.skippedCancelled
+          });
+          lastResults[p.month] = {
+            status: 'DONE',
+            rowCount: result.totalRows,
+            rawRowCount: result.rawRowCount,
+            skippedCancelled: result.skippedCancelled,
+            skippedNoDate: result.skippedNoDate,
+            skippedNoOrder: result.skippedNoOrder,
+            completedAt: new Date().toISOString()
+          };
+        }
+      } else if (status === 'CANCELLED' || status === 'FATAL') {
+        failed.push({
+          reportId: p.reportId,
+          month: p.month,
+          status,
+          error: `Amazon returned processingStatus=${status}`
+        });
+        lastResults[p.month] = {
+          status: 'FAILED',
+          error: `Amazon returned processingStatus=${status}`,
+          completedAt: new Date().toISOString()
+        };
+      } else {
+        // IN_QUEUE / IN_PROGRESS — keep waiting.
+        stillPending.push({ ...p, currentStatus: status });
+      }
+    } catch (err) {
+      console.error(`[ORDERS POLL] Error processing reportId ${p.reportId}:`, err);
+      // Don't drop on transient errors — leave in queue with the last
+      // error recorded so a subsequent poll retries.
+      stillPending.push({ ...p, lastError: err.message });
+    }
+  }
+
+  // Reconstruct queue: newly stillPending (from processed batch) +
+  // untouched tail. Collected and failed are removed.
+  const nextQueue = [...stillPending, ...untouchedTail];
+  await kv.set('orders:v2:pending-reports', nextQueue);
+  await kv.set('orders:v2:report-lastresult', lastResults);
+
+  return {
+    collected,
+    stillPending: nextQueue,
+    failed,
+    remaining: nextQueue.length
+  };
 }
 
 // ─── LIST PENDING REPORTS ───────────────────────────────────────────────────
@@ -835,6 +931,208 @@ async function handleDeleteV2Months(req, res) {
   }
 }
 
+// ─── CRON: DAILY REQUEST ────────────────────────────────────────────────────
+//
+// Fires the SP-API createReport call for yesterday's data only. Runs
+// unauthenticated (Vercel cron). Same request/collect pattern as the
+// user-facing Pull UI, but scoped to a single day so cron-collect can
+// merge (via _mergeOrdersDay) rather than replace the whole month.
+//
+// On any thrown error: writes a `pull-failure` alert before returning
+// 500. On success: writes the requestAt heartbeat and returns 200.
+async function handleCronDailyRequest(req, res) {
+  const yesterday = _yesterdayUTC();
+  try {
+    // Yesterday's UTC bounds — 00:00Z to 23:59:59Z of the same day.
+    const [y, m, d] = yesterday.split('-').map(Number);
+    const dataStartTime = new Date(Date.UTC(y, m - 1, d, 0, 0, 0)).toISOString();
+    const dataEndTime = new Date(Date.UTC(y, m - 1, d, 23, 59, 59)).toISOString();
+
+    const result = await _requestReportForMonth({
+      tag: yesterday,
+      name: `AllOrders ${yesterday}`,
+      dataStartTime,
+      dataEndTime
+    });
+
+    // Heartbeat: write requestAt so the client-side stale-check has
+    // fresh info, and so the dashboard can show "Last sync: X ago."
+    await _touchHeartbeat({ requestAt: new Date().toISOString() });
+
+    return res.status(200).json({
+      success: true,
+      date: yesterday,
+      reportId: result.reportId,
+      alreadyPending: result.alreadyPending
+    });
+  } catch (error) {
+    const errorMsg = _extractSpApiErrorMessage(error);
+    console.error('[ORDERS CRON-DAILY-REQUEST] Error:', errorMsg);
+    await _addAlert({
+      id: `pull-failure:${yesterday}`,
+      severity: 'error',
+      category: 'pull-failure',
+      message: `Daily order-report request failed for ${yesterday}: ${errorMsg}`
+    });
+    return res.status(500).json({ error: 'Request failed: ' + errorMsg, date: yesterday });
+  }
+}
+
+// ─── CRON: COLLECT ──────────────────────────────────────────────────────────
+//
+// Drains the pending report queue. Runs 3× daily to catch reports
+// whenever Amazon finishes them (5–15 min typical; occasionally hours).
+// Uses mergeMode: true because Phase 3 requests are single-day slices
+// that should stack into the current month, not replace it.
+//
+// For any FAILED entry the poll returns: emits a collect-failure alert.
+async function handleCronCollect(req, res) {
+  try {
+    // overwrite is irrelevant in merge mode (merges don't collide) but
+    // pass true for parity with the Pull UI's overwrite semantic.
+    const result = await _pollPendingReports({ overwrite: true, mergeMode: true });
+
+    for (const f of result.failed) {
+      await _addAlert({
+        id: `collect-failure:${f.reportId}`,
+        severity: 'error',
+        category: 'collect-failure',
+        message: `Report ${f.month} failed on Amazon's side: ${f.error}`,
+        details: { reportId: f.reportId, month: f.month, status: f.status }
+      });
+    }
+
+    await _touchHeartbeat({ collectAt: new Date().toISOString() });
+
+    return res.status(200).json({
+      success: true,
+      collected: result.collected,
+      failed: result.failed,
+      remaining: result.remaining
+    });
+  } catch (error) {
+    console.error('[ORDERS CRON-COLLECT] Error:', error);
+    return res.status(500).json({ error: 'Collect failed: ' + error.message });
+  }
+}
+
+// ─── CRON: DATA CHECK ──────────────────────────────────────────────────────
+//
+// Data-centric monitoring: reads the KV directly and verifies yesterday
+// has rows. Doesn't call Amazon. Fires an alert if the target date is
+// empty (which means the daily request or collect broke in some way).
+// Self-heals: on a successful check with non-zero rows, clears any
+// existing no-data alert for that date (via re-emit with dismissed=true,
+// but simpler is to just leave it — the next visit clears it via the
+// dismiss endpoint, and the count > 0 path can proactively mark it).
+async function handleCronDataCheck(req, res) {
+  const yesterday = _yesterdayUTC();
+  const yesterdayMonth = yesterday.slice(0, 7);
+  try {
+    const bucket = (await kv.get(`orders:v2:${yesterdayMonth}`)) || [];
+    const count = bucket.filter(r => r && r.orderDate === yesterday).length;
+
+    if (count === 0) {
+      await _addAlert({
+        id: `no-data:${yesterday}`,
+        severity: 'error',
+        category: 'no-data',
+        message: `No orders captured for ${yesterday}. Daily sync may be broken.`
+      });
+    } else {
+      // Self-heal: if a previous check for this same date wrote a
+      // no-data alert and a subsequent run finds data, mark that
+      // alert dismissed so it stops appearing in the banner.
+      const alerts = (await kv.get('orders:v2:alerts')) || [];
+      const idx = alerts.findIndex(a => a && a.id === `no-data:${yesterday}` && !a.dismissed);
+      if (idx >= 0) {
+        alerts[idx] = { ...alerts[idx], dismissed: true, resolvedAt: new Date().toISOString() };
+        await kv.set('orders:v2:alerts', alerts);
+      }
+    }
+
+    await _touchHeartbeat({ checkAt: new Date().toISOString(), lastCheckDate: yesterday, lastCheckCount: count });
+
+    return res.status(200).json({
+      success: true,
+      date: yesterday,
+      count,
+      status: count === 0 ? 'alert' : 'ok'
+    });
+  } catch (error) {
+    console.error('[ORDERS CRON-DATA-CHECK] Error:', error);
+    return res.status(500).json({ error: 'Data check failed: ' + error.message });
+  }
+}
+
+// ─── USER-FACING: GET ALERTS ────────────────────────────────────────────────
+//
+// Returns undismissed alerts + heartbeat data for the Sales & Volume
+// banner. Auth-gated (unlike the cron actions).
+async function handleGetAlerts(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const [alertsRaw, heartbeat] = await Promise.all([
+      kv.get('orders:v2:alerts'),
+      kv.get('orders:v2:last-cron-run')
+    ]);
+    const alerts = (Array.isArray(alertsRaw) ? alertsRaw : []).filter(a => a && !a.dismissed);
+
+    return res.status(200).json({
+      success: true,
+      alerts,
+      heartbeat: (heartbeat && typeof heartbeat === 'object') ? heartbeat : {}
+    });
+  } catch (error) {
+    console.error('[ORDERS GET-ALERTS] Error:', error);
+    return res.status(500).json({ error: 'Failed: ' + error.message });
+  }
+}
+
+// ─── USER-FACING: DISMISS ALERT ─────────────────────────────────────────────
+//
+// Marks an alert as dismissed (doesn't delete — kept in the array for
+// audit, but doesn't render in the banner). Body: { id }.
+async function handleDismissAlert(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const id = req.body?.id;
+    if (!id) return res.status(400).json({ error: 'id required in body' });
+
+    const alerts = (await kv.get('orders:v2:alerts')) || [];
+    const idx = alerts.findIndex(a => a && a.id === id);
+    if (idx < 0) return res.status(404).json({ error: `Alert not found: ${id}` });
+
+    alerts[idx] = { ...alerts[idx], dismissed: true, dismissedAt: new Date().toISOString() };
+    await kv.set('orders:v2:alerts', alerts);
+
+    return res.status(200).json({ success: true, id });
+  } catch (error) {
+    console.error('[ORDERS DISMISS-ALERT] Error:', error);
+    return res.status(500).json({ error: 'Dismiss failed: ' + error.message });
+  }
+}
+
+// Read-modify-write helper for the heartbeat KV. Merges the supplied
+// fields into orders:v2:last-cron-run rather than replacing wholesale,
+// so a cron that only updates requestAt doesn't clobber collectAt.
+async function _touchHeartbeat(patch) {
+  try {
+    const current = (await kv.get('orders:v2:last-cron-run')) || {};
+    await kv.set('orders:v2:last-cron-run', { ...current, ...patch });
+  } catch (err) {
+    console.warn('[_touchHeartbeat] KV write failed:', err.message);
+  }
+}
+
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function createSellingPartner() {
@@ -876,6 +1174,81 @@ function _parseTsv(text) {
     out.push(row);
   }
   return out;
+}
+
+// Returns yesterday's date as YYYY-MM-DD in UTC. Cron-driven — no local
+// tz drift. Matches the flat file's `purchase-date` UTC dating.
+function _yesterdayUTC() {
+  const now = new Date();
+  const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  return y.toISOString().slice(0, 10);
+}
+
+// Alert helper — writes to orders:v2:alerts (dedupes by id, caps array
+// at 100 entries, oldest dropped first) and if SLACK_WEBHOOK_URL env var
+// is set, POSTs a formatted message to Slack. Slack failures are logged
+// but never thrown (alerting mustn't break the caller).
+//
+// Alert shape:
+//   { id, severity, category, message, createdAt, dismissed: false, details? }
+//
+// The `id` is a stable string per alert type + subject (e.g.
+// 'no-data:2026-07-13'). Re-emitting the same id overwrites the
+// existing entry rather than duplicating — data-check running on July
+// 15 and finding July 13 still empty replaces the entry with a fresh
+// timestamp instead of stacking.
+async function _addAlert({ id, severity = 'error', category, message, details }) {
+  const alert = {
+    id,
+    severity,
+    category,
+    message,
+    createdAt: new Date().toISOString(),
+    dismissed: false,
+    ...(details ? { details } : {})
+  };
+
+  try {
+    const existing = (await kv.get('orders:v2:alerts')) || [];
+    const filtered = existing.filter(a => a && a.id !== id);
+    // Cap at 100. When trimming, drop dismissed first, then oldest.
+    let combined = [...filtered, alert];
+    if (combined.length > 100) {
+      const [dismissed, active] = combined.reduce((acc, a) => {
+        (a.dismissed ? acc[0] : acc[1]).push(a);
+        return acc;
+      }, [[], []]);
+      const trimmed = [
+        ...active,
+        ...dismissed.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+                    .slice(0, Math.max(0, 100 - active.length))
+      ];
+      combined = trimmed.slice(-100);
+    }
+    await kv.set('orders:v2:alerts', combined);
+  } catch (err) {
+    console.error('[_addAlert] KV write failed:', err.message);
+    // Fall through — still try Slack even if KV failed
+  }
+
+  // Slack notification. Skip silently if webhook not configured.
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (webhookUrl) {
+    const emoji = severity === 'error' ? '🔴' : (severity === 'warn' ? '⚠️' : 'ℹ️');
+    const text = `${emoji} [Sales & Volume] ${category} — ${message}`;
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (!resp.ok) {
+        console.warn(`[_addAlert] Slack POST returned ${resp.status}: ${await resp.text().catch(() => '')}`);
+      }
+    } catch (err) {
+      console.warn('[_addAlert] Slack POST failed:', err.message);
+    }
+  }
 }
 
 // Returns { lineItems, seenOrderIds }.

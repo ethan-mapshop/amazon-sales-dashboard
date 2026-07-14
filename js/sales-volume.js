@@ -42,6 +42,14 @@
           updateSVDataBlurb(svOrdersData);
         }
 
+        // Phase 3: fetch alerts + heartbeat and render the banner.
+        // Non-blocking — a failure here shouldn't break the main data
+        // load. Renders "Last sync: X ago" text in the data blurb and
+        // fills the alert banner if any alerts are undismissed.
+        _svLoadAlertsAndHeartbeat().catch(err => {
+          console.warn('Alerts load failed:', err.message);
+        });
+
 
         // Load products from the Upstash catalog. Sales & Volume needs
         // sellable units, so the Child/Non-Variable filter (parents
@@ -2629,4 +2637,137 @@
       if (!orders || orders.length === 0) { el.textContent = 'No data loaded'; return; }
       const latest = orders.reduce((max, o) => o.orderDate > max ? o.orderDate : max, '');
       el.textContent = latest || '—';
+    }
+
+    // ── PHASE 3: ALERTS + HEARTBEAT ──────────────────────────────────────────
+    // Fetches undismissed alerts and cron heartbeat from the server,
+    // renders the banner + "Last sync: X ago" text in the data blurb.
+    // Also computes a client-side "sync-stale" alert when the newest
+    // heartbeat is > 30h old — that's the backstop for when a server-
+    // side cron stops firing entirely (no code runs → no server-side
+    // alert gets emitted → only client-side check can catch it).
+
+    async function _svLoadAlertsAndHeartbeat() {
+      if (!accessToken) return;
+      const res = await fetch('/api/orders?action=get-alerts', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (!res.ok) throw new Error(`get-alerts failed (${res.status})`);
+      const data = await res.json();
+      const alerts = Array.isArray(data.alerts) ? [...data.alerts] : [];
+      const heartbeat = (data.heartbeat && typeof data.heartbeat === 'object') ? data.heartbeat : {};
+
+      _svRenderHeartbeat(heartbeat);
+
+      // Client-side stale check: newest heartbeat > 30h old = something's
+      // wrong. Prepend to alerts so it sorts first in the banner. Not
+      // persisted server-side — derived each load.
+      const staleAlert = _svBuildStaleAlert(heartbeat);
+      if (staleAlert) alerts.unshift(staleAlert);
+
+      _svRenderAlertBanner(alerts);
+    }
+
+    function _svRenderHeartbeat(heartbeat) {
+      const el = document.getElementById('sv-last-sync');
+      if (!el) return;
+      // Prefer checkAt (most representative — implies request + collect
+      // both ran, then the check verified data). Fall back to
+      // collectAt, then requestAt if the check hasn't run yet.
+      const stamps = [heartbeat.checkAt, heartbeat.collectAt, heartbeat.requestAt].filter(Boolean);
+      if (stamps.length === 0) {
+        el.textContent = '(no automatic sync yet — waiting for the first cron run)';
+        return;
+      }
+      const newest = stamps.sort()[stamps.length - 1];
+      el.textContent = `Last sync: ${_svTimeAgo(newest)}.`;
+    }
+
+    function _svBuildStaleAlert(heartbeat) {
+      const stamps = [heartbeat.checkAt, heartbeat.collectAt, heartbeat.requestAt].filter(Boolean);
+      if (stamps.length === 0) return null; // No heartbeat yet — different UI (see above)
+      const newest = stamps.sort()[stamps.length - 1];
+      const ageHours = (Date.now() - new Date(newest).getTime()) / 3.6e6;
+      if (ageHours < 30) return null;
+      return {
+        id: '__client__sync-stale',
+        severity: 'warn',
+        category: 'sync-stale',
+        message: `Last automatic sync was ${Math.floor(ageHours)} hours ago. The daily cron may have stopped — click Pull manually or check Vercel logs.`,
+        createdAt: new Date().toISOString(),
+        dismissed: false,
+        __clientOnly: true
+      };
+    }
+
+    function _svRenderAlertBanner(alerts) {
+      const banner = document.getElementById('sv-alert-banner');
+      if (!banner) return;
+      if (!alerts || alerts.length === 0) {
+        banner.style.display = 'none';
+        banner.innerHTML = '';
+        return;
+      }
+      const escHtml = (s) => String(s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+      const rowHtml = alerts.map(a => {
+        const bg = a.severity === 'error' ? 'rgba(239, 71, 111, 0.1)' : 'rgba(255, 165, 0, 0.1)';
+        const border = a.severity === 'error' ? 'var(--error)' : 'var(--accent-orange)';
+        const icon = a.severity === 'error' ? '🔴' : '⚠️';
+        // Client-only alerts (like sync-stale) can't be dismissed via
+        // the server — they'll reappear on next load until the
+        // underlying condition resolves. Hide the button in that case.
+        const dismissBtn = a.__clientOnly
+          ? ''
+          : `<button class="btn btn-secondary" data-alert-dismiss="${escHtml(a.id)}" style="font-size: 0.75rem; padding: 0.25rem 0.75rem;">Dismiss</button>`;
+        return `
+          <div style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem 1rem; background: ${bg}; border-left: 3px solid ${border}; border-radius: 4px; margin-bottom: 0.5rem;">
+            <div style="font-size: 1rem; line-height: 1;">${icon}</div>
+            <div style="flex: 1; font-size: 0.875rem;">${escHtml(a.message)}</div>
+            ${dismissBtn}
+          </div>
+        `;
+      }).join('');
+      banner.innerHTML = rowHtml;
+      banner.style.display = 'block';
+
+      // Wire dismiss buttons. Delegate via banner (rebuilt each render
+      // so listeners on individual buttons get cleared naturally).
+      banner.addEventListener('click', _svHandleAlertDismiss);
+    }
+
+    async function _svHandleAlertDismiss(evt) {
+      const btn = evt.target.closest('[data-alert-dismiss]');
+      if (!btn) return;
+      const id = btn.getAttribute('data-alert-dismiss');
+      if (!id || !accessToken) return;
+      btn.disabled = true;
+      btn.textContent = 'Dismissing…';
+      try {
+        const res = await fetch('/api/orders?action=dismiss-alert', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ id })
+        });
+        if (!res.ok) throw new Error(`dismiss failed (${res.status})`);
+        // Re-fetch to re-render (also picks up any newly-arrived alerts).
+        await _svLoadAlertsAndHeartbeat();
+      } catch (err) {
+        console.warn('Dismiss failed:', err.message);
+        btn.disabled = false;
+        btn.textContent = 'Dismiss';
+      }
+    }
+
+    function _svTimeAgo(iso) {
+      const ms = Date.now() - new Date(iso).getTime();
+      if (ms < 0) return 'just now';
+      const min = Math.round(ms / 60000);
+      if (min < 60) return `${min} min ago`;
+      const hr = Math.round(min / 60);
+      if (hr < 48) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
+      const days = Math.round(hr / 24);
+      return `${days} days ago`;
     }
