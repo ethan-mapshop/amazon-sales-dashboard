@@ -17,9 +17,13 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     if (action === 'get')             return handleGet(req, res);
+    if (action === 'get-v2')          return handleGetV2(req, res);
     if (action === 'sync')            return handleSync(req, res);
     if (action === 'get-summary')     return handleGetSummary(req, res);
     if (action === 'rebuild-summary') return handleRebuildSummary(req, res);
+  }
+  if (req.method === 'POST') {
+    if (action === 'upload-orders-report') return handleUploadOrdersReport(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -192,6 +196,202 @@ async function handleRebuildSummary(req, res) {
     return res.status(200).json({ success: true, records: summary.length });
   } catch (error) {
     return res.status(500).json({ error: 'Failed to rebuild summary: ' + error.message });
+  }
+}
+
+// ─── GET-V2 ──────────────────────────────────────────────────────────────────
+// Same shape as handleGet but reads from the orders:v2:* keyspace (data
+// ingested from Amazon's flat-file "All Orders" report via
+// handleUploadOrdersReport). Sales & Volume flips its fetch URL to this
+// action to consume the reconciled report data instead of the fragile
+// getOrders/getOrderItems cron output. Old handleGet stays intact for
+// rollback.
+async function handleGetV2(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const { startDate, endDate } = req.query;
+
+    const index = await kv.get('orders:v2:index') || [];
+    if (index.length === 0) {
+      return res.status(200).json({ success: true, orders: [] });
+    }
+
+    let monthsToFetch = index;
+    if (startDate && endDate) {
+      const start = startDate.slice(0, 7);
+      const end = endDate.slice(0, 7);
+      monthsToFetch = index.filter(m => m >= start && m <= end);
+    }
+
+    const buckets = await Promise.all(monthsToFetch.map(m => kv.get(`orders:v2:${m}`)));
+    let orders = buckets.flat().filter(Boolean);
+
+    if (startDate && endDate) {
+      orders = orders.filter(o => o.orderDate >= startDate && o.orderDate <= endDate);
+    }
+
+    return res.status(200).json({ success: true, orders });
+
+  } catch (error) {
+    console.error('Error retrieving v2 orders:', error);
+    return res.status(500).json({ error: 'Failed to retrieve orders: ' + error.message });
+  }
+}
+
+// ─── UPLOAD ORDERS REPORT (Amazon flat-file "All Orders" report) ────────────
+//
+// Client-parsed Amazon flat-file `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_
+// DATE_GENERAL` posted as JSON rows. Normalizes each row to the same shape
+// the existing Sales & Volume code already consumes (orderDate / sku /
+// asin / quantity / itemTotal / fulfillmentChannel), so no downstream
+// changes are needed once we swap the read to handleGetV2.
+//
+// Why this exists: the getOrders + getOrderItems path we've been running
+// on a daily cron systematically undercounts revenue (Pending orders with
+// $0 item prices get locked in by skip-already-captured; business-buyer
+// discounts and various edge cases don't round-trip cleanly). The flat
+// file contains Amazon's actual transacted line-item amounts as they
+// appear in Seller Central — matches Sales & Traffic by construction.
+//
+// Idempotency: refuses to overwrite an existing month's bucket unless
+// `?overwrite=true` is passed. Prevents accidental data loss on re-upload.
+//
+// Body: { rows: [{ 'amazon-order-id', 'purchase-date', 'sku', 'asin',
+// 'quantity', 'item-price', 'fulfillment-channel', 'item-status',
+// 'is-business-order' }, ...] }
+// Case-tolerant on keys (matches the transactions uploader pattern).
+async function handleUploadOrdersReport(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rawRows) return res.status(400).json({ error: 'rows array required in body' });
+
+    const overwrite = req.query.overwrite === 'true';
+
+    const pick = (obj, ...keys) => {
+      for (const k of keys) if (obj[k] !== undefined) return obj[k];
+      const lower = {};
+      for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
+      for (const k of keys) {
+        const v = lower[k.toLowerCase()];
+        if (v !== undefined) return v;
+      }
+      return undefined;
+    };
+
+    const byMonth = {};
+    let skippedCancelled = 0;
+    let skippedNoDate = 0;
+    let skippedNoOrder = 0;
+    for (const r of rawRows) {
+      if (!r || typeof r !== 'object') continue;
+
+      // Drop cancelled rows at ingest — matches existing filter behavior
+      // in fetchOrdersForDateRange. Amazon spells it "Cancelled" (two Ls)
+      // in the flat file; belt-and-braces check for both spellings.
+      const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
+      if (status === 'Cancelled' || status === 'Canceled') { skippedCancelled++; continue; }
+
+      const orderDateRaw = String(pick(r, 'purchase-date', 'purchaseDate') || '').trim();
+      const orderDate = orderDateRaw.slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
+
+      const orderId = String(pick(r, 'amazon-order-id', 'amazonOrderId', 'orderId') || '').trim();
+      if (!orderId) { skippedNoOrder++; continue; }
+
+      const sku = String(pick(r, 'sku') || '').trim();
+      const asin = String(pick(r, 'asin') || '').trim();
+      const qtyRaw = pick(r, 'quantity');
+      const quantity = parseInt(String(qtyRaw ?? '0').replace(/[,]/g, ''), 10) || 0;
+
+      // item-price is the actual transacted line total (unit price × qty,
+      // reflecting business-buyer discounts and any other Amazon-side
+      // pricing adjustments). Strip $ / commas defensively.
+      const priceRaw = pick(r, 'item-price', 'itemPrice');
+      const itemTotal = parseFloat(String(priceRaw ?? '0').replace(/[$,]/g, '')) || 0;
+
+      // fulfillment-channel is already AFN/MFN in the flat file — same
+      // shape we store today. Fall through as-is; downstream filters
+      // compare exactly against 'AFN' and 'MFN'.
+      const fulfillmentChannel = String(pick(r, 'fulfillment-channel', 'fulfillmentChannel') || '').trim();
+
+      const isBusinessRaw = pick(r, 'is-business-order', 'isBusinessOrder');
+      const isBusinessOrder = isBusinessRaw === true ||
+                              isBusinessRaw === 'true' ||
+                              isBusinessRaw === 'True' ||
+                              isBusinessRaw === 'TRUE' ||
+                              isBusinessRaw === 1 ||
+                              isBusinessRaw === '1';
+
+      const month = orderDate.slice(0, 7);
+      if (!byMonth[month]) byMonth[month] = [];
+      byMonth[month].push({
+        orderDate, orderId, sku, asin, quantity,
+        itemTotal, fulfillmentChannel, isBusinessOrder
+      });
+    }
+
+    const monthsToWrite = Object.keys(byMonth).sort();
+    if (monthsToWrite.length === 0) {
+      return res.status(200).json({
+        success: true, writtenMonths: [], totalRows: 0,
+        skippedCancelled, skippedNoDate, skippedNoOrder,
+        message: 'No valid rows found in the upload'
+      });
+    }
+
+    // Refuse to overwrite months that already have data unless the
+    // caller explicitly passes ?overwrite=true. Protects against
+    // accidental data loss on re-upload; the client can request an
+    // overwrite deliberately when they want to replace a month.
+    if (!overwrite) {
+      const collisions = [];
+      for (const m of monthsToWrite) {
+        const existing = await kv.get(`orders:v2:${m}`);
+        if (Array.isArray(existing) && existing.length > 0) collisions.push(m);
+      }
+      if (collisions.length > 0) {
+        return res.status(409).json({
+          error: `Months already have data: ${collisions.join(', ')}. Re-upload with ?overwrite=true to replace.`,
+          collidingMonths: collisions
+        });
+      }
+    }
+
+    // Write per-month buckets, then update the index. Data-first-then-
+    // pointer order so a partial failure doesn't leave dangling index
+    // entries pointing at empty keys.
+    let totalRows = 0;
+    for (const m of monthsToWrite) {
+      const rows = byMonth[m].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
+      await kv.set(`orders:v2:${m}`, rows);
+      totalRows += rows.length;
+    }
+    const existingIndex = (await kv.get('orders:v2:index')) || [];
+    const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
+    await kv.set('orders:v2:index', mergedIndex);
+
+    return res.status(200).json({
+      success: true,
+      writtenMonths: monthsToWrite,
+      totalRows,
+      skippedCancelled,
+      skippedNoDate,
+      skippedNoOrder,
+      message: `Uploaded ${totalRows} line items across ${monthsToWrite.length} month${monthsToWrite.length === 1 ? '' : 's'}${skippedCancelled ? `, skipped ${skippedCancelled} cancelled` : ''}.`
+    });
+  } catch (error) {
+    console.error('[ORDERS UPLOAD-REPORT] Error:', error);
+    return res.status(500).json({ error: 'Upload failed: ' + error.message });
   }
 }
 

@@ -210,6 +210,15 @@
               } else if (type === 'shippingyearly' && key === 'ShipDate') {
                 value = excelSerialToISODate(value) || value;
               }
+              // Amazon flat-file "All Orders" report — purchase-date is
+              // ISO 8601 (e.g. "2026-05-15T14:23:07+00:00"). Slicing to
+              // first 10 chars gives the YYYY-MM-DD the server expects.
+              // parseAmazonDate as a defensive fallback in case Amazon
+              // ever emits a different textual format.
+              else if (type === 'ordersreport' && key === 'purchase-date') {
+                const iso = String(value || '').slice(0, 10);
+                value = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : (parseAmazonDate(value) || value);
+              }
 
               normalized[key] = value;
             });
@@ -290,7 +299,8 @@
       // they land in parallel KV namespaces that the Overview's read
       // path merges with live SP-API data.
       if (!['products', 'productadmapping', 'brandadmapping',
-            'transactionsyearly', 'spadspendyearly', 'shippingyearly'].includes(type)) return;
+            'transactionsyearly', 'spadspendyearly', 'shippingyearly',
+            'ordersreport'].includes(type)) return;
 
       const btn = document.querySelector(`.process-btn[data-type="${type}"]`);
       btn.disabled = true;
@@ -325,15 +335,16 @@
         return;
       }
 
-      // Yearly backfill uploads — three thin POSTs, one per data source.
+      // Yearly backfill uploads + Orders Report — thin per-month POSTs.
       // Each endpoint handles its own column mapping and writes to its
       // own KV namespace. We share the same processUpload flow because
-      // the parsing/preview UX is identical to the other upload tabs.
-      if (type === 'transactionsyearly' || type === 'spadspendyearly' || type === 'shippingyearly') {
+      // the parsing/preview UX is identical across all these upload tabs.
+      if (type === 'transactionsyearly' || type === 'spadspendyearly' || type === 'shippingyearly' || type === 'ordersreport') {
         const endpoint =
           type === 'transactionsyearly' ? '/api/transactions?action=upload-yearly-csv' :
           type === 'spadspendyearly'    ? '/api/adspend?action=upload-yearly-csv'      :
-                                          '/api/shipping?action=upload-yearly-csv';
+          type === 'shippingyearly'     ? '/api/shipping?action=upload-yearly-csv'     :
+                                          '/api/orders?action=upload-orders-report';
         // Filter to just the columns the server cares about. Vercel
         // Hobby serverless POST bodies cap at 4.5 MB; the raw CSVs
         // (especially the Amazon Ads SP report at ~7.5 MB) would blow
@@ -357,6 +368,15 @@
             // irrelevant to seller P&L — don't ship it.
             'ShipDate', 'OrderNumber', 'CarrierFee', 'Items',
             'Carrier', 'ServiceCode'
+          ],
+          // Amazon flat-file "All Orders" columns. item-price is the
+          // actual transacted amount (not a lookup) — that's the whole
+          // reason we're switching to this data source. item-status is
+          // needed so the server can drop Cancelled rows.
+          ordersreport: [
+            'amazon-order-id', 'purchase-date', 'sku', 'asin',
+            'quantity', 'item-price', 'fulfillment-channel',
+            'item-status', 'is-business-order'
           ]
         };
         const keep = COLS[type];
@@ -378,9 +398,10 @@
         // It differs across the three uploads — see handleFile for
         // where each is normalized to YYYY-MM-DD before this runs.
         const dateKey =
-          type === 'transactionsyearly' ? 'date/time' :
-          type === 'spadspendyearly'    ? 'Date'      :
-                                          'ShipDate';
+          type === 'transactionsyearly' ? 'date/time'     :
+          type === 'spadspendyearly'    ? 'Date'          :
+          type === 'shippingyearly'     ? 'ShipDate'      :
+                                          'purchase-date';
         const byMonth = {};
         let droppedNoDate = 0;
         for (const row of slimRows) {

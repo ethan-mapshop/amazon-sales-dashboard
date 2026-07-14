@@ -51,6 +51,18 @@
         requiredColumns: ['ShipDate', 'OrderNumber', 'CarrierFee'],
         skipRows: 0,
         allowUpdates: false
+      },
+      // Amazon flat-file "All Orders" report
+      // (`GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL`). Feeds
+      // Sales & Volume via the orders:v2:* keyspace. Column names are
+      // Amazon's lowercase-hyphen convention — findHeaderRow matches
+      // case-insensitively so it handles either casing if Amazon ever
+      // changes it.
+      ordersreport: {
+        uniqueKey: null,
+        requiredColumns: ['amazon-order-id', 'purchase-date', 'sku', 'quantity', 'item-price'],
+        skipRows: 0,
+        allowUpdates: false
       }
     };
 

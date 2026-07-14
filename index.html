@@ -124,6 +124,7 @@
           <button class="tab" data-tab="transactionsyearly">Transactions (Yearly Backfill)</button>
           <button class="tab" data-tab="spadspendyearly">SP Ad Spend (Yearly Backfill)</button>
           <button class="tab" data-tab="shippingyearly">Shipping (Yearly Backfill)</button>
+          <button class="tab" data-tab="ordersreport">Orders Report</button>
         </div>
 
         <!-- Products Tab -->
@@ -240,6 +241,32 @@
             <button class="btn btn-primary process-btn" data-type="shippingyearly" disabled>Process & Upload</button>
           </div>
           <div class="status-message" data-type="shippingyearly"></div>
+        </div>
+
+        <!-- Orders Report tab.
+             Amazon Seller Central "All Orders" flat-file report
+             (`GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL`).
+             This is the source of truth for Sales & Volume revenue.
+             Contains actual transacted line-item amounts as Amazon
+             computes them (reflects business-buyer discounts and
+             other pricing adjustments the getOrders API path misses).
+             Path in Seller Central: Reports → Fulfillment → Sales →
+             All Orders. Reports cap at 30 days per request, so upload
+             one file per month. -->
+        <div class="tab-content" id="ordersreport-content">
+          <div class="upload-zone disabled" data-type="ordersreport">
+            <input type="file" class="file-input" accept=".xlsx,.xls,.csv,.tsv,.txt">
+            <div class="upload-icon">📊</div>
+            <div class="upload-text">Upload Amazon "All Orders" Report</div>
+            <div class="upload-hint">Sign in to enable • Flat file from Seller Central → Reports → Fulfillment → Sales → All Orders</div>
+          </div>
+          <div class="file-info" data-type="ordersreport"></div>
+          <div class="preview-table" data-type="ordersreport" style="display: none;"></div>
+          <div class="button-group">
+            <button class="btn btn-secondary clear-btn" data-type="ordersreport" style="display: none;">Clear</button>
+            <button class="btn btn-primary process-btn" data-type="ordersreport" disabled>Process & Upload</button>
+          </div>
+          <div class="status-message" data-type="ordersreport"></div>
         </div>
       </div>
     </div>

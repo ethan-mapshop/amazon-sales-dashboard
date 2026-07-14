@@ -23,7 +23,16 @@
         // Single fetch — full orders array. Used for both YTD/MTD
         // calculations and the rolling 13-month chart/list (which
         // aggregates client-side in renderSalesVolumeData).
-        const ordersRes = await fetch('/api/orders?action=get', {
+        //
+        // Reads from the `orders:v2:*` keyspace (Amazon flat-file "All
+        // Orders" report data, ingested via the Orders Report upload
+        // tab on the Data Upload page). This replaces the old
+        // ?action=get read that pulled from the getOrders/getOrderItems
+        // cron output — that path systematically undercounted revenue
+        // due to Pending-order and business-buyer-discount handling
+        // issues. See plan file mossy-pondering-music.md (Phase 1).
+        // Rollback: change back to ?action=get.
+        const ordersRes = await fetch('/api/orders?action=get-v2', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
 
