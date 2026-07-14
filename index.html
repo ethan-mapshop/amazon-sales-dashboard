@@ -298,10 +298,25 @@
 
             <div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
               <button id="ordersreport-pull-btn" class="btn btn-primary" disabled>Pull from Amazon</button>
+              <button id="ordersreport-delete-btn" class="btn btn-secondary" disabled title="Remove the checked months from the dashboard's data — use this before re-uploading a month that was previously partial">Delete selected from dashboard</button>
               <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-secondary); cursor: pointer;">
                 <input type="checkbox" id="ordersreport-overwrite" style="cursor: pointer;">
                 Overwrite months that already have data
               </label>
+            </div>
+
+            <!-- Inline delete-confirmation area. Hidden until the user
+                 clicks "Delete selected"; shows the list of months plus
+                 explicit Confirm / Cancel buttons. Inline UI (not a
+                 browser confirm() popup) per the project's UX rule. -->
+            <div id="ordersreport-delete-confirm" style="display: none; margin-bottom: 1rem; padding: 1rem 1.25rem; background: rgba(239, 71, 111, 0.08); border: 1px solid var(--error); border-radius: 8px;">
+              <div style="font-size: 0.9rem; margin-bottom: 0.75rem;">
+                Delete <strong id="ordersreport-delete-count">0 months</strong> from the dashboard: <span id="ordersreport-delete-list" style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem;"></span>
+              </div>
+              <div style="display: flex; gap: 0.5rem;">
+                <button id="ordersreport-delete-confirm-btn" class="btn btn-primary" style="background: var(--error); border-color: var(--error);">Confirm delete</button>
+                <button id="ordersreport-delete-cancel-btn" class="btn btn-secondary">Cancel</button>
+              </div>
             </div>
 
             <!-- Status panel — shows currently-pending reports (with

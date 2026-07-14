@@ -603,12 +603,23 @@
         `;
       }).join('');
       grid.dataset.built = '1';
-      // Wire "enable Pull button when >=1 checked"
+      // Wire "enable Pull / Delete buttons when >=1 checked"
       grid.addEventListener('change', () => {
-        const btn = document.getElementById('ordersreport-pull-btn');
-        const anyChecked = grid.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
-        if (btn) btn.disabled = !anyChecked || !accessToken;
+        _orRefreshActionButtons();
       });
+    }
+
+    // Central helper for enable/disable state of the two action buttons.
+    // Called from the checkbox change listener, from applyQuickPick, and
+    // from the auth watcher. Keeps enable logic in one place.
+    function _orRefreshActionButtons() {
+      const grid = document.getElementById('ordersreport-month-grid');
+      const pullBtn = document.getElementById('ordersreport-pull-btn');
+      const deleteBtn = document.getElementById('ordersreport-delete-btn');
+      if (!grid) return;
+      const anyChecked = grid.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
+      if (pullBtn) pullBtn.disabled = !anyChecked || !accessToken;
+      if (deleteBtn) deleteBtn.disabled = !anyChecked || !accessToken;
     }
 
     function _orRenderStatus(pending, lastResults) {
@@ -639,18 +650,35 @@
       if (resultMonths.length === 0) {
         resultsEl.innerHTML = '';
       } else {
+        // Escape the error text so an angle bracket or ampersand in
+        // Amazon's message doesn't break the render. Small helper
+        // inline; no need for a full HTML escaper.
+        const escHtml = (s) => String(s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
         resultsEl.innerHTML = '<div style="margin-bottom: 0.5rem; color: var(--text-secondary);"><strong>Recent results:</strong></div>' +
           resultMonths.map(m => {
             const r = lastResults[m];
             if (r.status === 'DONE') {
+              // Three DONE flavors — the "0 rows" case is misleading if
+              // rendered as a plain success, since it almost always means
+              // Amazon returned an empty report (retention limit or truly
+              // no orders). Split it out with a warning color and hint.
+              if ((r.rowCount || 0) === 0) {
+                if ((r.rawRowCount || 0) === 0) {
+                  return `<div style="color: var(--accent-orange);">⚠ ${m}: report was empty — Amazon returned no rows. Likely outside the ~2-year order-report retention window, or genuinely no orders that month.</div>`;
+                }
+                // Rare: report had rows but our filter dropped them all.
+                // Include the skip counters so the user knows why.
+                const parts = [];
+                if (r.skippedCancelled) parts.push(`${r.skippedCancelled} cancelled`);
+                if (r.skippedNoDate)    parts.push(`${r.skippedNoDate} no-date`);
+                if (r.skippedNoOrder)   parts.push(`${r.skippedNoOrder} no-orderId`);
+                const why = parts.length ? ` (${parts.join(', ')})` : '';
+                return `<div style="color: var(--accent-orange);">⚠ ${m}: 0 rows written — ${r.rawRowCount} rows in report were all filtered out${why}.</div>`;
+              }
               const skipNote = r.skippedCancelled ? `, ${r.skippedCancelled} cancelled skipped` : '';
               return `<div style="color: var(--success);">✓ ${m}: ${r.rowCount} rows${skipNote}</div>`;
             }
-            // Escape the error text so an angle bracket or ampersand in
-            // Amazon's message doesn't break the render. Small helper
-            // inline; no need for a full HTML escaper.
-            const errText = String(r.error || 'failed').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-            return `<div style="color: var(--error); word-break: break-word;">✗ ${m}: ${errText}</div>`;
+            return `<div style="color: var(--error); word-break: break-word;">✗ ${m}: ${escHtml(r.error || 'failed')}</div>`;
           }).join('');
       }
     }
@@ -793,12 +821,90 @@
       const applyQuickPick = (count) => {
         const cbs = document.querySelectorAll('.ordersreport-month-cb');
         cbs.forEach((cb, i) => { cb.checked = count === -1 ? false : (i < count); });
-        const anyChecked = document.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
-        if (pullBtn) pullBtn.disabled = !anyChecked || !accessToken;
+        _orRefreshActionButtons();
       };
       if (selectLast12) selectLast12.addEventListener('click', () => applyQuickPick(12));
       if (selectAll)    selectAll.addEventListener('click',    () => applyQuickPick(OR_PICKER_MONTHS));
       if (selectNone)   selectNone.addEventListener('click',   () => applyQuickPick(-1));
+
+      // Delete-selected two-step flow:
+      //   1. Click "Delete selected" → show inline confirmation panel
+      //      with the exact months and Confirm/Cancel buttons
+      //   2. Click "Confirm delete" → POST /api/orders?action=delete-v2-months
+      //   OR Click "Cancel" → hide the confirmation panel, no side effects
+      // Inline UI (not a browser confirm() popup) per project convention.
+      const deleteBtn = document.getElementById('ordersreport-delete-btn');
+      const deleteConfirmPanel = document.getElementById('ordersreport-delete-confirm');
+      const deleteConfirmBtn = document.getElementById('ordersreport-delete-confirm-btn');
+      const deleteCancelBtn = document.getElementById('ordersreport-delete-cancel-btn');
+      const deleteCountSpan = document.getElementById('ordersreport-delete-count');
+      const deleteListSpan = document.getElementById('ordersreport-delete-list');
+
+      const _orGetCheckedMonths = () => Array.from(
+        document.querySelectorAll('.ordersreport-month-cb:checked')
+      ).map(cb => cb.value);
+
+      if (deleteBtn) deleteBtn.addEventListener('click', () => {
+        const months = _orGetCheckedMonths();
+        if (months.length === 0) return;
+        // Populate the confirmation panel with the exact months
+        // (chronological), reveal it. The Confirm/Cancel buttons
+        // handle the rest.
+        const sorted = [...months].sort();
+        if (deleteCountSpan) deleteCountSpan.textContent = `${sorted.length} month${sorted.length === 1 ? '' : 's'}`;
+        if (deleteListSpan) deleteListSpan.textContent = sorted.join(', ');
+        if (deleteConfirmPanel) deleteConfirmPanel.style.display = 'block';
+      });
+
+      if (deleteCancelBtn) deleteCancelBtn.addEventListener('click', () => {
+        if (deleteConfirmPanel) deleteConfirmPanel.style.display = 'none';
+      });
+
+      if (deleteConfirmBtn) deleteConfirmBtn.addEventListener('click', async () => {
+        if (!accessToken) return;
+        const months = _orGetCheckedMonths();
+        if (months.length === 0) {
+          if (deleteConfirmPanel) deleteConfirmPanel.style.display = 'none';
+          return;
+        }
+        deleteConfirmBtn.disabled = true;
+        const originalLabel = deleteConfirmBtn.innerHTML;
+        deleteConfirmBtn.innerHTML = `Deleting<span class="loading"></span>`;
+        try {
+          const res = await fetch('/api/orders?action=delete-v2-months', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ months })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            throw new Error(data.error || `Delete failed (${res.status})`);
+          }
+          // Uncheck the deleted months and hide the confirmation panel.
+          const deletedSet = new Set(data.deleted || months);
+          document.querySelectorAll('.ordersreport-month-cb').forEach(cb => {
+            if (deletedSet.has(cb.value)) cb.checked = false;
+          });
+          if (deleteConfirmPanel) deleteConfirmPanel.style.display = 'none';
+          _orRefreshActionButtons();
+          // Refresh status panel so removed months disappear from
+          // Recent results.
+          await _orFetchInitialStatus();
+        } catch (err) {
+          console.error('Delete failed:', err);
+          // Surface the error inline where the confirmation was — this
+          // is a rare path so a compact single-line message is enough.
+          if (deleteListSpan) {
+            deleteListSpan.innerHTML += `<div style="color: var(--error); margin-top: 0.5rem;">✗ ${String(err.message || err).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</div>`;
+          }
+        } finally {
+          deleteConfirmBtn.disabled = false;
+          deleteConfirmBtn.innerHTML = originalLabel;
+        }
+      });
 
       // Fetch initial status once auth is available. If accessToken
       // isn't set yet (pre-signin), this returns silently; enableUpload
@@ -817,9 +923,8 @@
       if (accessToken) {
         clearInterval(_orAuthWatcher);
         _orFetchInitialStatus();
-        // Also enable the pull button if any months were pre-checked
-        const anyChecked = document.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
-        const pullBtn = document.getElementById('ordersreport-pull-btn');
-        if (pullBtn && anyChecked) pullBtn.disabled = false;
+        // Re-evaluate both Pull and Delete buttons now that
+        // accessToken is available.
+        _orRefreshActionButtons();
       }
     }, 1000);

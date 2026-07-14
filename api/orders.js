@@ -27,6 +27,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     if (action === 'upload-orders-report')    return handleUploadOrdersReport(req, res);
     if (action === 'request-flat-file-report') return handleRequestFlatFileReport(req, res);
+    if (action === 'delete-v2-months')        return handleDeleteV2Months(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -394,7 +395,7 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
   if (monthsToWrite.length === 0) {
     return {
       collision: false,
-      writtenMonths: [], totalRows: 0,
+      writtenMonths: [], totalRows: 0, rawRowCount: rawRows.length,
       skippedCancelled, skippedNoDate, skippedNoOrder
     };
   }
@@ -428,7 +429,7 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 
   return {
     collision: false,
-    writtenMonths: monthsToWrite, totalRows,
+    writtenMonths: monthsToWrite, totalRows, rawRowCount: rawRows.length,
     skippedCancelled, skippedNoDate, skippedNoOrder
   };
 }
@@ -679,12 +680,22 @@ async function handlePollFlatFileReport(req, res) {
               month: p.month,
               status: 'DONE',
               rowCount: result.totalRows,
+              rawRowCount: result.rawRowCount,
               skippedCancelled: result.skippedCancelled
             });
             lastResults[p.month] = {
               status: 'DONE',
               rowCount: result.totalRows,
+              // Raw row count = what the parser produced (post-header). Lets
+              // the UI distinguish "Amazon returned empty" from "we filtered
+              // everything." A 0/0 is almost always Amazon returning an
+              // empty report — either genuinely no orders that month or
+              // (much more likely for older months) the month is outside
+              // the ~2-year order-report retention window.
+              rawRowCount: result.rawRowCount,
               skippedCancelled: result.skippedCancelled,
+              skippedNoDate: result.skippedNoDate,
+              skippedNoOrder: result.skippedNoOrder,
               completedAt: new Date().toISOString()
             };
           }
@@ -756,6 +767,71 @@ async function handleListPendingReports(req, res) {
   } catch (error) {
     console.error('[ORDERS LIST-PENDING] Error:', error);
     return res.status(500).json({ error: 'List failed: ' + error.message });
+  }
+}
+
+// ─── DELETE V2 MONTHS ───────────────────────────────────────────────────────
+//
+// Clears specified months from the orders:v2:* keyspace so they can be
+// re-populated cleanly (e.g. after a partial-month API pull that only
+// caught the tail end of a retention-bounded month). Removes three
+// things per month:
+//   1. `orders:v2:${month}` — the actual line-item bucket
+//   2. entries from `orders:v2:index`
+//   3. entries from `orders:v2:report-lastresult` — so the UI's Recent
+//      results panel doesn't render stale "42 rows" for a month that's
+//      now empty
+//
+// Body: { months: ['YYYY-MM', ...] }
+async function handleDeleteV2Months(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const months = Array.isArray(req.body?.months) ? req.body.months : null;
+    if (!months || months.length === 0) {
+      return res.status(400).json({ error: 'months array required in body' });
+    }
+    const invalid = months.filter(m => !/^\d{4}-\d{2}$/.test(m));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Invalid month format: ${invalid.join(', ')}. Use YYYY-MM.` });
+    }
+
+    // 1. Delete the per-month buckets in parallel.
+    await Promise.all(months.map(m => kv.del(`orders:v2:${m}`)));
+
+    // 2. Remove from the index.
+    const existingIndex = (await kv.get('orders:v2:index')) || [];
+    const toRemove = new Set(months);
+    const newIndex = existingIndex.filter(m => !toRemove.has(m));
+    if (newIndex.length !== existingIndex.length) {
+      await kv.set('orders:v2:index', newIndex);
+    }
+
+    // 3. Remove from lastResults (so the UI doesn't render stale "N
+    // rows" entries for months whose bucket is now empty).
+    const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+    let lastResultsChanged = false;
+    for (const m of months) {
+      if (lastResults[m]) {
+        delete lastResults[m];
+        lastResultsChanged = true;
+      }
+    }
+    if (lastResultsChanged) {
+      await kv.set('orders:v2:report-lastresult', lastResults);
+    }
+
+    return res.status(200).json({
+      success: true,
+      deleted: months,
+      message: `Deleted ${months.length} month${months.length === 1 ? '' : 's'} from the dashboard.`
+    });
+  } catch (error) {
+    console.error('[ORDERS DELETE-V2] Error:', error);
+    return res.status(500).json({ error: 'Delete failed: ' + error.message });
   }
 }
 
