@@ -267,6 +267,44 @@
             <button class="btn btn-primary process-btn" data-type="ordersreport" disabled>Process & Upload</button>
           </div>
           <div class="status-message" data-type="ordersreport"></div>
+
+          <!-- Pull from Amazon (Phase 2) — request the flat-file report
+               directly from SP-API, poll until ready, download + store
+               automatically. Saves the manual Seller Central download +
+               drag-drop loop when backfilling multiple months. -->
+          <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Pull from Amazon</h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+              Request the flat-file report directly from Amazon's Reports API. Amazon takes 5–15 minutes (occasionally longer) to generate each month's report; this page polls until they're ready and stores them automatically. No manual downloads.
+            </p>
+
+            <div style="display: flex; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
+              <button id="ordersreport-select-last12" class="btn btn-secondary" style="font-size: 0.85rem;">Select last 12 months</button>
+              <button id="ordersreport-select-all" class="btn btn-secondary" style="font-size: 0.85rem;">Select all 24</button>
+              <button id="ordersreport-select-none" class="btn btn-secondary" style="font-size: 0.85rem;">Clear selection</button>
+            </div>
+
+            <!-- 24 month checkboxes, populated on load. Layout is a
+                 responsive grid so ~6 fit per row at typical widths. -->
+            <div id="ordersreport-month-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;"></div>
+
+            <div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+              <button id="ordersreport-pull-btn" class="btn btn-primary" disabled>Pull from Amazon</button>
+              <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-secondary); cursor: pointer;">
+                <input type="checkbox" id="ordersreport-overwrite" style="cursor: pointer;">
+                Overwrite months that already have data
+              </label>
+            </div>
+
+            <!-- Status panel — shows currently-pending reports (with
+                 elapsed time) and last-result-per-month. Populated on
+                 tab open from list-pending-reports; updates from each
+                 poll response. -->
+            <div id="ordersreport-status-panel" style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-secondary);">
+              <div id="ordersreport-status-pending"></div>
+              <div id="ordersreport-status-results" style="margin-top: 0.5rem;"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -16,14 +16,17 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    if (action === 'get')             return handleGet(req, res);
-    if (action === 'get-v2')          return handleGetV2(req, res);
-    if (action === 'sync')            return handleSync(req, res);
-    if (action === 'get-summary')     return handleGetSummary(req, res);
-    if (action === 'rebuild-summary') return handleRebuildSummary(req, res);
+    if (action === 'get')                    return handleGet(req, res);
+    if (action === 'get-v2')                 return handleGetV2(req, res);
+    if (action === 'sync')                   return handleSync(req, res);
+    if (action === 'get-summary')            return handleGetSummary(req, res);
+    if (action === 'rebuild-summary')        return handleRebuildSummary(req, res);
+    if (action === 'poll-flat-file-report')  return handlePollFlatFileReport(req, res);
+    if (action === 'list-pending-reports')   return handleListPendingReports(req, res);
   }
   if (req.method === 'POST') {
-    if (action === 'upload-orders-report') return handleUploadOrdersReport(req, res);
+    if (action === 'upload-orders-report')    return handleUploadOrdersReport(req, res);
+    if (action === 'request-flat-file-report') return handleRequestFlatFileReport(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -276,122 +279,431 @@ async function handleUploadOrdersReport(req, res) {
     if (!rawRows) return res.status(400).json({ error: 'rows array required in body' });
 
     const overwrite = req.query.overwrite === 'true';
+    const result = await _normalizeAndWriteOrdersMonth(rawRows, { overwrite });
 
-    const pick = (obj, ...keys) => {
-      for (const k of keys) if (obj[k] !== undefined) return obj[k];
-      const lower = {};
-      for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
-      for (const k of keys) {
-        const v = lower[k.toLowerCase()];
-        if (v !== undefined) return v;
-      }
-      return undefined;
-    };
-
-    const byMonth = {};
-    let skippedCancelled = 0;
-    let skippedNoDate = 0;
-    let skippedNoOrder = 0;
-    for (const r of rawRows) {
-      if (!r || typeof r !== 'object') continue;
-
-      // Drop cancelled rows at ingest — matches existing filter behavior
-      // in fetchOrdersForDateRange. Amazon spells it "Cancelled" (two Ls)
-      // in the flat file; belt-and-braces check for both spellings.
-      const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
-      if (status === 'Cancelled' || status === 'Canceled') { skippedCancelled++; continue; }
-
-      const orderDateRaw = String(pick(r, 'purchase-date', 'purchaseDate') || '').trim();
-      const orderDate = orderDateRaw.slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
-
-      const orderId = String(pick(r, 'amazon-order-id', 'amazonOrderId', 'orderId') || '').trim();
-      if (!orderId) { skippedNoOrder++; continue; }
-
-      const sku = String(pick(r, 'sku') || '').trim();
-      const asin = String(pick(r, 'asin') || '').trim();
-      const qtyRaw = pick(r, 'quantity');
-      const quantity = parseInt(String(qtyRaw ?? '0').replace(/[,]/g, ''), 10) || 0;
-
-      // item-price is the actual transacted line total (unit price × qty,
-      // reflecting business-buyer discounts and any other Amazon-side
-      // pricing adjustments). Strip $ / commas defensively.
-      const priceRaw = pick(r, 'item-price', 'itemPrice');
-      const itemTotal = parseFloat(String(priceRaw ?? '0').replace(/[$,]/g, '')) || 0;
-
-      // fulfillment-channel is already AFN/MFN in the flat file — same
-      // shape we store today. Fall through as-is; downstream filters
-      // compare exactly against 'AFN' and 'MFN'.
-      const fulfillmentChannel = String(pick(r, 'fulfillment-channel', 'fulfillmentChannel') || '').trim();
-
-      const isBusinessRaw = pick(r, 'is-business-order', 'isBusinessOrder');
-      const isBusinessOrder = isBusinessRaw === true ||
-                              isBusinessRaw === 'true' ||
-                              isBusinessRaw === 'True' ||
-                              isBusinessRaw === 'TRUE' ||
-                              isBusinessRaw === 1 ||
-                              isBusinessRaw === '1';
-
-      const month = orderDate.slice(0, 7);
-      if (!byMonth[month]) byMonth[month] = [];
-      byMonth[month].push({
-        orderDate, orderId, sku, asin, quantity,
-        itemTotal, fulfillmentChannel, isBusinessOrder
+    if (result.collision) {
+      return res.status(409).json({
+        error: `Months already have data: ${result.collidingMonths.join(', ')}. Re-upload with ?overwrite=true to replace.`,
+        collidingMonths: result.collidingMonths
       });
     }
-
-    const monthsToWrite = Object.keys(byMonth).sort();
-    if (monthsToWrite.length === 0) {
-      return res.status(200).json({
-        success: true, writtenMonths: [], totalRows: 0,
-        skippedCancelled, skippedNoDate, skippedNoOrder,
-        message: 'No valid rows found in the upload'
-      });
-    }
-
-    // Refuse to overwrite months that already have data unless the
-    // caller explicitly passes ?overwrite=true. Protects against
-    // accidental data loss on re-upload; the client can request an
-    // overwrite deliberately when they want to replace a month.
-    if (!overwrite) {
-      const collisions = [];
-      for (const m of monthsToWrite) {
-        const existing = await kv.get(`orders:v2:${m}`);
-        if (Array.isArray(existing) && existing.length > 0) collisions.push(m);
-      }
-      if (collisions.length > 0) {
-        return res.status(409).json({
-          error: `Months already have data: ${collisions.join(', ')}. Re-upload with ?overwrite=true to replace.`,
-          collidingMonths: collisions
-        });
-      }
-    }
-
-    // Write per-month buckets, then update the index. Data-first-then-
-    // pointer order so a partial failure doesn't leave dangling index
-    // entries pointing at empty keys.
-    let totalRows = 0;
-    for (const m of monthsToWrite) {
-      const rows = byMonth[m].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
-      await kv.set(`orders:v2:${m}`, rows);
-      totalRows += rows.length;
-    }
-    const existingIndex = (await kv.get('orders:v2:index')) || [];
-    const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
-    await kv.set('orders:v2:index', mergedIndex);
 
     return res.status(200).json({
       success: true,
-      writtenMonths: monthsToWrite,
-      totalRows,
-      skippedCancelled,
-      skippedNoDate,
-      skippedNoOrder,
-      message: `Uploaded ${totalRows} line items across ${monthsToWrite.length} month${monthsToWrite.length === 1 ? '' : 's'}${skippedCancelled ? `, skipped ${skippedCancelled} cancelled` : ''}.`
+      writtenMonths: result.writtenMonths,
+      totalRows: result.totalRows,
+      skippedCancelled: result.skippedCancelled,
+      skippedNoDate: result.skippedNoDate,
+      skippedNoOrder: result.skippedNoOrder,
+      message: result.writtenMonths.length === 0
+        ? 'No valid rows found in the upload'
+        : `Uploaded ${result.totalRows} line items across ${result.writtenMonths.length} month${result.writtenMonths.length === 1 ? '' : 's'}${result.skippedCancelled ? `, skipped ${result.skippedCancelled} cancelled` : ''}.`
     });
   } catch (error) {
     console.error('[ORDERS UPLOAD-REPORT] Error:', error);
     return res.status(500).json({ error: 'Upload failed: ' + error.message });
+  }
+}
+
+// Shared ingestion helper — used by both the manual upload path
+// (handleUploadOrdersReport) and the SP-API pull path
+// (handlePollFlatFileReport). Takes raw flat-file report rows (case-
+// tolerant keys) and does: drop-cancelled → normalize per-row → group
+// by month → refuse-if-exists guard → write per-month buckets → update
+// index.
+//
+// Returns:
+//   {
+//     collision: false, writtenMonths: [...], totalRows, skippedCancelled,
+//     skippedNoDate, skippedNoOrder
+//   }
+// OR, when overwrite is false and any target month already has data:
+//   { collision: true, collidingMonths: [...] }
+//
+// Options:
+//   overwrite: boolean — if true, skip the collision guard entirely
+//
+// Both call sites want to render slightly different response shapes on
+// top of this, so this helper only returns the aggregates. The caller
+// wraps them into an HTTP response.
+async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}) {
+  const pick = (obj, ...keys) => {
+    for (const k of keys) if (obj[k] !== undefined) return obj[k];
+    const lower = {};
+    for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
+    for (const k of keys) {
+      const v = lower[k.toLowerCase()];
+      if (v !== undefined) return v;
+    }
+    return undefined;
+  };
+
+  const byMonth = {};
+  let skippedCancelled = 0;
+  let skippedNoDate = 0;
+  let skippedNoOrder = 0;
+  for (const r of rawRows) {
+    if (!r || typeof r !== 'object') continue;
+
+    // Drop cancelled rows at ingest — matches existing filter behavior
+    // in fetchOrdersForDateRange. Amazon spells it "Cancelled" (two Ls)
+    // in the flat file; belt-and-braces check for both spellings.
+    const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
+    if (status === 'Cancelled' || status === 'Canceled') { skippedCancelled++; continue; }
+
+    const orderDateRaw = String(pick(r, 'purchase-date', 'purchaseDate') || '').trim();
+    const orderDate = orderDateRaw.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
+
+    const orderId = String(pick(r, 'amazon-order-id', 'amazonOrderId', 'orderId') || '').trim();
+    if (!orderId) { skippedNoOrder++; continue; }
+
+    const sku = String(pick(r, 'sku') || '').trim();
+    const asin = String(pick(r, 'asin') || '').trim();
+    const qtyRaw = pick(r, 'quantity');
+    const quantity = parseInt(String(qtyRaw ?? '0').replace(/[,]/g, ''), 10) || 0;
+
+    // item-price is the actual transacted line total (unit price × qty,
+    // reflecting business-buyer discounts and any other Amazon-side
+    // pricing adjustments). Strip $ / commas defensively.
+    const priceRaw = pick(r, 'item-price', 'itemPrice');
+    const itemTotal = parseFloat(String(priceRaw ?? '0').replace(/[$,]/g, '')) || 0;
+
+    // fulfillment-channel is already AFN/MFN in the flat file — same
+    // shape we store today. Fall through as-is; downstream filters
+    // compare exactly against 'AFN' and 'MFN'.
+    const fulfillmentChannel = String(pick(r, 'fulfillment-channel', 'fulfillmentChannel') || '').trim();
+
+    const isBusinessRaw = pick(r, 'is-business-order', 'isBusinessOrder');
+    const isBusinessOrder = isBusinessRaw === true ||
+                            isBusinessRaw === 'true' ||
+                            isBusinessRaw === 'True' ||
+                            isBusinessRaw === 'TRUE' ||
+                            isBusinessRaw === 1 ||
+                            isBusinessRaw === '1';
+
+    const month = orderDate.slice(0, 7);
+    if (!byMonth[month]) byMonth[month] = [];
+    byMonth[month].push({
+      orderDate, orderId, sku, asin, quantity,
+      itemTotal, fulfillmentChannel, isBusinessOrder
+    });
+  }
+
+  const monthsToWrite = Object.keys(byMonth).sort();
+  if (monthsToWrite.length === 0) {
+    return {
+      collision: false,
+      writtenMonths: [], totalRows: 0,
+      skippedCancelled, skippedNoDate, skippedNoOrder
+    };
+  }
+
+  // Refuse to overwrite months that already have data unless the
+  // caller explicitly passes overwrite=true. Protects against
+  // accidental data loss on re-upload / re-pull.
+  if (!overwrite) {
+    const collisions = [];
+    for (const m of monthsToWrite) {
+      const existing = await kv.get(`orders:v2:${m}`);
+      if (Array.isArray(existing) && existing.length > 0) collisions.push(m);
+    }
+    if (collisions.length > 0) {
+      return { collision: true, collidingMonths: collisions };
+    }
+  }
+
+  // Write per-month buckets, then update the index. Data-first-then-
+  // pointer order so a partial failure doesn't leave dangling index
+  // entries pointing at empty keys.
+  let totalRows = 0;
+  for (const m of monthsToWrite) {
+    const rows = byMonth[m].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
+    await kv.set(`orders:v2:${m}`, rows);
+    totalRows += rows.length;
+  }
+  const existingIndex = (await kv.get('orders:v2:index')) || [];
+  const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
+  await kv.set('orders:v2:index', mergedIndex);
+
+  return {
+    collision: false,
+    writtenMonths: monthsToWrite, totalRows,
+    skippedCancelled, skippedNoDate, skippedNoOrder
+  };
+}
+
+// ─── REQUEST FLAT-FILE REPORT (SP-API createReport) ─────────────────────────
+//
+// Kicks off Amazon's report generation for
+// GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL scoped to a single
+// month (the report type accepts up to 30 days per request; a calendar
+// month always fits). Reports take minutes to hours on Amazon's side —
+// this endpoint returns immediately with a reportId and the client (or
+// a cron) polls poll-flat-file-report later to check status and
+// download when ready.
+//
+// The reportId is stashed in KV key `orders:v2:pending-reports` (an
+// array of { reportId, month, requestedAt, name }). Same pending-queue
+// pattern as api/adspend.js.
+//
+// Body: { month: 'YYYY-MM' }
+async function handleRequestFlatFileReport(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const month = req.body?.month;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'month=YYYY-MM required in body' });
+    }
+
+    // If a report for this month is already in the pending queue, reuse
+    // it instead of requesting a duplicate from Amazon.
+    const pending = (await kv.get('orders:v2:pending-reports')) || [];
+    const existing = pending.find(p => p.month === month);
+    if (existing) {
+      return res.status(200).json({
+        success: true,
+        reportId: existing.reportId,
+        month,
+        alreadyPending: true,
+        message: `Report for ${month} already pending since ${existing.requestedAt}`
+      });
+    }
+
+    // ISO 8601 UTC bounds for the calendar month. Amazon's report is
+    // by-order-date (PurchaseDate); using UTC month boundaries gives us
+    // a clean per-month partition.
+    const [y, m] = month.split('-').map(Number);
+    const dataStartTime = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+    // Last millisecond of the month — inclusive end. Matches sessions.js
+    // which uses `endDate + 'T23:59:59Z'` for the same purpose.
+    const dataEndTime = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+
+    const sp = createSellingPartner();
+    const marketplaceId = process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
+
+    let reportId;
+    try {
+      const response = await sp.callAPI({
+        operation: 'createReport',
+        endpoint: 'reports',
+        body: {
+          reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+          marketplaceIds: [marketplaceId],
+          dataStartTime,
+          dataEndTime
+        }
+      });
+      reportId = response.reportId;
+    } catch (err) {
+      // SP-API 425 (Duplicate) means Amazon still has an identical
+      // request in flight and won't create a new one. The response body
+      // typically embeds the existing reportId in the errors array.
+      // Best-effort extract; if we can't find it, surface the error so
+      // the user can see what happened.
+      const isDuplicate = err?.statusCode === 425 ||
+                          /duplicate|already.+request/i.test(err?.message || '');
+      if (isDuplicate) {
+        const errBody = err?.response?.data || err?.body || {};
+        const errArr = Array.isArray(errBody?.errors) ? errBody.errors : [];
+        const numMatch = (s) => (typeof s === 'string' && s.match(/[0-9]{12,}/)) ? s.match(/[0-9]{12,}/)[0] : null;
+        const dupId = errArr.map(e => numMatch(e.details) || numMatch(e.message)).find(Boolean);
+        if (dupId) {
+          reportId = dupId;
+        } else {
+          throw new Error(`SP-API 425 duplicate but no reportId extractable: ${JSON.stringify(errBody).slice(0, 300)}`);
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    const updated = [...pending, {
+      reportId,
+      month,
+      requestedAt: new Date().toISOString(),
+      name: `AllOrders ${month}`
+    }];
+    await kv.set('orders:v2:pending-reports', updated);
+
+    return res.status(200).json({
+      success: true,
+      reportId,
+      month,
+      alreadyPending: false
+    });
+  } catch (error) {
+    console.error('[ORDERS REQUEST-REPORT] Error:', error);
+    return res.status(500).json({ error: 'Request failed: ' + error.message });
+  }
+}
+
+// ─── POLL FLAT-FILE REPORT (SP-API getReport + getReportDocument) ───────────
+//
+// Walks the pending queue (`orders:v2:pending-reports`), processes up
+// to 5 entries per call to stay well within the 300s Vercel function
+// timeout. For each entry: calls getReport to check status. If DONE,
+// pulls the download URL via getReportDocument, fetches + gunzips the
+// TSV, parses it, runs the shared normalization helper, writes to
+// `orders:v2:${month}`. Removes DONE and FAILED entries from the
+// queue; leaves IN_QUEUE / IN_PROGRESS entries for the next poll.
+//
+// Query params: `overwrite=true` (optional) — pass through to the
+// normalization helper's overwrite behavior. Default false.
+//
+// Returns { success, collected, stillPending, failed, remaining }.
+async function handlePollFlatFileReport(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const overwrite = req.query.overwrite === 'true';
+    const pending = (await kv.get('orders:v2:pending-reports')) || [];
+    if (pending.length === 0) {
+      return res.status(200).json({
+        success: true, collected: [], stillPending: [], failed: [], remaining: 0
+      });
+    }
+
+    const sp = createSellingPartner();
+    const MAX_PER_CALL = 5;
+    const toProcess = pending.slice(0, MAX_PER_CALL);
+    const untouchedTail = pending.slice(MAX_PER_CALL);
+
+    const collected = [];
+    const failed = [];
+    const stillPending = [];
+    const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+
+    for (const p of toProcess) {
+      try {
+        const statusResp = await sp.callAPI({
+          operation: 'getReport',
+          endpoint: 'reports',
+          path: { reportId: p.reportId }
+        });
+        const status = statusResp.processingStatus;
+
+        if (status === 'DONE') {
+          const docId = statusResp.reportDocumentId;
+          const doc = await sp.callAPI({
+            operation: 'getReportDocument',
+            endpoint: 'reports',
+            path: { reportDocumentId: docId }
+          });
+          const dlResp = await fetch(doc.url);
+          if (!dlResp.ok) throw new Error(`Report download failed (${dlResp.status})`);
+          const buf = Buffer.from(await dlResp.arrayBuffer());
+          // Amazon says GZIP is the default compression for this report
+          // type, but be defensive — some documents come uncompressed.
+          const { gunzipSync } = await import('zlib');
+          const text = doc.compressionAlgorithm === 'GZIP'
+            ? gunzipSync(buf).toString('utf-8')
+            : buf.toString('utf-8');
+          const rows = _parseTsv(text);
+          const result = await _normalizeAndWriteOrdersMonth(rows, { overwrite });
+
+          if (result.collision) {
+            failed.push({
+              reportId: p.reportId,
+              month: p.month,
+              status: 'COLLISION',
+              error: `Month ${p.month} already has data. Re-run with overwrite=true to replace.`
+            });
+            lastResults[p.month] = {
+              status: 'FAILED',
+              error: 'Refused to overwrite existing month',
+              completedAt: new Date().toISOString()
+            };
+          } else {
+            collected.push({
+              reportId: p.reportId,
+              month: p.month,
+              status: 'DONE',
+              rowCount: result.totalRows,
+              skippedCancelled: result.skippedCancelled
+            });
+            lastResults[p.month] = {
+              status: 'DONE',
+              rowCount: result.totalRows,
+              skippedCancelled: result.skippedCancelled,
+              completedAt: new Date().toISOString()
+            };
+          }
+        } else if (status === 'CANCELLED' || status === 'FATAL') {
+          failed.push({
+            reportId: p.reportId,
+            month: p.month,
+            status,
+            error: `Amazon returned processingStatus=${status}`
+          });
+          lastResults[p.month] = {
+            status: 'FAILED',
+            error: `Amazon returned processingStatus=${status}`,
+            completedAt: new Date().toISOString()
+          };
+        } else {
+          // IN_QUEUE / IN_PROGRESS — keep waiting.
+          stillPending.push({ ...p, currentStatus: status });
+        }
+      } catch (err) {
+        console.error(`[ORDERS POLL] Error processing reportId ${p.reportId}:`, err);
+        // Don't drop on transient errors — leave in queue with the last
+        // error recorded so a subsequent poll retries.
+        stillPending.push({ ...p, lastError: err.message });
+      }
+    }
+
+    // Reconstruct queue: newly stillPending (from processed batch) +
+    // untouched tail. Collected and failed are removed.
+    const nextQueue = [...stillPending, ...untouchedTail];
+    await kv.set('orders:v2:pending-reports', nextQueue);
+    await kv.set('orders:v2:report-lastresult', lastResults);
+
+    return res.status(200).json({
+      success: true,
+      collected,
+      stillPending: nextQueue,
+      failed,
+      remaining: nextQueue.length
+    });
+  } catch (error) {
+    console.error('[ORDERS POLL-REPORT] Error:', error);
+    return res.status(500).json({ error: 'Poll failed: ' + error.message });
+  }
+}
+
+// ─── LIST PENDING REPORTS ───────────────────────────────────────────────────
+//
+// Returns the current pending queue + last-result-per-month state so
+// the UI can render "what's in flight" and "what happened last time"
+// without triggering a poll (which would consume SP-API quota).
+async function handleListPendingReports(req, res) {
+  try {
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
+    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+
+    const [pending, lastResults] = await Promise.all([
+      kv.get('orders:v2:pending-reports'),
+      kv.get('orders:v2:report-lastresult')
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      pending: Array.isArray(pending) ? pending : [],
+      lastResults: (lastResults && typeof lastResults === 'object') ? lastResults : {}
+    });
+  } catch (error) {
+    console.error('[ORDERS LIST-PENDING] Error:', error);
+    return res.status(500).json({ error: 'List failed: ' + error.message });
   }
 }
 
@@ -406,6 +718,36 @@ function createSellingPartner() {
       SELLING_PARTNER_APP_CLIENT_SECRET: process.env.AMAZON_LWA_CLIENT_SECRET
     }
   });
+}
+
+// Minimal tab-separated-values parser. Amazon's flat-file reports come
+// back as gzipped TSV; after gunzip we have a string, and we want an
+// array of objects keyed by header column name so the shared
+// _normalizeAndWriteOrdersMonth helper can consume it identically to
+// rows from the client-side manual upload.
+//
+// Assumptions (all safe for Amazon's flat file):
+//   • Fields don't contain tabs (Amazon escapes any tab characters in
+//     values before shipping the report)
+//   • Fields don't contain newlines within a single value
+//   • Trailing blank lines are ignored
+//   • CRLF line endings handled
+function _parseTsv(text) {
+  if (!text || typeof text !== 'string') return [];
+  const lines = text.split(/\r?\n/);
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  if (lines.length < 2) return [];
+  const headers = lines[0].split('\t');
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split('\t');
+    const row = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = cells[j] ?? '';
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 // Returns { lineItems, seenOrderIds }.

@@ -548,3 +548,258 @@
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
     }
+
+    // ── PULL-FROM-AMAZON controller (Orders Report tab, Phase 2) ─────────────
+    //
+    // Handles the "Pull from Amazon" section: month-checkbox picker,
+    // per-month POSTs to request-flat-file-report, and 20s polling of
+    // poll-flat-file-report until the server queue drains. Server-side
+    // state (`orders:v2:pending-reports`) is the source of truth so
+    // closing the tab mid-pull is safe — reopening picks up where we
+    // left off via list-pending-reports.
+
+    const OR_POLL_INTERVAL_MS = 20000;
+    const OR_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let _orPollTimer = null;
+
+    // Build the last N months as YYYY-MM strings, most recent first.
+    function _orLastNMonths(n) {
+      const out = [];
+      const today = new Date();
+      // Start at current month (yesterday's month is the last complete
+      // full month, but we want the current month to appear too since
+      // sometimes users will pull the in-progress month knowing it's
+      // partial).
+      let y = today.getUTCFullYear();
+      let m = today.getUTCMonth() + 1; // 1-indexed
+      for (let i = 0; i < n; i++) {
+        out.push(`${y}-${String(m).padStart(2, '0')}`);
+        m -= 1;
+        if (m === 0) { m = 12; y -= 1; }
+      }
+      return out;
+    }
+
+    function _orRenderMonthGrid() {
+      const grid = document.getElementById('ordersreport-month-grid');
+      if (!grid || grid.dataset.built === '1') return;
+      const months = _orLastNMonths(24);
+      grid.innerHTML = months.map(ym => {
+        const [y, m] = ym.split('-').map(Number);
+        const label = `${OR_MONTH_NAMES[m - 1]} ${y}`;
+        return `
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; padding: 0.4rem 0.6rem; background: var(--bg-secondary); border-radius: 6px;">
+            <input type="checkbox" class="ordersreport-month-cb" value="${ym}" style="cursor: pointer;">
+            <span>${label}</span>
+          </label>
+        `;
+      }).join('');
+      grid.dataset.built = '1';
+      // Wire "enable Pull button when >=1 checked"
+      grid.addEventListener('change', () => {
+        const btn = document.getElementById('ordersreport-pull-btn');
+        const anyChecked = grid.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
+        if (btn) btn.disabled = !anyChecked || !accessToken;
+      });
+    }
+
+    function _orRenderStatus(pending, lastResults) {
+      const pendingEl = document.getElementById('ordersreport-status-pending');
+      const resultsEl = document.getElementById('ordersreport-status-results');
+      if (!pendingEl || !resultsEl) return;
+
+      // Pending list, sorted by month asc
+      const sortedPending = [...(pending || [])].sort((a, b) => a.month.localeCompare(b.month));
+      if (sortedPending.length === 0) {
+        pendingEl.innerHTML = '';
+      } else {
+        const now = Date.now();
+        pendingEl.innerHTML = '<div style="margin-bottom: 0.5rem; color: var(--text-secondary);"><strong>In progress:</strong></div>' +
+          sortedPending.map(p => {
+            const elapsedMin = p.requestedAt
+              ? Math.max(0, Math.round((now - new Date(p.requestedAt).getTime()) / 60000))
+              : 0;
+            const statusNote = p.currentStatus ? ` — ${p.currentStatus}` : (p.lastError ? ` — retrying (${p.lastError})` : '');
+            return `<div>⏳ ${p.month} (${elapsedMin} min elapsed${statusNote})</div>`;
+          }).join('');
+      }
+
+      // Last results, sorted by month desc (most recent first)
+      const resultMonths = Object.keys(lastResults || {}).sort((a, b) => b.localeCompare(a));
+      if (resultMonths.length === 0) {
+        resultsEl.innerHTML = '';
+      } else {
+        resultsEl.innerHTML = '<div style="margin-bottom: 0.5rem; color: var(--text-secondary);"><strong>Recent results:</strong></div>' +
+          resultMonths.slice(0, 24).map(m => {
+            const r = lastResults[m];
+            if (r.status === 'DONE') {
+              const skipNote = r.skippedCancelled ? `, ${r.skippedCancelled} cancelled skipped` : '';
+              return `<div style="color: var(--success);">✓ ${m}: ${r.rowCount} rows${skipNote}</div>`;
+            }
+            return `<div style="color: var(--error);">✗ ${m}: ${r.error || 'failed'}</div>`;
+          }).join('');
+      }
+    }
+
+    async function _orFetchInitialStatus() {
+      if (!accessToken) return;
+      try {
+        const res = await fetch('/api/orders?action=list-pending-reports', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        _orRenderStatus(data.pending, data.lastResults);
+        // If there are pending reports from a previous session, resume polling.
+        if ((data.pending || []).length > 0 && !_orPollTimer) {
+          _orStartPolling();
+        }
+      } catch (err) {
+        console.warn('Failed to fetch pending reports status:', err.message);
+      }
+    }
+
+    async function _orDoPoll() {
+      if (!accessToken) return;
+      const overwrite = document.getElementById('ordersreport-overwrite')?.checked;
+      try {
+        const url = `/api/orders?action=poll-flat-file-report${overwrite ? '&overwrite=true' : ''}`;
+        const res = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!res.ok) throw new Error(`Poll failed (${res.status})`);
+        const data = await res.json();
+
+        // Refresh full status view — merge remaining pending + updated
+        // last-results from the poll response. Server already updated
+        // KV; we could also re-fetch list-pending-reports but that's an
+        // extra round-trip.
+        const statusRes = await fetch('/api/orders?action=list-pending-reports', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (statusRes.ok) {
+          const status = await statusRes.json();
+          _orRenderStatus(status.pending, status.lastResults);
+        }
+
+        if (data.remaining === 0) {
+          _orStopPolling();
+        }
+      } catch (err) {
+        console.error('Poll error:', err);
+        // Don't stop on transient errors — Amazon or Vercel hiccup will
+        // recover on the next tick. Only user-initiated stop halts.
+      }
+    }
+
+    function _orStartPolling() {
+      if (_orPollTimer) return;
+      _orPollTimer = setInterval(_orDoPoll, OR_POLL_INTERVAL_MS);
+      // Fire an immediate poll so the user sees movement without waiting
+      // 20s for the first status update.
+      _orDoPoll();
+    }
+
+    function _orStopPolling() {
+      if (_orPollTimer) {
+        clearInterval(_orPollTimer);
+        _orPollTimer = null;
+      }
+    }
+
+    async function _orRequestPull() {
+      if (!accessToken) return;
+      const grid = document.getElementById('ordersreport-month-grid');
+      const btn = document.getElementById('ordersreport-pull-btn');
+      const selected = Array.from(grid.querySelectorAll('.ordersreport-month-cb:checked')).map(cb => cb.value);
+      if (selected.length === 0) return;
+
+      btn.disabled = true;
+      const originalLabel = btn.innerHTML;
+      btn.innerHTML = `Requesting ${selected.length} report${selected.length === 1 ? '' : 's'}<span class="loading"></span>`;
+
+      const results = { requested: [], alreadyPending: [], failed: [] };
+      for (const month of selected) {
+        try {
+          const res = await fetch('/api/orders?action=request-flat-file-report', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ month })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            results.failed.push({ month, error: data.error || `failed (${res.status})` });
+          } else if (data.alreadyPending) {
+            results.alreadyPending.push(month);
+          } else {
+            results.requested.push(month);
+          }
+        } catch (err) {
+          results.failed.push({ month, error: err.message });
+        }
+      }
+
+      // Uncheck the boxes we successfully queued so a follow-on click
+      // doesn't accidentally re-queue them.
+      const queuedMonths = new Set([...results.requested, ...results.alreadyPending]);
+      grid.querySelectorAll('.ordersreport-month-cb').forEach(cb => {
+        if (queuedMonths.has(cb.value)) cb.checked = false;
+      });
+
+      btn.innerHTML = originalLabel;
+      btn.disabled = grid.querySelectorAll('.ordersreport-month-cb:checked').length === 0;
+
+      if (results.failed.length > 0) {
+        console.error('Some requests failed:', results.failed);
+      }
+
+      _orStartPolling();
+    }
+
+    // Wire up controls on DOMContentLoaded — module-level so it runs
+    // regardless of which page is initially visible.
+    document.addEventListener('DOMContentLoaded', () => {
+      _orRenderMonthGrid();
+
+      const pullBtn = document.getElementById('ordersreport-pull-btn');
+      if (pullBtn) pullBtn.addEventListener('click', _orRequestPull);
+
+      const selectLast12 = document.getElementById('ordersreport-select-last12');
+      const selectAll = document.getElementById('ordersreport-select-all');
+      const selectNone = document.getElementById('ordersreport-select-none');
+      const applyQuickPick = (count) => {
+        const cbs = document.querySelectorAll('.ordersreport-month-cb');
+        cbs.forEach((cb, i) => { cb.checked = count === -1 ? false : (i < count); });
+        const anyChecked = document.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
+        if (pullBtn) pullBtn.disabled = !anyChecked || !accessToken;
+      };
+      if (selectLast12) selectLast12.addEventListener('click', () => applyQuickPick(12));
+      if (selectAll)    selectAll.addEventListener('click',    () => applyQuickPick(24));
+      if (selectNone)   selectNone.addEventListener('click',   () => applyQuickPick(-1));
+
+      // Fetch initial status once auth is available. If accessToken
+      // isn't set yet (pre-signin), this returns silently; enableUpload
+      // is called after sign-in, so we re-run there.
+      _orFetchInitialStatus();
+    });
+
+    // Re-fetch status on sign-in so the panel shows any pending reports
+    // that were queued in a previous session. Hooks into the existing
+    // enableUpload function via a wrapper — we can't override it here
+    // (it's declared with `function` at the top of this file), but we
+    // can observe DOM changes via a light poll of accessToken. Cheaper:
+    // just re-check on any process-btn click or file-upload event, but
+    // easiest is a tiny interval that stops once accessToken is set.
+    const _orAuthWatcher = setInterval(() => {
+      if (accessToken) {
+        clearInterval(_orAuthWatcher);
+        _orFetchInitialStatus();
+        // Also enable the pull button if any months were pre-checked
+        const anyChecked = document.querySelectorAll('.ordersreport-month-cb:checked').length > 0;
+        const pullBtn = document.getElementById('ordersreport-pull-btn');
+        if (pullBtn && anyChecked) pullBtn.disabled = false;
+      }
+    }, 1000);
