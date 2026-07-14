@@ -580,10 +580,18 @@
       return out;
     }
 
+    // Number of months in the picker. 36 gives a full 3 years back, which
+    // covers a Jan-2024 backfill from a mid-2026 vantage point with margin.
+    // Amazon's order reports are documented as supporting orders "less
+    // than two years old," so months older than ~24 back may fail at
+    // request time — that surfaces in the status panel as a per-month
+    // failure, not a silent gap.
+    const OR_PICKER_MONTHS = 36;
+
     function _orRenderMonthGrid() {
       const grid = document.getElementById('ordersreport-month-grid');
       if (!grid || grid.dataset.built === '1') return;
-      const months = _orLastNMonths(24);
+      const months = _orLastNMonths(OR_PICKER_MONTHS);
       grid.innerHTML = months.map(ym => {
         const [y, m] = ym.split('-').map(Number);
         const label = `${OR_MONTH_NAMES[m - 1]} ${y}`;
@@ -777,7 +785,7 @@
         if (pullBtn) pullBtn.disabled = !anyChecked || !accessToken;
       };
       if (selectLast12) selectLast12.addEventListener('click', () => applyQuickPick(12));
-      if (selectAll)    selectAll.addEventListener('click',    () => applyQuickPick(24));
+      if (selectAll)    selectAll.addEventListener('click',    () => applyQuickPick(OR_PICKER_MONTHS));
       if (selectNone)   selectNone.addEventListener('click',   () => applyQuickPick(-1));
 
       // Fetch initial status once auth is available. If accessToken
