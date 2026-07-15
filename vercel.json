@@ -29,8 +29,16 @@
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/orders?action=cron-collect",
-      "schedule": "0 10,14,18 * * *"
+      "path": "/api/orders?action=cron-collect&slot=1",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/orders?action=cron-collect&slot=2",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/orders?action=cron-collect&slot=3",
+      "schedule": "0 18 * * *"
     },
     {
       "path": "/api/orders?action=cron-data-check",
