@@ -334,7 +334,8 @@ async function handleUploadOrdersReport(req, res) {
 // top of this, so this helper only returns the aggregates. The caller
 // wraps them into an HTTP response.
 async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}) {
-  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder, rawRowCount } =
+  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder,
+          rowsWithItemTotal, rowsWithQuantity, rawRowCount } =
     _normalizeReportRows(rawRows);
 
   const monthsToWrite = Object.keys(byMonth).sort();
@@ -342,7 +343,8 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
     return {
       collision: false,
       writtenMonths: [], totalRows: 0, rawRowCount,
-      skippedCancelled, skippedNoDate, skippedNoOrder
+      skippedCancelled, skippedNoDate, skippedNoOrder,
+      rowsWithItemTotal, rowsWithQuantity
     };
   }
 
@@ -376,7 +378,8 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
   return {
     collision: false,
     writtenMonths: monthsToWrite, totalRows, rawRowCount,
-    skippedCancelled, skippedNoDate, skippedNoOrder
+    skippedCancelled, skippedNoDate, skippedNoOrder,
+    rowsWithItemTotal, rowsWithQuantity
   };
 }
 
@@ -389,7 +392,8 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 //
 // Never returns a collision result — merges by definition don't collide.
 async function _mergeOrdersDay(rawRows) {
-  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder, rawRowCount } =
+  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder,
+          rowsWithItemTotal, rowsWithQuantity, rawRowCount } =
     _normalizeReportRows(rawRows);
 
   const monthsToWrite = Object.keys(byMonth).sort();
@@ -397,7 +401,8 @@ async function _mergeOrdersDay(rawRows) {
     return {
       collision: false,
       writtenMonths: [], totalRows: 0, rawRowCount,
-      skippedCancelled, skippedNoDate, skippedNoOrder
+      skippedCancelled, skippedNoDate, skippedNoOrder,
+      rowsWithItemTotal, rowsWithQuantity
     };
   }
 
@@ -425,8 +430,41 @@ async function _mergeOrdersDay(rawRows) {
   return {
     collision: false,
     writtenMonths: monthsToWrite, totalRows, rawRowCount,
-    skippedCancelled, skippedNoDate, skippedNoOrder
+    skippedCancelled, skippedNoDate, skippedNoOrder,
+    rowsWithItemTotal, rowsWithQuantity
   };
+}
+
+// Columns _normalizeReportRows depends on, as alternate-name groups
+// (mirroring its pick() calls). The header check passes if at least one
+// name in each group is present, case-insensitive.
+const REQUIRED_REPORT_COLUMNS = [
+  ['item-status', 'itemStatus'],
+  ['purchase-date', 'purchaseDate'],
+  ['amazon-order-id', 'amazonOrderId', 'orderId'],
+  ['sku'],
+  ['asin'],
+  ['quantity'],
+  ['item-price', 'itemPrice'],
+  ['fulfillment-channel', 'fulfillmentChannel'],
+  ['is-business-order', 'isBusinessOrder']
+];
+
+// Integrity check: validate the raw TSV header line before ingesting.
+// Amazon renaming or dropping a column doesn't crash the parser — it
+// silently produces rows with empty fields — so bad reports must be
+// refused at the door with a precise diagnosis. An entirely empty body
+// (no header at all) passes: that's the "no data in range" case the
+// zero-row handling downstream already covers.
+function _validateReportHeader(text) {
+  const raw = String(text || '');
+  if (raw.trim() === '') return { ok: true, missing: [] };
+  const firstLine = raw.split(/\r?\n/, 1)[0] || '';
+  const present = new Set(firstLine.split('\t').map(h => h.trim().toLowerCase()).filter(Boolean));
+  const missing = REQUIRED_REPORT_COLUMNS
+    .filter(group => !group.some(name => present.has(name.toLowerCase())))
+    .map(group => group[0]);
+  return { ok: missing.length === 0, missing };
 }
 
 // Shared row-normalization used by both _normalizeAndWriteOrdersMonth
@@ -449,6 +487,10 @@ function _normalizeReportRows(rawRows) {
   let skippedCancelled = 0;
   let skippedNoDate = 0;
   let skippedNoOrder = 0;
+  // Field-population counters over kept rows — near-100% normally, so a
+  // crater in either means the report's value format changed shape.
+  let rowsWithItemTotal = 0;
+  let rowsWithQuantity = 0;
   for (const r of rawRows) {
     if (!r || typeof r !== 'object') continue;
 
@@ -480,6 +522,9 @@ function _normalizeReportRows(rawRows) {
                             isBusinessRaw === 1 ||
                             isBusinessRaw === '1';
 
+    if (itemTotal > 0) rowsWithItemTotal++;
+    if (quantity > 0) rowsWithQuantity++;
+
     const month = orderDate.slice(0, 7);
     if (!byMonth[month]) byMonth[month] = [];
     byMonth[month].push({
@@ -493,6 +538,8 @@ function _normalizeReportRows(rawRows) {
     skippedCancelled,
     skippedNoDate,
     skippedNoOrder,
+    rowsWithItemTotal,
+    rowsWithQuantity,
     rawRowCount: rawRows.length
   };
 }
@@ -809,6 +856,36 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
         const text = doc.compressionAlgorithm === 'GZIP'
           ? gunzipSync(buf).toString('utf-8')
           : buf.toString('utf-8');
+
+        // Integrity check 1: refuse reports whose header row is missing
+        // required columns — ingesting one would store rows with
+        // silently-empty fields. `alerted: true` tells cron-collect not
+        // to double-alert this entry as a generic collect-failure.
+        const header = _validateReportHeader(text);
+        if (!header.ok) {
+          const headerErr = `missing required column(s): ${header.missing.join(', ')} — Amazon may have changed the report format`;
+          failed.push({
+            reportId: p.reportId,
+            month: p.month,
+            status: 'BAD_HEADER',
+            error: `Ingest refused — ${headerErr}`,
+            alerted: true
+          });
+          lastResults[p.month] = {
+            status: 'FAILED',
+            error: `Ingest refused — ${headerErr}`,
+            completedAt: new Date().toISOString()
+          };
+          await _addAlert({
+            id: `import-integrity:${p.month}`,
+            severity: 'error',
+            category: 'import-integrity',
+            message: `Import refused for ${p.month}: ${headerErr}.`,
+            details: { reportId: p.reportId, missing: header.missing }
+          });
+          continue;
+        }
+
         const rows = _parseTsv(text);
         // Per-entry merge flag (stamped at request time for partial-range
         // and single-day reports) wins over the caller's default — a
@@ -847,6 +924,38 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
             skippedNoOrder: result.skippedNoOrder,
             completedAt: new Date().toISOString()
           };
+
+          // Integrity checks 2+3: rows landed, but did they parse into
+          // sense? An abnormal skip rate or mostly-empty critical fields
+          // mean the report's values changed shape even though the
+          // header looked right. Row floors keep tiny ranges from
+          // tripping the percentages on a single odd row.
+          const parseSkips = (result.skippedNoDate || 0) + (result.skippedNoOrder || 0);
+          const problems = [];
+          if (result.rawRowCount >= 20 && parseSkips / result.rawRowCount > 0.05) {
+            problems.push(`${parseSkips} of ${result.rawRowCount} raw rows were unparseable (missing date or order id)`);
+          }
+          if (result.totalRows >= 20) {
+            if (result.rowsWithItemTotal / result.totalRows < 0.5) {
+              problems.push(`only ${result.rowsWithItemTotal} of ${result.totalRows} rows have a sale amount — the price format may have changed`);
+            }
+            if (result.rowsWithQuantity / result.totalRows < 0.9) {
+              problems.push(`only ${result.rowsWithQuantity} of ${result.totalRows} rows have a quantity`);
+            }
+          }
+          if (problems.length > 0) {
+            await _addAlert({
+              id: `import-integrity:${p.month}`,
+              severity: 'error',
+              category: 'import-integrity',
+              message: `Import for ${p.month} looks corrupted: ${problems.join('; ')}.`,
+              details: { reportId: p.reportId }
+            });
+          } else {
+            // Self-heal: a clean import of this range clears any earlier
+            // integrity alert for it.
+            await _resolveAlert(`import-integrity:${p.month}`);
+          }
         }
       } else if (status === 'CANCELLED' || status === 'FATAL') {
         failed.push({
@@ -1042,6 +1151,8 @@ async function handleCronCollect(req, res) {
     const result = await _pollPendingReports({ overwrite: true, mergeMode: true });
 
     for (const f of result.failed) {
+      // Integrity refusals already fired their own alert at ingest time.
+      if (f.alerted) continue;
       await _addAlert({
         id: `collect-failure:${f.reportId}`,
         severity: 'error',
@@ -1078,8 +1189,16 @@ async function handleCronDataCheck(req, res) {
   const yesterday = _yesterdayUTC();
   const yesterdayMonth = yesterday.slice(0, 7);
   try {
-    const bucket = (await kv.get(`orders:v2:${yesterdayMonth}`)) || [];
-    const count = bucket.filter(r => r && r.orderDate === yesterday).length;
+    // Month buckets cached across the no-data and plausibility checks —
+    // the trailing-weekday history reads from the same 1-2 months.
+    const buckets = {};
+    const getBucket = async (m) => {
+      if (!(m in buckets)) buckets[m] = (await kv.get(`orders:v2:${m}`)) || [];
+      return buckets[m];
+    };
+
+    const dayRows = (await getBucket(yesterdayMonth)).filter(r => r && r.orderDate === yesterday);
+    const count = dayRows.length;
 
     if (count === 0) {
       await _addAlert({
@@ -1092,11 +1211,68 @@ async function handleCronDataCheck(req, res) {
       // Self-heal: if a previous check for this same date wrote a
       // no-data alert and a subsequent run finds data, mark that
       // alert dismissed so it stops appearing in the banner.
-      const alerts = (await kv.get('orders:v2:alerts')) || [];
-      const idx = alerts.findIndex(a => a && a.id === `no-data:${yesterday}` && !a.dismissed);
-      if (idx >= 0) {
-        alerts[idx] = { ...alerts[idx], dismissed: true, resolvedAt: new Date().toISOString() };
-        await kv.set('orders:v2:alerts', alerts);
+      await _resolveAlert(`no-data:${yesterday}`);
+    }
+
+    // Integrity check 4 (plausibility): yesterday's rows may all be
+    // well-formed and still be wrong — a truncated report, a partial
+    // generation on Amazon's side, a double-import. Compare row count
+    // and revenue against the median of the trailing 4 same-weekdays
+    // (weekday-aware: weekends sell differently than weekdays). Warn,
+    // not error — a genuinely great or terrible sales day is possible.
+    let plausibility = 'skipped';
+    if (count > 0) {
+      const revenue = dayRows.reduce((s, r) => s + (r.itemTotal || 0), 0);
+      const history = [];
+      for (let k = 1; k <= 4; k++) {
+        const d = new Date(Date.parse(yesterday + 'T00:00:00Z') - k * 7 * 86400000);
+        const dateStr = d.toISOString().slice(0, 10);
+        const rows = (await getBucket(dateStr.slice(0, 7))).filter(r => r && r.orderDate === dateStr);
+        if (rows.length > 0) {
+          history.push({
+            date: dateStr,
+            count: rows.length,
+            revenue: rows.reduce((s, r) => s + (r.itemTotal || 0), 0)
+          });
+        }
+      }
+
+      // Need at least 3 comparable weekdays with data, and a non-trivial
+      // baseline, before calling anything an anomaly.
+      if (history.length >= 3) {
+        const median = (arr) => {
+          const s = [...arr].sort((a, b) => a - b);
+          const mid = Math.floor(s.length / 2);
+          return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+        };
+        const medCount = median(history.map(h => h.count));
+        const medRevenue = median(history.map(h => h.revenue));
+        const countOff = medCount >= 5 && (count < medCount * 0.3 || count > medCount * 3);
+        const revenueOff = medRevenue > 0 && (revenue < medRevenue * 0.3 || revenue > medRevenue * 3);
+
+        if (countOff || revenueOff) {
+          const weekday = new Date(yesterday + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+          const usd = (n) => '$' + Math.round(n).toLocaleString('en-US');
+          await _addAlert({
+            id: `plausibility:${yesterday}`,
+            severity: 'warn',
+            category: 'plausibility',
+            message: `Yesterday (${yesterday}) imported ${count} rows / ${usd(revenue)} in sales — typical ${weekday} is ~${Math.round(medCount)} rows / ~${usd(medRevenue)} (median of the last ${history.length} ${weekday}s). Could be a real sales swing, or a partial/duplicated import.`,
+            details: {
+              count,
+              revenue: Math.round(revenue * 100) / 100,
+              medianCount: medCount,
+              medianRevenue: Math.round(medRevenue * 100) / 100,
+              historyDates: history.map(h => h.date)
+            }
+          });
+          plausibility = 'alert';
+        } else {
+          // Self-heal: a corrected re-import that lands back inside the
+          // normal band clears the earlier warning.
+          await _resolveAlert(`plausibility:${yesterday}`);
+          plausibility = 'ok';
+        }
       }
     }
 
@@ -1106,6 +1282,7 @@ async function handleCronDataCheck(req, res) {
       success: true,
       date: yesterday,
       count,
+      plausibility,
       status: count === 0 ? 'alert' : 'ok'
     });
   } catch (error) {
@@ -1167,6 +1344,24 @@ async function handleDismissAlert(req, res) {
   } catch (error) {
     console.error('[ORDERS DISMISS-ALERT] Error:', error);
     return res.status(500).json({ error: 'Dismiss failed: ' + error.message });
+  }
+}
+
+// Self-heal path: mark an active alert dismissed because a later run
+// found the condition resolved (data arrived, a re-import came back
+// clean, a day fell back inside its normal band). No-op if the alert
+// doesn't exist or was already dismissed.
+async function _resolveAlert(id) {
+  try {
+    const alerts = (await kv.get('orders:v2:alerts')) || [];
+    const idx = alerts.findIndex(a => a && a.id === id && !a.dismissed);
+    if (idx < 0) return false;
+    alerts[idx] = { ...alerts[idx], dismissed: true, resolvedAt: new Date().toISOString() };
+    await kv.set('orders:v2:alerts', alerts);
+    return true;
+  } catch (err) {
+    console.warn('[_resolveAlert] KV write failed:', err.message);
+    return false;
   }
 }
 
