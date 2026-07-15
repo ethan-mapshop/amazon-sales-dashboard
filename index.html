@@ -576,7 +576,7 @@
       <div class="card card-flat" style="margin-top: 2rem;">
         <h3 class="section-title" style="margin-bottom: 1.5rem;">Load Order Data</h3>
         <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1.5rem;">
-          Fetch and store orders from Amazon for a specific date range. Use this to load historical data or fill in any gaps the daily sync missed.
+          Pulls the same Amazon All Orders report the daily sync uses, for the date range you pick, and merges the results into existing data — days outside the range are untouched. Use this to load historical data or fill in any gaps the daily sync missed. Ranges over 30 days are split into multiple reports automatically.
         </p>
         <div style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
           <div>

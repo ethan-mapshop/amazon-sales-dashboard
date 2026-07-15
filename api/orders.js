@@ -508,45 +508,84 @@ function _normalizeReportRows(rawRows) {
 // download when ready.
 //
 // The reportId is stashed in KV key `orders:v2:pending-reports` (an
-// array of { reportId, month, requestedAt, name }). Same pending-queue
-// pattern as api/adspend.js.
+// array of { reportId, month, requestedAt, name, merge? }). Same
+// pending-queue pattern as api/adspend.js.
 //
-// Body: { month: 'YYYY-MM' }
+// Body, one of:
+//   { month: 'YYYY-MM' } — whole-month pull (Pull UI). Collected with
+//     whole-month replace semantics (collision-guarded).
+//   { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' } — arbitrary inclusive
+//     range (Sales & Volume backfill card). ≤31 days per report; end is
+//     clamped to yesterday UTC since data is only complete through
+//     yesterday. Queue entry is stamped merge:true so whichever
+//     collector picks it up merges into existing month buckets instead
+//     of replacing them — ranges can be partial months.
 async function handleRequestFlatFileReport(req, res) {
-  // month declared outside the try so the catch can record a per-month
-  // failure to lastResults (surfaces in the UI status panel).
-  let month;
+  // resultKey declared outside the try so the catch can record a
+  // per-request failure to lastResults (surfaces in the UI status panel).
+  let resultKey;
   try {
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
     if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
     const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
     if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
 
-    month = req.body?.month;
-    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
-      return res.status(400).json({ error: 'month=YYYY-MM required in body' });
-    }
+    const { month, start, end } = req.body || {};
+    let tag, dataStartTime, dataEndTime;
+    let merge = false;
+    let clamped = false;
+    let effectiveEnd;
 
-    // ISO 8601 UTC bounds for the calendar month.
-    const [y, m] = month.split('-').map(Number);
-    const dataStartTime = new Date(Date.UTC(y, m - 1, 1)).toISOString();
-    // Last millisecond of the month — inclusive end.
-    const dataEndTime = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+    if (start || end) {
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRe.test(start || '') || !dateRe.test(end || '')) {
+        return res.status(400).json({ error: 'start and end must both be YYYY-MM-DD' });
+      }
+      if (start > end) {
+        return res.status(400).json({ error: 'start must be on or before end' });
+      }
+      const yesterday = _yesterdayUTC();
+      effectiveEnd = end > yesterday ? yesterday : end;
+      clamped = effectiveEnd !== end;
+      if (start > effectiveEnd) {
+        return res.status(400).json({ error: `Range is entirely in the future — data exists through ${yesterday} only.` });
+      }
+      const spanDays = (Date.parse(effectiveEnd) - Date.parse(start)) / 86400000 + 1;
+      if (spanDays > 31) {
+        return res.status(400).json({ error: 'Range too long for one report — 31 days max per request.' });
+      }
+      tag = start === effectiveEnd ? start : `${start}..${effectiveEnd}`;
+      dataStartTime = new Date(`${start}T00:00:00Z`).toISOString();
+      dataEndTime = new Date(Date.parse(`${effectiveEnd}T23:59:59Z`) + 999).toISOString();
+      merge = true;
+    } else {
+      if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+        return res.status(400).json({ error: 'month=YYYY-MM (or start/end=YYYY-MM-DD) required in body' });
+      }
+      // ISO 8601 UTC bounds for the calendar month.
+      const [y, m] = month.split('-').map(Number);
+      dataStartTime = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+      // Last millisecond of the month — inclusive end.
+      dataEndTime = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+      tag = month;
+    }
+    resultKey = tag;
 
     const result = await _requestReportForMonth({
-      tag: month,
-      name: `AllOrders ${month}`,
+      tag,
+      name: `AllOrders ${tag}`,
       dataStartTime,
-      dataEndTime
+      dataEndTime,
+      merge
     });
 
-    // Clear any stale lastResults entry for this month — a previous
+    // Clear any stale lastResults entry for this tag — a previous
     // failure shouldn't linger in the UI now that we've successfully
     // re-queued the report.
     if (!result.alreadyPending) {
       const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
-      if (lastResults[month]) {
-        delete lastResults[month];
+      if (lastResults[tag]) {
+        delete lastResults[tag];
         await kv.set('orders:v2:report-lastresult', lastResults);
       }
     }
@@ -554,10 +593,12 @@ async function handleRequestFlatFileReport(req, res) {
     return res.status(200).json({
       success: true,
       reportId: result.reportId,
-      month,
+      tag,
+      month: tag,
+      ...(clamped ? { clamped: true, effectiveEnd } : {}),
       alreadyPending: result.alreadyPending,
       ...(result.alreadyPending
-        ? { message: `Report for ${month} already pending since ${result.requestedAt}` }
+        ? { message: `Report for ${tag} already pending since ${result.requestedAt}` }
         : {})
     });
   } catch (error) {
@@ -566,10 +607,10 @@ async function handleRequestFlatFileReport(req, res) {
 
     // Persist request-time failures to lastResults so the status panel
     // can render them.
-    if (month && /^\d{4}-\d{2}$/.test(month)) {
+    if (resultKey) {
       try {
         const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
-        lastResults[month] = {
+        lastResults[resultKey] = {
           status: 'FAILED',
           error: errorMsg,
           completedAt: new Date().toISOString(),
@@ -579,7 +620,7 @@ async function handleRequestFlatFileReport(req, res) {
       } catch { /* best-effort */ }
     }
 
-    return res.status(500).json({ error: 'Request failed: ' + errorMsg, month });
+    return res.status(500).json({ error: 'Request failed: ' + errorMsg, month: resultKey });
   }
 }
 
@@ -593,7 +634,7 @@ async function handleRequestFlatFileReport(req, res) {
 // `p.month`. Phase 2 uses "2026-07" (month); Phase 3 cron uses
 // "2026-07-13" (date). Same field, different granularity — the poll
 // path treats it as an opaque string.
-async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime }) {
+async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime, merge = false }) {
   // If a report with this tag is already pending, reuse rather than
   // firing a duplicate at Amazon.
   const pending = (await kv.get('orders:v2:pending-reports')) || [];
@@ -643,11 +684,15 @@ async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime })
     }
   }
 
+  // merge:true rides along on the queue entry so the COLLECTOR (not the
+  // poll caller) decides ingestion mode — a partial-range report must
+  // always merge, no matter which path drains it from the queue.
   const updated = [...pending, {
     reportId,
     month: tag,
     requestedAt: new Date().toISOString(),
-    name
+    name,
+    ...(merge ? { merge: true } : {})
   }];
   await kv.set('orders:v2:pending-reports', updated);
 
@@ -765,7 +810,10 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
           ? gunzipSync(buf).toString('utf-8')
           : buf.toString('utf-8');
         const rows = _parseTsv(text);
-        const result = mergeMode
+        // Per-entry merge flag (stamped at request time for partial-range
+        // and single-day reports) wins over the caller's default — a
+        // partial report must never whole-month-replace.
+        const result = (mergeMode || p.merge === true)
           ? await _mergeOrdersDay(rows)
           : await _normalizeAndWriteOrdersMonth(rows, { overwrite });
 
@@ -952,7 +1000,8 @@ async function handleCronDailyRequest(req, res) {
       tag: yesterday,
       name: `AllOrders ${yesterday}`,
       dataStartTime,
-      dataEndTime
+      dataEndTime,
+      merge: true
     });
 
     // Heartbeat: write requestAt so the client-side stale-check has

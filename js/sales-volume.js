@@ -2508,103 +2508,157 @@
 
 
     // ── ORDERS BACKFILL + SYNC ────────────────────────────────────────────────
+    //
+    // Rewired to the same SP-API flat-file All Orders report the daily
+    // cron pulls (request → Amazon generates → poll-collect). Ranges are
+    // split into ≤30-day chunks (one report each) and results MERGE into
+    // existing month buckets (dedupe by orderId+sku) — a partial range
+    // never clobbers days it doesn't cover. The server pending queue is
+    // the source of truth: closing the tab mid-run is safe; the next
+    // scheduled cron-collect (or re-clicking the button) finishes the job.
 
-    // Runs day-by-day from the browser to avoid Vercel's 60s function timeout.
-    async function runOrdersBackfill() {
-      if (!accessToken) { alert('Please sign in first.'); return; }
+    const BF_POLL_INTERVAL_MS = 20000;
+    const BF_POLL_MAX_TICKS = 45; // ~15 min before handing off to the cron
 
-      const startDate = document.getElementById('backfill-start').value;
-      const endDate   = document.getElementById('backfill-end').value;
-
-      if (!startDate || !endDate) { alert('Please select a start and end date.'); return; }
-      if (startDate > endDate)    { alert('Start date must be before end date.'); return; }
-
-      const btn = document.getElementById('backfill-btn');
+    function _bfLogger() {
       const log = document.getElementById('backfill-log');
-      btn.disabled = true;
-      btn.textContent = 'Running…';
       log.style.display = 'block';
       log.innerHTML = '';
-
-      const addLine = (msg, color) => {
+      return (msg, color) => {
         const el = document.createElement('div');
         el.style.color = color || 'var(--text-primary)';
         el.textContent = msg;
         log.appendChild(el);
         log.scrollTop = log.scrollHeight;
       };
-
-      // Build list of all dates in range
-      const dates = [];
-      const cursor = new Date(startDate + 'T12:00:00Z');
-      const stop   = new Date(endDate   + 'T12:00:00Z');
-      while (cursor <= stop) {
-        dates.push(cursor.toISOString().split('T')[0]);
-        cursor.setUTCDate(cursor.getUTCDate() + 1);
-      }
-
-      addLine(`Fetching ${dates.length} day(s): ${startDate} → ${endDate}`, 'var(--text-secondary)');
-
-      let totalRecords = 0;
-      let errors = 0;
-
-      for (let i = 0; i < dates.length; i++) {
-        const date = dates[i];
-        try {
-          const res  = await fetch(`/api/orders?action=sync&date=${date}`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          });
-          const data = await res.json();
-
-          if (data.success) {
-            totalRecords += data.newRecords;
-            addLine(`✓ ${date} — ${data.newRecords} line items (${totalRecords} total, ${i + 1}/${dates.length})`, 'var(--success)');
-          } else {
-            errors++;
-            addLine(`⚠ ${date} — ${data.error}`, 'var(--error)');
-          }
-        } catch (err) {
-          errors++;
-          addLine(`⚠ ${date} — ${err.message}`, 'var(--error)');
-        }
-      }
-
-      if (errors === 0) {
-        addLine(`COMPLETE — ${totalRecords} order line items stored across ${dates.length} days`, 'var(--success)');
-      } else {
-        addLine(`DONE with ${errors} error(s) — ${totalRecords} line items stored`, 'var(--warning)');
-      }
-
-      btn.disabled   = false;
-      btn.textContent = 'Fetch Orders';
-
-      // Rebuild cache then reload the page data
-      await rebuildMonthlySummaryCache();
-      await loadSalesVolumeData();
     }
 
-    async function testOrdersSync() {
-      if (!accessToken) { alert('Please sign in first.'); return; }
-
-      const log = document.getElementById('backfill-log');
-      log.style.display = 'block';
-      log.innerHTML = '<div style="color:var(--text-secondary);">Syncing yesterday…</div>';
-
-      try {
-        const res  = await fetch('/api/orders?action=sync', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        const data = await res.json();
-
-        if (data.success) {
-          log.innerHTML = `<div style="color:var(--success);">✓ Sync complete — ${data.newRecords} order line items stored for ${data.date}</div>`;
-          await rebuildMonthlySummaryCache();
-          await loadSalesVolumeData();
-        } else {
-          log.innerHTML = `<div style="color:var(--error);">✗ Sync failed: ${data.error}</div>`;
+    // Poll the shared pending queue until none of `tags` remain, logging
+    // per-tag outcomes as they land. Returns the set of tags still
+    // pending at timeout (Amazon occasionally takes longer than we wait).
+    async function _bfPollUntilDone(tags, addLine) {
+      const waiting = new Set(tags);
+      for (let tick = 0; tick < BF_POLL_MAX_TICKS && waiting.size > 0; tick++) {
+        await new Promise(r => setTimeout(r, BF_POLL_INTERVAL_MS));
+        let data;
+        try {
+          const res = await fetch('/api/orders?action=poll-flat-file-report', {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          data = await res.json();
+        } catch (err) {
+          addLine(`… poll hiccup (${err.message}) — retrying`, 'var(--text-secondary)');
+          continue;
         }
+        for (const c of (data.collected || [])) {
+          if (!waiting.delete(c.month)) continue;
+          if (c.rawRowCount === 0) addLine(`⚠ ${c.month} — Amazon returned no rows for this range`, 'var(--warning)');
+          else addLine(`✓ ${c.month} — ${c.rowCount} line items merged`, 'var(--success)');
+        }
+        for (const f of (data.failed || [])) {
+          if (waiting.delete(f.month)) addLine(`✗ ${f.month} — ${f.error}`, 'var(--error)');
+        }
+        // A concurrent collector (e.g. cron-collect) may have landed one
+        // of ours — anything absent from the remaining queue is done.
+        const stillTags = new Set((data.stillPending || []).map(p => p.month));
+        for (const t of [...waiting]) {
+          if (!stillTags.has(t)) {
+            waiting.delete(t);
+            addLine(`✓ ${t} — collected`, 'var(--success)');
+          }
+        }
+      }
+      return waiting;
+    }
+
+    async function runOrdersBackfill() {
+      const addLine = _bfLogger();
+      if (!accessToken) { addLine('Please sign in first.', 'var(--error)'); return; }
+
+      const startDate = document.getElementById('backfill-start').value;
+      const endDate   = document.getElementById('backfill-end').value;
+      if (!startDate || !endDate) { addLine('Please select a start and end date.', 'var(--error)'); return; }
+      if (startDate > endDate)    { addLine('Start date must be before end date.', 'var(--error)'); return; }
+
+      const btn = document.getElementById('backfill-btn');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+
+      // ≤30-day chunks — the All Orders report caps the range per request.
+      const DAY = 86400000;
+      const chunks = [];
+      let cur = Date.parse(startDate + 'T00:00:00Z');
+      const stop = Date.parse(endDate + 'T00:00:00Z');
+      while (cur <= stop) {
+        const chunkEnd = Math.min(cur + 29 * DAY, stop);
+        chunks.push([new Date(cur).toISOString().slice(0, 10), new Date(chunkEnd).toISOString().slice(0, 10)]);
+        cur = chunkEnd + DAY;
+      }
+
+      addLine(`Requesting ${chunks.length} report(s): ${startDate} → ${endDate}`, 'var(--text-secondary)');
+
+      const tags = [];
+      for (const [s, e] of chunks) {
+        try {
+          const res = await fetch('/api/orders?action=request-flat-file-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+            body: JSON.stringify({ start: s, end: e })
+          });
+          const text = await res.text();
+          let data;
+          try { data = JSON.parse(text); } catch { throw new Error(text.slice(0, 120)); }
+          if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+          tags.push(data.tag);
+          const notes = [
+            data.alreadyPending ? 'already pending — resuming' : null,
+            data.clamped ? `end clamped to ${data.effectiveEnd} (yesterday)` : null
+          ].filter(Boolean).join('; ');
+          addLine(`→ ${data.tag} requested${notes ? ` (${notes})` : ''}`, 'var(--text-secondary)');
+        } catch (err) {
+          addLine(`✗ ${s} → ${e} — ${err.message}`, 'var(--error)');
+        }
+      }
+
+      if (tags.length > 0) {
+        addLine('Waiting for Amazon to generate the report(s) — typically a few minutes…', 'var(--text-secondary)');
+        const leftover = await _bfPollUntilDone(tags, addLine);
+        if (leftover.size > 0) {
+          addLine(`Still generating: ${[...leftover].join(', ')} — the next scheduled collect will land them automatically, or click Fetch Orders again to resume.`, 'var(--warning)');
+        } else {
+          addLine('COMPLETE — reloading page data…', 'var(--success)');
+        }
+        await loadSalesVolumeData();
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Fetch Orders';
+    }
+
+    // "Sync Yesterday" — fires the exact request the daily cron makes
+    // (cron-daily-request: yesterday only, merge-mode), then polls the
+    // queue until it lands.
+    async function testOrdersSync() {
+      const addLine = _bfLogger();
+      if (!accessToken) { addLine('Please sign in first.', 'var(--error)'); return; }
+
+      addLine("Requesting yesterday's report — same pull the daily cron runs…", 'var(--text-secondary)');
+      try {
+        const res = await fetch('/api/orders?action=cron-daily-request');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || `HTTP ${res.status}`);
+        addLine(`→ ${data.date} requested${data.alreadyPending ? ' (already pending — resuming)' : ''}`, 'var(--text-secondary)');
+
+        const leftover = await _bfPollUntilDone([data.date], addLine);
+        if (leftover.size > 0) {
+          addLine('Still generating — the next scheduled collect will land it automatically.', 'var(--warning)');
+        } else {
+          addLine('COMPLETE — reloading page data…', 'var(--success)');
+        }
+        await loadSalesVolumeData();
       } catch (err) {
-        log.innerHTML = `<div style="color:var(--error);">✗ Error: ${err.message}</div>`;
+        addLine(`✗ ${err.message}`, 'var(--error)');
       }
     }
 
@@ -2615,9 +2669,10 @@
     // Monthly Overview no longer reads it — the rolling 13-month
     // aggregation in renderSalesVolumeData walks the full orders
     // array instead, since that's already loaded and stale-cache
-    // bugs were leaving recent months invisible. The rebuild helper
-    // below remains in place because the backfill flow calls it
-    // after writing new orders.
+    // bugs were leaving recent months invisible. Nothing calls the
+    // rebuild helper below anymore (the backfill card now writes to
+    // the v2 keyspace) — it stays until the old orders:* keyspace
+    // is retired.
 
 
     async function rebuildMonthlySummaryCache() {
