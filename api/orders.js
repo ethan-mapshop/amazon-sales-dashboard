@@ -335,7 +335,8 @@ async function handleUploadOrdersReport(req, res) {
 // wraps them into an HTTP response.
 async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}) {
   const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder,
-          rowsWithItemTotal, rowsWithQuantity, rawRowCount } =
+          rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue,
+          rawRowCount } =
     _normalizeReportRows(rawRows);
 
   const monthsToWrite = Object.keys(byMonth).sort();
@@ -344,7 +345,7 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
       collision: false,
       writtenMonths: [], totalRows: 0, rawRowCount,
       skippedCancelled, skippedNoDate, skippedNoOrder,
-      rowsWithItemTotal, rowsWithQuantity
+      rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
     };
   }
 
@@ -379,7 +380,7 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
     collision: false,
     writtenMonths: monthsToWrite, totalRows, rawRowCount,
     skippedCancelled, skippedNoDate, skippedNoOrder,
-    rowsWithItemTotal, rowsWithQuantity
+    rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
   };
 }
 
@@ -392,21 +393,35 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 //
 // Never returns a collision result — merges by definition don't collide.
 async function _mergeOrdersDay(rawRows) {
-  const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder,
-          rowsWithItemTotal, rowsWithQuantity, rawRowCount } =
+  const { byMonth, cancelledKeys, skippedCancelled, skippedNoDate, skippedNoOrder,
+          rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue,
+          rawRowCount } =
     _normalizeReportRows(rawRows);
 
-  const monthsToWrite = Object.keys(byMonth).sort();
+  // Cancelled identities grouped by their PURCHASE month — that's where
+  // the previously-imported copy lives, regardless of when the
+  // cancellation happened.
+  const cancelledByMonth = {};
+  for (const c of cancelledKeys) {
+    if (!cancelledByMonth[c.month]) cancelledByMonth[c.month] = [];
+    cancelledByMonth[c.month].push(`${c.orderId}:${c.sku}`);
+  }
+
+  const monthsToWrite = [...new Set([
+    ...Object.keys(byMonth),
+    ...Object.keys(cancelledByMonth)
+  ])].sort();
   if (monthsToWrite.length === 0) {
     return {
       collision: false,
-      writtenMonths: [], totalRows: 0, rawRowCount,
+      writtenMonths: [], totalRows: 0, removedCancelled: 0, rawRowCount,
       skippedCancelled, skippedNoDate, skippedNoOrder,
-      rowsWithItemTotal, rowsWithQuantity
+      rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
     };
   }
 
   let totalRows = 0;
+  let removedCancelled = 0;
   for (const m of monthsToWrite) {
     const existing = (await kv.get(`orders:v2:${m}`)) || [];
     // Dedupe map keyed by orderId+sku. Existing rows loaded first, then
@@ -416,10 +431,17 @@ async function _mergeOrdersDay(rawRows) {
     // in the same month) stay intact.
     const dedup = new Map();
     for (const r of existing) if (r && r.orderId) dedup.set(`${r.orderId}:${r.sku}`, r);
-    for (const r of byMonth[m])                  dedup.set(`${r.orderId}:${r.sku}`, r);
+    for (const r of (byMonth[m] || []))          dedup.set(`${r.orderId}:${r.sku}`, r);
+    // Cancellation-aware: rows the fresh report marks Cancelled are
+    // deleted. Amazon blanks a cancelled row's value rather than keeping
+    // it, so deletion — not a negative adjustment — is what makes stored
+    // data re-verifiable against a fresh report at every slice.
+    for (const key of (cancelledByMonth[m] || [])) {
+      if (dedup.delete(key)) removedCancelled++;
+    }
     const merged = [...dedup.values()].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
     await kv.set(`orders:v2:${m}`, merged);
-    totalRows += byMonth[m].length; // count of NEW rows, not merged total
+    totalRows += (byMonth[m] || []).length; // count of NEW rows, not merged total
   }
   const existingIndex = (await kv.get('orders:v2:index')) || [];
   const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
@@ -429,9 +451,9 @@ async function _mergeOrdersDay(rawRows) {
 
   return {
     collision: false,
-    writtenMonths: monthsToWrite, totalRows, rawRowCount,
+    writtenMonths: monthsToWrite, totalRows, removedCancelled, rawRowCount,
     skippedCancelled, skippedNoDate, skippedNoOrder,
-    rowsWithItemTotal, rowsWithQuantity
+    rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
   };
 }
 
@@ -484,6 +506,11 @@ function _normalizeReportRows(rawRows) {
   };
 
   const byMonth = {};
+  // Identities of rows the report marks Cancelled — merge mode uses
+  // these to DELETE previously-imported copies (order cancelled after
+  // we ingested it as valid). Amazon blanks a cancelled row's value in
+  // fresh reports, so removal is what converges us to Amazon's truth.
+  const cancelledKeys = [];
   let skippedCancelled = 0;
   let skippedNoDate = 0;
   let skippedNoOrder = 0;
@@ -491,20 +518,35 @@ function _normalizeReportRows(rawRows) {
   // crater in either means the report's value format changed shape.
   let rowsWithItemTotal = 0;
   let rowsWithQuantity = 0;
+  // "Last sync" summary inputs — distinct orders and revenue ingested.
+  const orderIdSet = new Set();
+  let ingestedRevenue = 0;
   for (const r of rawRows) {
     if (!r || typeof r !== 'object') continue;
 
-    const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
-    if (status === 'Cancelled' || status === 'Canceled') { skippedCancelled++; continue; }
-
+    // Bucket by the PACIFIC calendar date of the purchase timestamp —
+    // that's the day convention every Seller Central surface uses, so
+    // it's what makes our totals reconcile with Amazon's. A bare
+    // YYYY-MM-DD (no time component) is taken as-is.
     const orderDateRaw = String(pick(r, 'purchase-date', 'purchaseDate') || '').trim();
-    const orderDate = orderDateRaw.slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
-
+    const orderDate = /^\d{4}-\d{2}-\d{2}$/.test(orderDateRaw)
+      ? orderDateRaw
+      : _ptDate(orderDateRaw);
     const orderId = String(pick(r, 'amazon-order-id', 'amazonOrderId', 'orderId') || '').trim();
+    const sku = String(pick(r, 'sku') || '').trim();
+
+    const status = String(pick(r, 'item-status', 'itemStatus') || '').trim();
+    if (status === 'Cancelled' || status === 'Canceled') {
+      skippedCancelled++;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(orderDate) && orderId) {
+        cancelledKeys.push({ month: orderDate.slice(0, 7), orderId, sku });
+      }
+      continue;
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) { skippedNoDate++; continue; }
     if (!orderId) { skippedNoOrder++; continue; }
 
-    const sku = String(pick(r, 'sku') || '').trim();
     const asin = String(pick(r, 'asin') || '').trim();
     const qtyRaw = pick(r, 'quantity');
     const quantity = parseInt(String(qtyRaw ?? '0').replace(/[,]/g, ''), 10) || 0;
@@ -524,6 +566,8 @@ function _normalizeReportRows(rawRows) {
 
     if (itemTotal > 0) rowsWithItemTotal++;
     if (quantity > 0) rowsWithQuantity++;
+    orderIdSet.add(orderId);
+    ingestedRevenue += itemTotal;
 
     const month = orderDate.slice(0, 7);
     if (!byMonth[month]) byMonth[month] = [];
@@ -535,11 +579,14 @@ function _normalizeReportRows(rawRows) {
 
   return {
     byMonth,
+    cancelledKeys,
     skippedCancelled,
     skippedNoDate,
     skippedNoOrder,
     rowsWithItemTotal,
     rowsWithQuantity,
+    ingestedOrders: orderIdSet.size,
+    ingestedRevenue,
     rawRowCount: rawRows.length
   };
 }
@@ -591,29 +638,28 @@ async function handleRequestFlatFileReport(req, res) {
       if (start > end) {
         return res.status(400).json({ error: 'start must be on or before end' });
       }
-      const yesterday = _yesterdayUTC();
+      const yesterday = _yesterdayPT();
       effectiveEnd = end > yesterday ? yesterday : end;
       clamped = effectiveEnd !== end;
       if (start > effectiveEnd) {
-        return res.status(400).json({ error: `Range is entirely in the future — data exists through ${yesterday} only.` });
+        return res.status(400).json({ error: `Range is entirely in the future — data exists through ${yesterday} (Pacific) only.` });
       }
       const spanDays = (Date.parse(effectiveEnd) - Date.parse(start)) / 86400000 + 1;
       if (spanDays > 31) {
         return res.status(400).json({ error: 'Range too long for one report — 31 days max per request.' });
       }
       tag = start === effectiveEnd ? start : `${start}..${effectiveEnd}`;
-      dataStartTime = new Date(`${start}T00:00:00Z`).toISOString();
-      dataEndTime = new Date(Date.parse(`${effectiveEnd}T23:59:59Z`) + 999).toISOString();
+      ({ dataStartTime, dataEndTime } = _ptRangeBoundsUtc(start, effectiveEnd));
       merge = true;
     } else {
       if (!month || !/^\d{4}-\d{2}$/.test(month)) {
         return res.status(400).json({ error: 'month=YYYY-MM (or start/end=YYYY-MM-DD) required in body' });
       }
-      // ISO 8601 UTC bounds for the calendar month.
+      // Pacific calendar-month bounds — matches how Seller Central (and
+      // the humans reading it) define a month.
       const [y, m] = month.split('-').map(Number);
-      dataStartTime = new Date(Date.UTC(y, m - 1, 1)).toISOString();
-      // Last millisecond of the month — inclusive end.
-      dataEndTime = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      ({ dataStartTime, dataEndTime } = _ptRangeBoundsUtc(`${month}-01`, `${month}-${String(lastDay).padStart(2, '0')}`));
       tag = month;
     }
     resultKey = tag;
@@ -681,7 +727,8 @@ async function handleRequestFlatFileReport(req, res) {
 // `p.month`. Phase 2 uses "2026-07" (month); Phase 3 cron uses
 // "2026-07-13" (date). Same field, different granularity — the poll
 // path treats it as an opaque string.
-async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime, merge = false }) {
+async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime, merge = false,
+                                        reportType = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL' }) {
   // If a report with this tag is already pending, reuse rather than
   // firing a duplicate at Amazon.
   const pending = (await kv.get('orders:v2:pending-reports')) || [];
@@ -704,7 +751,7 @@ async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime, m
       operation: 'createReport',
       endpoint: 'reports',
       body: {
-        reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
+        reportType,
         marketplaceIds: [marketplaceId],
         dataStartTime,
         dataEndTime
@@ -913,7 +960,10 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
             status: 'DONE',
             rowCount: result.totalRows,
             rawRowCount: result.rawRowCount,
-            skippedCancelled: result.skippedCancelled
+            skippedCancelled: result.skippedCancelled,
+            removedCancelled: result.removedCancelled || 0,
+            orders: result.ingestedOrders || 0,
+            revenue: result.ingestedRevenue || 0
           });
           lastResults[p.month] = {
             status: 'DONE',
@@ -922,6 +972,7 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
             skippedCancelled: result.skippedCancelled,
             skippedNoDate: result.skippedNoDate,
             skippedNoOrder: result.skippedNoOrder,
+            removedCancelled: result.removedCancelled || 0,
             completedAt: new Date().toISOString()
           };
 
@@ -986,6 +1037,25 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
   const nextQueue = [...stillPending, ...untouchedTail];
   await kv.set('orders:v2:pending-reports', nextQueue);
   await kv.set('orders:v2:report-lastresult', lastResults);
+
+  // "Last sync" summary for the dashboard blurb: the PT date range the
+  // just-collected order-date reports covered and what they loaded.
+  // upd:* (BY_LAST_UPDATE) reports are excluded — they refresh/delete
+  // existing rows rather than load a range of new orders.
+  const loaded = collected
+    .map(c => ({ c, range: _tagDateRange(c.month) }))
+    .filter(x => x.range);
+  if (loaded.length > 0) {
+    await _touchHeartbeat({
+      lastSync: {
+        at: new Date().toISOString(),
+        start: loaded.map(x => x.range[0]).sort()[0],
+        end: loaded.map(x => x.range[1]).sort().pop(),
+        orders: loaded.reduce((s, x) => s + (x.c.orders || 0), 0),
+        revenue: Math.round(loaded.reduce((s, x) => s + (x.c.revenue || 0), 0) * 100) / 100
+      }
+    });
+  }
 
   return {
     collected,
@@ -1090,27 +1160,39 @@ async function handleDeleteV2Months(req, res) {
 
 // ─── CRON: DAILY REQUEST ────────────────────────────────────────────────────
 //
-// Fires the SP-API createReport call for yesterday's data only. Runs
-// unauthenticated (Vercel cron). Same request/collect pattern as the
-// user-facing Pull UI, but scoped to a single day so cron-collect can
-// merge (via _mergeOrdersDay) rather than replace the whole month.
+// Fires TWO SP-API createReport calls for yesterday (Pacific time). Runs
+// unauthenticated (Vercel cron). Both are single-day, merge-mode reports
+// so cron-collect merges rather than replacing whole months:
+//
+//   1. BY_ORDER_DATE — orders PLACED yesterday: the day's new data.
+//   2. BY_LAST_UPDATE — orders UPDATED yesterday, whenever placed:
+//      cancelled rows delete their previously-stored copies (an order
+//      cancelled after we imported it as valid), and non-cancelled rows
+//      refresh stale values (e.g. pending orders whose prices finalized
+//      after first import).
 //
 // On any thrown error: writes a `pull-failure` alert before returning
 // 500. On success: writes the requestAt heartbeat and returns 200.
 async function handleCronDailyRequest(req, res) {
-  const yesterday = _yesterdayUTC();
+  const yesterday = _yesterdayPT();
   try {
-    // Yesterday's UTC bounds — 00:00Z to 23:59:59Z of the same day.
-    const [y, m, d] = yesterday.split('-').map(Number);
-    const dataStartTime = new Date(Date.UTC(y, m - 1, d, 0, 0, 0)).toISOString();
-    const dataEndTime = new Date(Date.UTC(y, m - 1, d, 23, 59, 59)).toISOString();
+    const { dataStartTime, dataEndTime } = _ptRangeBoundsUtc(yesterday, yesterday);
 
-    const result = await _requestReportForMonth({
+    const orderReport = await _requestReportForMonth({
       tag: yesterday,
       name: `AllOrders ${yesterday}`,
       dataStartTime,
       dataEndTime,
       merge: true
+    });
+
+    const updateReport = await _requestReportForMonth({
+      tag: `upd:${yesterday}`,
+      name: `AllOrdersByUpdate ${yesterday}`,
+      dataStartTime,
+      dataEndTime,
+      merge: true,
+      reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_LAST_UPDATE_GENERAL'
     });
 
     // Heartbeat: write requestAt so the client-side stale-check has
@@ -1120,8 +1202,11 @@ async function handleCronDailyRequest(req, res) {
     return res.status(200).json({
       success: true,
       date: yesterday,
-      reportId: result.reportId,
-      alreadyPending: result.alreadyPending
+      tags: [yesterday, `upd:${yesterday}`],
+      reports: [
+        { tag: yesterday, reportId: orderReport.reportId, alreadyPending: orderReport.alreadyPending },
+        { tag: `upd:${yesterday}`, reportId: updateReport.reportId, alreadyPending: updateReport.alreadyPending }
+      ]
     });
   } catch (error) {
     const errorMsg = _extractSpApiErrorMessage(error);
@@ -1186,7 +1271,7 @@ async function handleCronCollect(req, res) {
 // but simpler is to just leave it — the next visit clears it via the
 // dismiss endpoint, and the count > 0 path can proactively mark it).
 async function handleCronDataCheck(req, res) {
-  const yesterday = _yesterdayUTC();
+  const yesterday = _yesterdayPT();
   const yesterdayMonth = yesterday.slice(0, 7);
   try {
     // Month buckets cached across the no-data and plausibility checks —
@@ -1422,10 +1507,74 @@ function _parseTsv(text) {
 
 // Returns yesterday's date as YYYY-MM-DD in UTC. Cron-driven — no local
 // tz drift. Matches the flat file's `purchase-date` UTC dating.
-function _yesterdayUTC() {
-  const now = new Date();
-  const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
-  return y.toISOString().slice(0, 10);
+// ─── PACIFIC-TIME DATE HELPERS ──────────────────────────────────────────────
+//
+// Amazon's human-facing surfaces (Seller Central report date pickers,
+// Business Reports day buckets) treat "a day" as a calendar day in the
+// marketplace's local timezone — Pacific for amazon.com — while the
+// flat file's purchase-date timestamps are UTC instants. The dashboard
+// buckets orders by their PACIFIC date and requests reports with
+// Pacific day bounds, so its day/month totals reconcile exactly with a
+// Seller Central export for the same range.
+
+// UTC instant (ISO string or Date) → 'YYYY-MM-DD' in America/Los_Angeles.
+// Returns '' for unparseable input (callers regex-validate anyway).
+function _ptDate(instant) {
+  const d = instant instanceof Date ? instant : new Date(instant);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+
+// Calendar arithmetic on a 'YYYY-MM-DD' label (timezone-free).
+function _addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Yesterday's calendar date in Pacific time.
+function _yesterdayPT() {
+  return _addDays(_ptDate(new Date()), -1);
+}
+
+// UTC instant of midnight Pacific on the given calendar date. Probes
+// both possible offsets (PDT -07:00 / PST -08:00) and keeps the one
+// that round-trips to midnight of the same date — exact across DST.
+function _ptMidnightUtc(dateStr) {
+  for (const off of ['-07:00', '-08:00']) {
+    const d = new Date(`${dateStr}T00:00:00${off}`);
+    if (_ptDate(d) === dateStr &&
+        d.toLocaleTimeString('en-GB', { timeZone: 'America/Los_Angeles', hour12: false }).startsWith('00:00')) {
+      return d;
+    }
+  }
+  return new Date(`${dateStr}T00:00:00-08:00`);
+}
+
+// Inclusive PT calendar range → SP-API dataStartTime/dataEndTime (UTC).
+// End bound is the last second of endDate in Pacific time.
+function _ptRangeBoundsUtc(startDate, endDate) {
+  return {
+    dataStartTime: _ptMidnightUtc(startDate).toISOString(),
+    dataEndTime: new Date(_ptMidnightUtc(_addDays(endDate, 1)).getTime() - 1000).toISOString()
+  };
+}
+
+// Map a pending-queue tag to the inclusive PT date range it covered:
+// '2026-07-15' → single day; '2026-07-01..2026-07-14' → range;
+// '2026-07' → whole month. Returns null for upd:* (BY_LAST_UPDATE)
+// tags and anything unrecognized.
+function _tagDateRange(tag) {
+  if (typeof tag !== 'string' || tag.startsWith('upd:')) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(tag)) return [tag, tag];
+  const range = tag.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
+  if (range) return [range[1], range[2]];
+  if (/^\d{4}-\d{2}$/.test(tag)) {
+    const [y, m] = tag.split('-').map(Number);
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    return [`${tag}-01`, `${tag}-${String(lastDay).padStart(2, '0')}`];
+  }
+  return null;
 }
 
 // Alert helper — writes to orders:v2:alerts (dedupes by id, caps array

@@ -2643,14 +2643,15 @@
       const addLine = _bfLogger();
       if (!accessToken) { addLine('Please sign in first.', 'var(--error)'); return; }
 
-      addLine("Requesting yesterday's report — same pull the daily cron runs…", 'var(--text-secondary)');
+      addLine("Requesting yesterday's reports — same pull the daily cron runs…", 'var(--text-secondary)');
       try {
         const res = await fetch('/api/orders?action=cron-daily-request');
         const data = await res.json();
         if (!data.success) throw new Error(data.error || `HTTP ${res.status}`);
-        addLine(`→ ${data.date} requested${data.alreadyPending ? ' (already pending — resuming)' : ''}`, 'var(--text-secondary)');
+        const tags = data.tags || [data.date];
+        addLine(`→ ${data.date} requested (new orders + updates/cancellations)`, 'var(--text-secondary)');
 
-        const leftover = await _bfPollUntilDone([data.date], addLine);
+        const leftover = await _bfPollUntilDone(tags, addLine);
         if (leftover.size > 0) {
           addLine('Still generating — the next scheduled collect will land it automatically.', 'var(--warning)');
         } else {
@@ -2726,16 +2727,24 @@
     function _svRenderHeartbeat(heartbeat) {
       const el = document.getElementById('sv-last-sync');
       if (!el) return;
-      // Prefer checkAt (most representative — implies request + collect
-      // both ran, then the check verified data). Fall back to
-      // collectAt, then requestAt if the check hasn't run yet.
-      const stamps = [heartbeat.checkAt, heartbeat.collectAt, heartbeat.requestAt].filter(Boolean);
+      // Newest of the cron stamps plus lastSync.at — manual pulls and
+      // backfills update lastSync too, so the blurb reflects whichever
+      // sync actually landed data most recently.
+      const stamps = [heartbeat.checkAt, heartbeat.collectAt, heartbeat.requestAt,
+                      heartbeat.lastSync && heartbeat.lastSync.at].filter(Boolean);
       if (stamps.length === 0) {
         el.textContent = '(no automatic sync yet — waiting for the first cron run)';
         return;
       }
       const newest = stamps.sort()[stamps.length - 1];
-      el.textContent = `Last sync: ${_svTimeAgo(newest)}.`;
+      let text = `Last sync: ${_svTimeAgo(newest)}.`;
+      const ls = heartbeat.lastSync;
+      if (ls && ls.start && ls.end) {
+        const fmtD = (s) => { const [y, m, d] = s.split('-'); return `${+m}/${+d}/${y.slice(2)}`; };
+        const rev = (ls.revenue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        text += ` ${fmtD(ls.start)}-${fmtD(ls.end)}. ${ls.orders || 0} Order${ls.orders === 1 ? '' : 's'} Loaded. $${rev} Revenue.`;
+      }
+      el.textContent = text;
     }
 
     function _svBuildStaleAlert(heartbeat) {

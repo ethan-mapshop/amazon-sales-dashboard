@@ -26,7 +26,7 @@
     },
     {
       "path": "/api/orders?action=cron-daily-request",
-      "schedule": "0 8 * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/orders?action=cron-collect&slot=1",
