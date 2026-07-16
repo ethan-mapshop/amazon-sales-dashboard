@@ -2553,8 +2553,14 @@
         }
         for (const c of (data.collected || [])) {
           if (!waiting.delete(c.month)) continue;
-          if (c.rawRowCount === 0) addLine(`⚠ ${c.month} — Amazon returned no rows for this range`, 'var(--warning)');
-          else addLine(`✓ ${c.month} — ${c.rowCount} line items merged`, 'var(--success)');
+          if (String(c.month).startsWith('upd:')) {
+            const removed = c.removedCancelled ? `, ${c.removedCancelled} cancelled removed` : '';
+            addLine(`✓ ${c.month} — ${c.rowCount || 0} stored row${c.rowCount === 1 ? '' : 's'} refreshed${removed}`, 'var(--success)');
+          } else if (c.rawRowCount === 0) {
+            addLine(`⚠ ${c.month} — Amazon returned no rows for this range`, 'var(--warning)');
+          } else {
+            addLine(`✓ ${c.month} — ${c.rowCount} line items merged`, 'var(--success)');
+          }
         }
         for (const f of (data.failed || [])) {
           if (waiting.delete(f.month)) addLine(`✗ ${f.month} — ${f.error}`, 'var(--error)');

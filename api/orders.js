@@ -335,7 +335,7 @@ async function handleUploadOrdersReport(req, res) {
 // wraps them into an HTTP response.
 async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}) {
   const { byMonth, skippedCancelled, skippedNoDate, skippedNoOrder,
-          rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue,
+          rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue, keptRowCount,
           rawRowCount } =
     _normalizeReportRows(rawRows);
 
@@ -345,7 +345,7 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
       collision: false,
       writtenMonths: [], totalRows: 0, rawRowCount,
       skippedCancelled, skippedNoDate, skippedNoOrder,
-      rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
+      rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue, keptRowCount
     };
   }
 
@@ -380,7 +380,7 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
     collision: false,
     writtenMonths: monthsToWrite, totalRows, rawRowCount,
     skippedCancelled, skippedNoDate, skippedNoOrder,
-    rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
+    rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue, keptRowCount
   };
 }
 
@@ -392,9 +392,15 @@ async function _normalizeAndWriteOrdersMonth(rawRows, { overwrite = false } = {}
 // re-run — same day twice just re-overwrites the same rows.
 //
 // Never returns a collision result — merges by definition don't collide.
-async function _mergeOrdersDay(rawRows) {
+// options.updateOnly: for BY_LAST_UPDATE reports — apply rows only to
+// orders ALREADY stored (refresh values, delete cancelled) and never
+// insert. An update report's rows include orders the user never chose
+// to load (anything merely touched during the window), so inserting
+// them would seed months with partial data and collide with later
+// whole-month replaces. New orders enter exclusively via BY_ORDER_DATE.
+async function _mergeOrdersDay(rawRows, { updateOnly = false } = {}) {
   const { byMonth, cancelledKeys, skippedCancelled, skippedNoDate, skippedNoOrder,
-          rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue,
+          rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue, keptRowCount,
           rawRowCount } =
     _normalizeReportRows(rawRows);
 
@@ -416,7 +422,7 @@ async function _mergeOrdersDay(rawRows) {
       collision: false,
       writtenMonths: [], totalRows: 0, removedCancelled: 0, rawRowCount,
       skippedCancelled, skippedNoDate, skippedNoOrder,
-      rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
+      rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue, keptRowCount
     };
   }
 
@@ -424,6 +430,9 @@ async function _mergeOrdersDay(rawRows) {
   let removedCancelled = 0;
   for (const m of monthsToWrite) {
     const existing = (await kv.get(`orders:v2:${m}`)) || [];
+    // Nothing stored for this month → an update-only pass has nothing
+    // to touch. Skipping avoids creating partial month buckets.
+    if (updateOnly && existing.length === 0) continue;
     // Dedupe map keyed by orderId+sku. Existing rows loaded first, then
     // new rows overwrite matches — new rows win on conflict, matching
     // the semantic "the freshest report is authoritative for the rows
@@ -431,29 +440,41 @@ async function _mergeOrdersDay(rawRows) {
     // in the same month) stay intact.
     const dedup = new Map();
     for (const r of existing) if (r && r.orderId) dedup.set(`${r.orderId}:${r.sku}`, r);
-    for (const r of (byMonth[m] || []))          dedup.set(`${r.orderId}:${r.sku}`, r);
+    let changed = false;
+    for (const r of (byMonth[m] || [])) {
+      const key = `${r.orderId}:${r.sku}`;
+      if (updateOnly && !dedup.has(key)) continue; // update-only never inserts
+      dedup.set(key, r);
+      changed = true;
+      totalRows++; // rows actually applied (all of them in normal merge)
+    }
     // Cancellation-aware: rows the fresh report marks Cancelled are
     // deleted. Amazon blanks a cancelled row's value rather than keeping
     // it, so deletion — not a negative adjustment — is what makes stored
     // data re-verifiable against a fresh report at every slice.
     for (const key of (cancelledByMonth[m] || [])) {
-      if (dedup.delete(key)) removedCancelled++;
+      if (dedup.delete(key)) { removedCancelled++; changed = true; }
     }
-    const merged = [...dedup.values()].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
-    await kv.set(`orders:v2:${m}`, merged);
-    totalRows += (byMonth[m] || []).length; // count of NEW rows, not merged total
+    if (!updateOnly || changed) {
+      const merged = [...dedup.values()].sort((a, b) => a.orderDate.localeCompare(b.orderDate));
+      await kv.set(`orders:v2:${m}`, merged);
+    }
   }
-  const existingIndex = (await kv.get('orders:v2:index')) || [];
-  const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
-  if (mergedIndex.length !== existingIndex.length) {
-    await kv.set('orders:v2:index', mergedIndex);
+  // Update-only passes never introduce months, so the index is only
+  // maintained for normal merges.
+  if (!updateOnly) {
+    const existingIndex = (await kv.get('orders:v2:index')) || [];
+    const mergedIndex = [...new Set([...existingIndex, ...monthsToWrite])].sort();
+    if (mergedIndex.length !== existingIndex.length) {
+      await kv.set('orders:v2:index', mergedIndex);
+    }
   }
 
   return {
     collision: false,
     writtenMonths: monthsToWrite, totalRows, removedCancelled, rawRowCount,
     skippedCancelled, skippedNoDate, skippedNoOrder,
-    rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue
+    rowsWithItemTotal, rowsWithQuantity, ingestedOrders, ingestedRevenue, keptRowCount
   };
 }
 
@@ -521,6 +542,7 @@ function _normalizeReportRows(rawRows) {
   // "Last sync" summary inputs — distinct orders and revenue ingested.
   const orderIdSet = new Set();
   let ingestedRevenue = 0;
+  let keptRowCount = 0;
   for (const r of rawRows) {
     if (!r || typeof r !== 'object') continue;
 
@@ -568,6 +590,7 @@ function _normalizeReportRows(rawRows) {
     if (quantity > 0) rowsWithQuantity++;
     orderIdSet.add(orderId);
     ingestedRevenue += itemTotal;
+    keptRowCount++;
 
     const month = orderDate.slice(0, 7);
     if (!byMonth[month]) byMonth[month] = [];
@@ -587,6 +610,7 @@ function _normalizeReportRows(rawRows) {
     rowsWithQuantity,
     ingestedOrders: orderIdSet.size,
     ingestedRevenue,
+    keptRowCount,
     rawRowCount: rawRows.length
   };
 }
@@ -687,6 +711,8 @@ async function handleRequestFlatFileReport(req, res) {
       dataStartTime,
       dataEndTime,
       merge: true,
+      updateOnly: true,
+      dependsOn: tag,
       reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_LAST_UPDATE_GENERAL'
     });
     resultKey = tag;
@@ -750,6 +776,7 @@ async function handleRequestFlatFileReport(req, res) {
 // "2026-07-13" (date). Same field, different granularity — the poll
 // path treats it as an opaque string.
 async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime, merge = false,
+                                        updateOnly = false, dependsOn = null,
                                         reportType = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL' }) {
   // If a report with this tag is already pending, reuse rather than
   // firing a duplicate at Amazon.
@@ -800,15 +827,19 @@ async function _requestReportForMonth({ tag, name, dataStartTime, dataEndTime, m
     }
   }
 
-  // merge:true rides along on the queue entry so the COLLECTOR (not the
-  // poll caller) decides ingestion mode — a partial-range report must
-  // always merge, no matter which path drains it from the queue.
+  // Ingestion semantics ride along on the queue entry so the COLLECTOR
+  // (not the poll caller) applies them, no matter which path drains the
+  // queue: merge for partial-range reports, updateOnly for
+  // BY_LAST_UPDATE reports, dependsOn to hold an update report back
+  // until its paired order-date report has been ingested.
   const updated = [...pending, {
     reportId,
     month: tag,
     requestedAt: new Date().toISOString(),
     name,
-    ...(merge ? { merge: true } : {})
+    ...(merge ? { merge: true } : {}),
+    ...(updateOnly ? { updateOnly: true } : {}),
+    ...(dependsOn ? { dependsOn } : {})
   }];
   await kv.set('orders:v2:pending-reports', updated);
 
@@ -903,6 +934,22 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
   const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
 
   for (const p of toProcess) {
+    // Ordering guarantee: an update (BY_LAST_UPDATE) report never
+    // ingests before its paired order-date report. If the pair was in
+    // the queue when this poll started and hasn't been ingested yet
+    // (still generating, deferred, or queued behind us), hold this
+    // entry for a later pass. Once the pair leaves the queue —
+    // collected or failed — the update proceeds.
+    const dep = p.dependsOn || (String(p.month || '').startsWith('upd:') ? String(p.month).slice(4) : null);
+    if (dep) {
+      const depIngested = collected.some(c => c.month === dep) || failed.some(f => f.month === dep);
+      const depInQueue = pending.some(x => x.month === dep);
+      if (depInQueue && !depIngested) {
+        stillPending.push(p);
+        continue;
+      }
+    }
+
     try {
       const statusResp = await sp.callAPI({
         operation: 'getReport',
@@ -956,11 +1003,13 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
         }
 
         const rows = _parseTsv(text);
-        // Per-entry merge flag (stamped at request time for partial-range
-        // and single-day reports) wins over the caller's default — a
-        // partial report must never whole-month-replace.
-        const result = (mergeMode || p.merge === true)
-          ? await _mergeOrdersDay(rows)
+        // Per-entry ingestion semantics (stamped at request time) win
+        // over the caller's default — a partial report must never
+        // whole-month-replace, and a BY_LAST_UPDATE report only
+        // updates/deletes rows already stored, never inserts.
+        const updateOnly = p.updateOnly === true || String(p.month || '').startsWith('upd:');
+        const result = (mergeMode || p.merge === true || updateOnly)
+          ? await _mergeOrdersDay(rows, { updateOnly })
           : await _normalizeAndWriteOrdersMonth(rows, { overwrite });
 
         if (result.collision) {
@@ -1008,12 +1057,15 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
           if (result.rawRowCount >= 20 && parseSkips / result.rawRowCount > 0.05) {
             problems.push(`${parseSkips} of ${result.rawRowCount} raw rows were unparseable (missing date or order id)`);
           }
-          if (result.totalRows >= 20) {
-            if (result.rowsWithItemTotal / result.totalRows < 0.5) {
-              problems.push(`only ${result.rowsWithItemTotal} of ${result.totalRows} rows have a sale amount — the price format may have changed`);
+          // Population checks run over the report's kept rows (not rows
+          // applied — update-only ingests apply a subset).
+          const kept = (result.keptRowCount != null) ? result.keptRowCount : result.totalRows;
+          if (kept >= 20) {
+            if (result.rowsWithItemTotal / kept < 0.5) {
+              problems.push(`only ${result.rowsWithItemTotal} of ${kept} rows have a sale amount — the price format may have changed`);
             }
-            if (result.rowsWithQuantity / result.totalRows < 0.9) {
-              problems.push(`only ${result.rowsWithQuantity} of ${result.totalRows} rows have a quantity`);
+            if (result.rowsWithQuantity / kept < 0.9) {
+              problems.push(`only ${result.rowsWithQuantity} of ${kept} rows have a quantity`);
             }
           }
           if (problems.length > 0) {
@@ -1214,6 +1266,8 @@ async function handleCronDailyRequest(req, res) {
       dataStartTime,
       dataEndTime,
       merge: true,
+      updateOnly: true,
+      dependsOn: yesterday,
       reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_LAST_UPDATE_GENERAL'
     });
 

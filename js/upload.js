@@ -658,6 +658,15 @@
           resultMonths.map(m => {
             const r = lastResults[m];
             if (r.status === 'DONE') {
+              // upd:* entries are BY_LAST_UPDATE passes — they refresh or
+              // delete rows already stored and never load new orders, so
+              // "0 rows" is a normal outcome, not a warning.
+              if (m.startsWith('upd:')) {
+                const updNotes = [];
+                if (r.rowCount) updNotes.push(`${r.rowCount} stored row${r.rowCount === 1 ? '' : 's'} refreshed`);
+                if (r.removedCancelled) updNotes.push(`${r.removedCancelled} cancelled order${r.removedCancelled === 1 ? '' : 's'} removed`);
+                return `<div style="color: var(--success);">✓ ${m}: ${updNotes.length ? updNotes.join(', ') : 'no stored orders needed updating'}</div>`;
+              }
               // Three DONE flavors — the "0 rows" case is misleading if
               // rendered as a plain success, since it almost always means
               // Amazon returned an empty report (retention limit or truly
