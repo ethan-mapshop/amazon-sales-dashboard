@@ -663,8 +663,16 @@ async function handleRequestFlatFileReport(req, res) {
       tag = month;
     }
     resultKey = tag;
+    const updTag = `upd:${tag}`;
 
-    const result = await _requestReportForMonth({
+    // Every pull requests BOTH reports so all paths behave identically
+    // (daily cron, month pull, range backfill): BY_ORDER_DATE loads the
+    // window's orders; BY_LAST_UPDATE applies every change that
+    // happened DURING the window (cancellation deletes, pending-price
+    // refreshes) to orders wherever they live — including other months.
+    // The update report is always merge-mode: its rows span many months
+    // and must never whole-month-replace.
+    const orderReport = await _requestReportForMonth({
       tag,
       name: `AllOrders ${tag}`,
       dataStartTime,
@@ -672,26 +680,40 @@ async function handleRequestFlatFileReport(req, res) {
       merge
     });
 
-    // Clear any stale lastResults entry for this tag — a previous
-    // failure shouldn't linger in the UI now that we've successfully
-    // re-queued the report.
-    if (!result.alreadyPending) {
-      const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
-      if (lastResults[tag]) {
-        delete lastResults[tag];
-        await kv.set('orders:v2:report-lastresult', lastResults);
-      }
-    }
+    resultKey = updTag;
+    const updateReport = await _requestReportForMonth({
+      tag: updTag,
+      name: `AllOrdersByUpdate ${tag}`,
+      dataStartTime,
+      dataEndTime,
+      merge: true,
+      reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_LAST_UPDATE_GENERAL'
+    });
+    resultKey = tag;
+
+    // Clear stale lastResults entries for freshly-queued tags — a
+    // previous failure shouldn't linger in the UI now that we've
+    // successfully re-queued.
+    const lastResults = (await kv.get('orders:v2:report-lastresult')) || {};
+    let lrDirty = false;
+    if (!orderReport.alreadyPending && lastResults[tag]) { delete lastResults[tag]; lrDirty = true; }
+    if (!updateReport.alreadyPending && lastResults[updTag]) { delete lastResults[updTag]; lrDirty = true; }
+    if (lrDirty) await kv.set('orders:v2:report-lastresult', lastResults);
 
     return res.status(200).json({
       success: true,
-      reportId: result.reportId,
+      reportId: orderReport.reportId,
       tag,
       month: tag,
+      tags: [tag, updTag],
+      reports: [
+        { tag, reportId: orderReport.reportId, alreadyPending: orderReport.alreadyPending },
+        { tag: updTag, reportId: updateReport.reportId, alreadyPending: updateReport.alreadyPending }
+      ],
       ...(clamped ? { clamped: true, effectiveEnd } : {}),
-      alreadyPending: result.alreadyPending,
-      ...(result.alreadyPending
-        ? { message: `Report for ${tag} already pending since ${result.requestedAt}` }
+      alreadyPending: orderReport.alreadyPending,
+      ...(orderReport.alreadyPending
+        ? { message: `Report for ${tag} already pending since ${orderReport.requestedAt}` }
         : {})
     });
   } catch (error) {

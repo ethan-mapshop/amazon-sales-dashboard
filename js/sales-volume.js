@@ -2610,7 +2610,7 @@
           let data;
           try { data = JSON.parse(text); } catch { throw new Error(text.slice(0, 120)); }
           if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
-          tags.push(data.tag);
+          tags.push(...(data.tags || [data.tag]));
           const notes = [
             data.alreadyPending ? 'already pending — resuming' : null,
             data.clamped ? `end clamped to ${data.effectiveEnd} (yesterday)` : null
