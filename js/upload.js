@@ -675,7 +675,14 @@
                 const why = parts.length ? ` (${parts.join(', ')})` : '';
                 return `<div style="color: var(--accent-orange);">⚠ ${m}: 0 rows written — ${r.rawRowCount} rows in report were all filtered out${why}.</div>`;
               }
-              const skipNote = r.skippedCancelled ? `, ${r.skippedCancelled} cancelled skipped` : '';
+              // "excluded" = rows Amazon marks Cancelled in the fresh
+              // report; correctly not stored. "removed" = previously-
+              // stored rows deleted because the report now marks them
+              // Cancelled (merge-mode/upd pulls).
+              const notes = [];
+              if (r.skippedCancelled) notes.push(`${r.skippedCancelled} cancelled on Amazon's side (excluded)`);
+              if (r.removedCancelled) notes.push(`${r.removedCancelled} previously-loaded order${r.removedCancelled === 1 ? '' : 's'} removed as cancelled`);
+              const skipNote = notes.length ? `, ${notes.join(', ')}` : '';
               return `<div style="color: var(--success);">✓ ${m}: ${r.rowCount} rows${skipNote}</div>`;
             }
             return `<div style="color: var(--error); word-break: break-word;">✗ ${m}: ${escHtml(r.error || 'failed')}</div>`;
