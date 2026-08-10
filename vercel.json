@@ -1,10 +1,6 @@
 {
   "crons": [
     {
-      "path": "/api/orders?action=sync&days=14",
-      "schedule": "0 10 * * *"
-    },
-    {
       "path": "/api/sessions?action=sync",
       "schedule": "0 11 * * *"
     },

@@ -1275,6 +1275,11 @@ async function handleCronDailyRequest(req, res) {
     // fresh info, and so the dashboard can show "Last sync: X ago."
     await _touchHeartbeat({ requestAt: new Date().toISOString() });
 
+    // Self-heal: a successful request clears the pull-failure alert any
+    // earlier failed attempt wrote for this same date (e.g. expired
+    // credentials fixed later the same day).
+    await _resolveAlert(`pull-failure:${yesterday}`);
+
     return res.status(200).json({
       success: true,
       date: yesterday,
