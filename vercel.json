@@ -48,7 +48,7 @@
     "api/transactions.js": {
       "maxDuration": 300
     },
-    "api/adreports.js": {
+    "api/adspend.js": {
       "maxDuration": 60
     }
   },

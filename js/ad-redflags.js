@@ -1,6 +1,8 @@
     // ─── AD RED FLAGS ────────────────────────────────────────────────────────
     // Weekly Red Flag Monitor. Four fixed threshold checks over the most
-    // recent complete Mon–Sun week, computed server-side by /api/adreports.
+    // recent complete Mon–Sun week, computed server-side by the red-flag
+    // section of /api/adspend (it lives there because Vercel's Hobby plan
+    // caps a deployment at 12 serverless functions).
     //
     // Amazon's report generation is asynchronous and takes minutes, so this
     // module drives the request → poll → collect cycle from the browser and
@@ -50,7 +52,7 @@
       arfSetStatus('Requesting reports from Amazon…');
 
       try {
-        const res = await fetch('/api/adreports?action=weekly-request', {
+        const res = await fetch('/api/adspend?action=weekly-request', {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
         const data = await res.json();
@@ -106,7 +108,7 @@
       }
 
       try {
-        const res = await fetch(`/api/adreports?action=weekly-status&reports=${encodeURIComponent(arfReportsParam(state))}`, {
+        const res = await fetch(`/api/adspend?action=weekly-status&reports=${encodeURIComponent(arfReportsParam(state))}`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
         const data = await res.json();
@@ -138,7 +140,7 @@
         const qs = `reports=${encodeURIComponent(arfReportsParam(state))}` +
                    `&weekStart=${w.weekStart}&weekEnd=${w.weekEnd}` +
                    `&baseStart=${w.baseStart}&baseEnd=${w.baseEnd}`;
-        const res = await fetch(`/api/adreports?action=weekly-collect&${qs}`, {
+        const res = await fetch(`/api/adspend?action=weekly-collect&${qs}`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
         const data = await res.json();
