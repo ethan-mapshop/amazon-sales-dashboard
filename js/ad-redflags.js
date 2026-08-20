@@ -257,7 +257,11 @@
       container.innerHTML = stats +
         arfSection('1 · Budget cap emergencies', f.budgetCap, arfCampaignTable, {
           blurb: 'Profitable campaigns hitting their daily budget. Fix is fast; the cost of waiting is measurable.',
-          cols: ['Campaign', 'Brand', 'Spend', 'Budget/day', 'Capped days', 'ACoS', 'Retention']
+          cols: ['Campaign', 'Brand', 'Spend', 'Budget/day', 'Capped days', 'ACoS', 'Retention'],
+          // "No flags" would be a lie if no campaign had usable budget data.
+          emptyMessage: cov.cappedEvaluableCount === 0
+            ? 'Could not be evaluated — Amazon returned no usable daily-budget data for any campaign in this run. See "Not evaluated" below.'
+            : null
         }) +
         arfSection('2 · Runaway spenders', f.runaway, arfCampaignTable, {
           blurb: 'Spend more than doubled against the 4-week baseline while retention is poor.',
@@ -278,7 +282,8 @@
       const list = rows || [];
       const body = list.length
         ? renderer(list, opts.cols, title)
-        : '<div style="color: var(--text-secondary); padding: 0.5rem 0;">No flags this week.</div>';
+        : `<div style="color: ${opts.emptyMessage ? 'var(--warning)' : 'var(--text-secondary)'}; padding: 0.5rem 0;">` +
+          `${escapeHtml(opts.emptyMessage || 'No flags this week.')}</div>`;
       return `
         <div class="card" style="margin-bottom: 1.5rem; ${list.length ? 'border-left: 3px solid var(--error);' : ''}">
           <h3 class="section-title" style="margin-bottom: 0.5rem;">${escapeHtml(title)}</h3>
@@ -366,20 +371,23 @@
         ['Unmapped campaigns', cov.unmapped, 'No brand could be resolved, so margin-based checks could not run. Map these on the Campaign Mapping page.'],
         ['Under $5 for the week', cov.excludedUnderMin, 'Excluded by the cadence — too little signal to interpret.'],
         ['No usable baseline', cov.newNoBaseline, 'Too few active days in the prior 4 weeks to compare against.'],
-        ['Budget not evaluable', cov.notEvaluable, 'Lifetime budgets or missing budget data — the capped check cannot run.']
+        ['Budget not evaluable', cov.notEvaluable,
+         'Lifetime budgets or missing budget data — the capped check cannot run.',
+         'Reason', r => escapeHtml(r.reason || '—')]
       ].filter(g => g[1] && g[1].length);
 
       const conflicts = cov.mappingConflicts || [];
       const notes = data.notes || [];
       if (!groups.length && !conflicts.length && !notes.length && !data.degraded) return '';
 
-      const sections = groups.map(([label, rows, blurb]) => `
+      const sections = groups.map(([label, rows, blurb, extraLabel, extraFn]) => `
         <div style="margin-bottom: 1.25rem;">
           <div style="font-weight: 600; margin-bottom: 0.25rem;">${escapeHtml(label)} (${rows.length})</div>
           <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 0.5rem;">${escapeHtml(blurb)}</div>
-          ${arfTable(['Campaign', 'Brand', 'Spend', 'Clicks', 'Orders'],
+          ${arfTable(['Campaign', 'Brand', 'Spend', 'Clicks', 'Orders'].concat(extraLabel ? [extraLabel] : []),
             rows.slice(0, 25).map(r => [arfName(r), arfBrand(r), arfMoney(r.spend7),
-              String(Math.round(r.clicks7)), String(Math.round(r.orders7))]))}
+              String(Math.round(r.clicks7)), String(Math.round(r.orders7))]
+              .concat(extraFn ? [extraFn(r)] : [])))}
           ${rows.length > 25 ? `<div style="color: var(--text-secondary); font-size: 0.8125rem; margin-top: 0.5rem;">…and ${rows.length - 25} more.</div>` : ''}
         </div>`).join('');
 
@@ -393,6 +401,13 @@
             conflicts.map(c => [escapeHtml(c.campaign), escapeHtml(c.mapped), escapeHtml(c.byPrefix)]))}
         </div>` : '';
 
+      const bt = cov.budgetTypesSeen || {};
+      const btBlock = Object.keys(bt).length ? `
+        <div style="margin-bottom: 1.25rem; color: var(--text-secondary); font-size: 0.8125rem;">
+          <span style="font-weight: 600;">Budget types Amazon returned:</span>
+          ${Object.entries(bt).map(([k, v]) => `${escapeHtml(k)} × ${v}`).join(' · ')}
+        </div>` : '';
+
       const noteBlock = (notes.length || data.degraded) ? `
         <div style="color: var(--text-secondary); font-size: 0.8125rem;">
           ${data.degraded ? '<div>Amazon rejected some report columns, so this run used a reduced column set.</div>' : ''}
@@ -403,7 +418,7 @@
         <div class="card card-flat" style="margin-top: 0.5rem;">
           <details>
             <summary style="cursor: pointer; font-weight: 600;">Not evaluated / for reference</summary>
-            <div style="margin-top: 1.25rem;">${sections}${conflictBlock}${noteBlock}</div>
+            <div style="margin-top: 1.25rem;">${sections}${btBlock}${conflictBlock}${noteBlock}</div>
           </details>
         </div>`;
     }

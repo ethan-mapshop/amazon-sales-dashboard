@@ -1306,7 +1306,7 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNa
     c.dailyBudget = c.budgetDays ? Math.max(...c.budgetByDate.values()) : null;
     c.budgetTotal = 0;
     for (const v of c.budgetByDate.values()) c.budgetTotal += v;
-    c.lifetimeBudget = !!c.budgetType && String(c.budgetType).toUpperCase() !== 'DAILY';
+    c.lifetimeBudget = /LIFETIME/i.test(String(c.budgetType || ''));
     c.cappedEvaluable = c.budgetDays > 0 && !c.lifetimeBudget;
 
     // Count of days the campaign actually ran out of budget. A weekly
@@ -1333,7 +1333,8 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNa
     campaignsSeen: camps.size, evaluated: 0,
     totalSpend7: 0, evaluatedSpend7: 0,
     excludedUnderMin: [], unmapped: [], notEvaluable: [], cappedNoSales: [],
-    cappedLowRetention: [], newNoBaseline: [], mappingConflicts
+    cappedLowRetention: [], newNoBaseline: [], mappingConflicts,
+    cappedEvaluableCount: 0, budgetTypesSeen: {}
   };
 
   for (const c of camps.values()) {
@@ -1346,6 +1347,11 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNa
     }
     coverage.evaluated++;
     coverage.evaluatedSpend7 += c.spend7;
+    if (c.cappedEvaluable) coverage.cappedEvaluableCount++;
+    // Raw budget-type values as Amazon returned them. If the capped check goes
+    // quiet again, this says why without another round trip.
+    const bt = c.budgetType || '(none)';
+    coverage.budgetTypesSeen[bt] = (coverage.budgetTypesSeen[bt] || 0) + 1;
 
     if (!c.brand) coverage.unmapped.push(arfRow(c));
     if (c.lifetimeBudget) coverage.notEvaluable.push({ ...arfRow(c), reason: 'lifetime-budget' });
