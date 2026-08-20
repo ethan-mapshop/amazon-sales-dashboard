@@ -107,6 +107,8 @@
           reports: good.map(r => ({ key: r.key, reportId: r.reportId })),
           degraded: good.some(r => r.degraded),
           hasBudgetColumns: good.some(r => r.hasBudgetColumns),
+          columnSets: good.map(r => ({ key: r.key, setIndex: r.columnSet })),
+          rejections: good.flatMap(r => (r.rejections || []).map(x => ({ key: r.key, ...x }))),
           startedAt: new Date().toISOString(),
           pollUntil: Date.now() + ARF_MAX_WAIT_MS
         };
@@ -187,6 +189,8 @@
 
         data.degraded = state.degraded;
         data.hasBudgetColumns = state.hasBudgetColumns;
+        data.columnSets = state.columnSets;
+        data.rejections = state.rejections;
         arfCacheSave(data);
         arfRunClear();
         arfSetStatus('');
@@ -243,8 +247,27 @@
             : ''}
         </div>`;
 
+      const rejected = data.rejections || [];
+      const banner = rejected.length ? `
+        <div class="card" style="margin-bottom: 1.5rem; border-left: 3px solid var(--warning);">
+          <div style="font-weight: 600; color: var(--warning); margin-bottom: 0.5rem;">
+            Amazon rejected ${rejected.length} column set${rejected.length === 1 ? '' : 's'} on this run
+          </div>
+          <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 0.75rem;">
+            The report fell back to fewer columns, so some checks ran on less data than intended.
+            Amazon's reason is below and it names the column it refused.
+          </div>
+          ${rejected.map(r => `
+            <div style="margin-bottom: 0.75rem; font-size: 0.75rem;">
+              <div style="font-weight: 600;">${escapeHtml(r.key)} — column set ${r.setIndex}</div>
+              <div style="color: var(--text-secondary); font-family: monospace; word-break: break-word;">
+                ${escapeHtml(r.error)}
+              </div>
+            </div>`).join('')}
+        </div>` : '';
+
       if (data.clean) {
-        container.innerHTML = stats + `
+        container.innerHTML = stats + banner + `
           <div class="card" style="border-left: 3px solid var(--success);">
             <div style="padding: 0.5rem 0; font-size: 1rem;">
               No flags this week — all brands and campaigns within normal range.
@@ -254,7 +277,7 @@
       }
 
       const f = data.flags || {};
-      container.innerHTML = stats +
+      container.innerHTML = stats + banner +
         arfSection('1 · Budget cap emergencies', f.budgetCap, arfCampaignTable, {
           blurb: 'Profitable campaigns hitting their daily budget. Fix is fast; the cost of waiting is measurable.',
           cols: ['Campaign', 'Brand', 'Spend', 'Budget/day', 'Capped days', 'ACoS', 'Retention'],
@@ -371,14 +394,16 @@
         ['Unmapped campaigns', cov.unmapped, 'No brand could be resolved, so margin-based checks could not run. Map these on the Campaign Mapping page.'],
         ['Under $5 for the week', cov.excludedUnderMin, 'Excluded by the cadence — too little signal to interpret.'],
         ['No usable baseline', cov.newNoBaseline, 'Too few active days in the prior 4 weeks to compare against.'],
-        ['Budget not evaluable', cov.notEvaluable,
-         'Lifetime budgets or missing budget data — the capped check cannot run.',
-         'Reason', r => escapeHtml(r.reason || '—')]
+        ['No budget data from Amazon', (cov.notEvaluable || []).filter(r => r.reason === 'no-budget-data'),
+         'Amazon returned no daily budget for these campaigns, so there is nothing to measure spend against.'],
+        ['Lifetime budgets', (cov.notEvaluable || []).filter(r => r.reason === 'lifetime-budget'),
+         'Budgeted for the whole campaign rather than per day, so a daily cap check does not apply.']
       ].filter(g => g[1] && g[1].length);
 
       const conflicts = cov.mappingConflicts || [];
       const notes = data.notes || [];
-      if (!groups.length && !conflicts.length && !notes.length && !data.degraded) return '';
+      if (!groups.length && !conflicts.length && !notes.length && !data.degraded &&
+          cov.budgetSource !== 'campaigns-api') return '';
 
       const sections = groups.map(([label, rows, blurb, extraLabel, extraFn]) => `
         <div style="margin-bottom: 1.25rem;">
@@ -401,6 +426,13 @@
             conflicts.map(c => [escapeHtml(c.campaign), escapeHtml(c.mapped), escapeHtml(c.byPrefix)]))}
         </div>` : '';
 
+      const srcBlock = cov.budgetSource === 'campaigns-api' ? `
+        <div style="margin-bottom: 1.25rem; color: var(--text-secondary); font-size: 0.8125rem;">
+          Daily budgets were read from the campaign settings, not the report — the report did not
+          include them. These are budgets as they stand now, so a budget changed mid-week is
+          measured against its current value.
+        </div>` : '';
+
       const bt = cov.budgetTypesSeen || {};
       const btBlock = Object.keys(bt).length ? `
         <div style="margin-bottom: 1.25rem; color: var(--text-secondary); font-size: 0.8125rem;">
@@ -418,7 +450,7 @@
         <div class="card card-flat" style="margin-top: 0.5rem;">
           <details>
             <summary style="cursor: pointer; font-weight: 600;">Not evaluated / for reference</summary>
-            <div style="margin-top: 1.25rem;">${sections}${btBlock}${conflictBlock}${noteBlock}</div>
+            <div style="margin-top: 1.25rem;">${sections}${srcBlock}${btBlock}${conflictBlock}${noteBlock}</div>
           </details>
         </div>`;
     }

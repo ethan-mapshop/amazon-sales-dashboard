@@ -1073,17 +1073,22 @@ async function handleWeeklyCollect(req, res) {
       });
     }
 
-    const [mappings, portfolioNames] = await Promise.all([
+    const weekRows = [...(byKey.spWeek || []), ...(byKey.sbWeek || [])];
+    const reportHasBudgets = weekRows.some(r => r.budgetAmount > 0);
+
+    const [mappings, portfolioNames, budgetFallback] = await Promise.all([
       loadMappings(),
-      fetchPortfolios(accessToken)
+      fetchPortfolios(accessToken),
+      reportHasBudgets ? Promise.resolve(null) : fetchCampaignBudgets(accessToken)
     ]);
 
     const result = computeRedFlags({
-      weekRows:     [...(byKey.spWeek || []), ...(byKey.sbWeek || [])],
+      weekRows,
       baselineRows: [...(byKey.spBase || []), ...(byKey.sbBase || [])],
       window,
       mappings,
-      portfolioNames
+      portfolioNames,
+      budgetFallback
     });
 
     return res.status(200).json({
@@ -1192,7 +1197,7 @@ function daySpan(start, end) {
 // Stage order matters: brand aggregates (stage 4) are computed BEFORE the
 // $5 eligibility filter (stage 5), or sub-$5 campaigns would silently drop out
 // of brand pacing totals.
-function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNames }) {
+function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNames, budgetFallback }) {
   // Stage 2 — aggregate per campaign. Keyed by id, not name: a campaign
   // renamed mid-window would otherwise split into two identities.
   const camps = new Map();
@@ -1302,6 +1307,19 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNa
       ? null
       : r4((c.grossMargin - c.acos) / c.grossMargin);
 
+    // Report budgets win when present; otherwise apply the campaign object's
+    // current budget to every day of the week.
+    if (!c.budgetByDate.size && budgetFallback) {
+      const fb = budgetFallback[String(c.campaignId || '')];
+      if (fb && fb.amount > 0) {
+        for (const d of c.spendByDate.keys()) c.budgetByDate.set(d, fb.amount);
+        c.budgetSource = 'campaigns-api';
+        if (fb.type) c.budgetType = fb.type;
+      }
+    } else if (c.budgetByDate.size) {
+      c.budgetSource = 'report';
+    }
+
     c.budgetDays = c.budgetByDate.size;
     c.dailyBudget = c.budgetDays ? Math.max(...c.budgetByDate.values()) : null;
     c.budgetTotal = 0;
@@ -1334,7 +1352,7 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNa
     totalSpend7: 0, evaluatedSpend7: 0,
     excludedUnderMin: [], unmapped: [], notEvaluable: [], cappedNoSales: [],
     cappedLowRetention: [], newNoBaseline: [], mappingConflicts,
-    cappedEvaluableCount: 0, budgetTypesSeen: {}
+    cappedEvaluableCount: 0, budgetTypesSeen: {}, budgetSource: null
   };
 
   for (const c of camps.values()) {
@@ -1347,7 +1365,10 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNa
     }
     coverage.evaluated++;
     coverage.evaluatedSpend7 += c.spend7;
-    if (c.cappedEvaluable) coverage.cappedEvaluableCount++;
+    if (c.cappedEvaluable) {
+      coverage.cappedEvaluableCount++;
+      if (!coverage.budgetSource) coverage.budgetSource = c.budgetSource || null;
+    }
     // Raw budget-type values as Amazon returned them. If the capped check goes
     // quiet again, this says why without another round trip.
     const bt = c.budgetType || '(none)';
@@ -1541,6 +1562,77 @@ function brandFromPrefix(campaignName) {
   return { brand: null, segment: null };
 }
 
+// Daily budgets read from the campaign objects. The v3 campaign report is
+// supposed to expose campaignBudgetAmount, but it comes back empty on this
+// account, which silently removed every campaign from the capped check. These
+// endpoints are synchronous and authoritative, so the check no longer depends
+// on that column being populated.
+//
+// Caveat worth keeping in mind: this is the budget as it stands NOW, not what
+// it was on each day of the week being evaluated. If a budget was raised
+// mid-week, the capped days for that week are computed against the new number.
+// Reported as budgetSource: 'campaigns-api' so the UI can say so.
+async function fetchCampaignBudgets(accessToken) {
+  const out = {};
+
+  const take = (list) => {
+    for (const c of list || []) {
+      const id = String(c.campaignId || '');
+      if (!id) continue;
+      const amount = Number(
+        (c.budget && (c.budget.budget ?? c.budget.amount)) ??
+        c.dailyBudget ?? (typeof c.budget === 'number' ? c.budget : undefined)
+      );
+      const type = String((c.budget && c.budget.budgetType) || c.budgetType || '');
+      if (Number.isFinite(amount) && amount > 0) out[id] = { amount, type };
+    }
+  };
+
+  // SP v3
+  try {
+    const res = await fetch('https://advertising-api.amazon.com/sp/campaigns/list', {
+      method: 'POST',
+      headers: adsAuthHeaders(accessToken, {
+        'Content-Type': 'application/vnd.spCampaign.v3+json',
+        'Accept': 'application/vnd.spCampaign.v3+json'
+      }),
+      body: JSON.stringify({ maxResults: 500 })
+    });
+    if (res.ok) take((await res.json().catch(() => ({}))).campaigns);
+  } catch (err) {
+    console.error('[ADREPORTS] sp campaigns v3 failed:', err.message);
+  }
+
+  // SP v2 — older shape, flat dailyBudget
+  if (!Object.keys(out).length) {
+    try {
+      const res = await fetch(
+        'https://advertising-api.amazon.com/v2/sp/campaigns?stateFilter=enabled,paused,archived&count=500',
+        { headers: adsAuthHeaders(accessToken) });
+      if (res.ok) take(await res.json().catch(() => []));
+    } catch (err) {
+      console.error('[ADREPORTS] sp campaigns v2 failed:', err.message);
+    }
+  }
+
+  // SB — only a couple of campaigns, so a failure here is not worth retrying.
+  try {
+    const res = await fetch('https://advertising-api.amazon.com/sb/v4/campaigns/list', {
+      method: 'POST',
+      headers: adsAuthHeaders(accessToken, {
+        'Content-Type': 'application/vnd.sbcampaignresource.v4+json',
+        'Accept': 'application/vnd.sbcampaignresource.v4+json'
+      }),
+      body: JSON.stringify({ maxResults: 100 })
+    });
+    if (res.ok) take((await res.json().catch(() => ({}))).campaigns);
+  } catch (err) {
+    console.error('[ADREPORTS] sb campaigns v4 failed:', err.message);
+  }
+
+  return out;
+}
+
 // Portfolio names for the stalled check's grouping. Tries the v3 list
 // endpoint, then v2. Returns {} on any failure — the caller falls back to the
 // product implied by the campaign name, which grouped identically across all
@@ -1653,6 +1745,7 @@ function buildReportBody(product, start, end, columns) {
 // say the capped check is unavailable when the budget columns were dropped.
 async function requestCampaignReport(accessToken, spec) {
   const sets = COLUMN_SETS[spec.product];
+  const rejections = [];
   let lastErr;
   for (let i = 0; i < sets.length; i++) {
     const columns = sets[i];
@@ -1663,8 +1756,10 @@ async function requestCampaignReport(accessToken, spec) {
       return {
         reportId,
         columnSet: i,
+        columns,
         hasBudgetColumns: columns.includes('campaignBudgetAmount'),
-        degraded: i > 0
+        degraded: i > 0,
+        rejections
       };
     } catch (err) {
       lastErr = err;
@@ -1679,15 +1774,21 @@ async function requestCampaignReport(accessToken, spec) {
           return {
             reportId: m[1],
             columnSet: i,
+            columns,
             hasBudgetColumns: columns.includes('campaignBudgetAmount'),
             degraded: i > 0,
-            adopted: true
+            adopted: true,
+            rejections
           };
         }
         throw err;
       }
       if (!/\(4\d\d\)/.test(err.message)) throw err;
       console.error(`[ADREPORTS] ${spec.key} column set ${i} rejected:`, err.message);
+      // Amazon names the offending column in the body. That message is the
+      // entire answer to "why are there no budgets" — return it, don't bury it
+      // in a server log.
+      rejections.push({ setIndex: i, columns, error: String(err.message).slice(0, 600) });
       await sleep(300);
     }
   }
