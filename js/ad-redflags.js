@@ -18,7 +18,7 @@
     const ARF_RESULT_KEY = 'arfLastResult';
     const ARF_POLL_MS = 20000;
     const ARF_POLL_SLOW_MS = 30000;
-    const ARF_MAX_WAIT_MS = 12 * 60 * 1000;
+    const ARF_MAX_WAIT_MS = 45 * 60 * 1000;
 
     let arfPollTimer = null;
     let arfBusy = false;
@@ -44,9 +44,40 @@
       }
     }
 
+    // The run button is a dispatcher. While a run is in flight it resumes
+    // polling instead of requesting again — Amazon rejects an identical report
+    // while the prior one is still generating (425), so re-requesting kills the
+    // reports you are waiting on and silently restarts the clock on whatever
+    // slipped through.
+    function arfButtonClick() {
+      if (arfRunLoad()) arfResume();
+      else arfRun();
+    }
+
+    function arfResume() {
+      const state = arfRunLoad();
+      if (!state) return arfRun();
+      state.pollUntil = Date.now() + ARF_MAX_WAIT_MS;
+      arfRunSave(state);
+      arfSetBusy(true);
+      arfSetStatus('Checking report status…');
+      arfSchedulePoll(0);
+    }
+
+    // Abandons the in-flight report IDs and requests a fresh set. Only correct
+    // once Amazon has finished (or failed) the previous ones — otherwise the
+    // new requests are duplicates.
+    function arfStartOver() {
+      arfRunClear();
+      arfSetStatus('');
+      arfSetBusy(false);
+      arfRun();
+    }
+
     async function arfRun() {
       if (arfBusy) return;
       if (!accessToken) return;
+      if (arfRunLoad()) return arfResume();
       arfBusy = true;
       arfSetBusy(true);
       arfSetStatus('Requesting reports from Amazon…');
@@ -76,7 +107,8 @@
           reports: good.map(r => ({ key: r.key, reportId: r.reportId })),
           degraded: good.some(r => r.degraded),
           hasBudgetColumns: good.some(r => r.hasBudgetColumns),
-          startedAt: new Date().toISOString()
+          startedAt: new Date().toISOString(),
+          pollUntil: Date.now() + ARF_MAX_WAIT_MS
         };
         arfRunSave(state);
         arfSetStatus(`Amazon is generating ${good.length} report${good.length === 1 ? '' : 's'}. This usually takes 2–5 minutes.`);
@@ -101,8 +133,12 @@
       if (!accessToken) return;
 
       const elapsed = Date.now() - new Date(state.startedAt).getTime();
-      if (elapsed > ARF_MAX_WAIT_MS) {
-        arfSetStatus('', 'Reports are taking longer than expected. Press Check again to keep waiting.');
+      if (Date.now() > (state.pollUntil || 0)) {
+        arfSetStatus('',
+          `Still waiting after ${Math.round(elapsed / 60000)} minutes. Amazon is generating these ` +
+          `— press Check again to keep waiting. Do not start over until they finish or fail, ` +
+          `or the new requests come back as duplicates.`,
+          state.lastStatuses);
         arfSetBusy(false, 'Check again');
         return;
       }
@@ -123,7 +159,10 @@
           return;
         }
 
-        arfSetStatus(`${ready} of ${total} reports ready — ${Math.round(elapsed / 60000)} min elapsed…`);
+        state.lastStatuses = data.statuses || [];
+        arfRunSave(state);
+        arfSetStatus(`${ready} of ${total} reports ready — ${Math.round(elapsed / 60000)} min elapsed…`,
+                     null, state.lastStatuses);
         arfSchedulePoll(elapsed > 4 * 60 * 1000 ? ARF_POLL_SLOW_MS : ARF_POLL_MS);
       } catch (err) {
         console.error('[ARF] poll failed:', err);
@@ -371,18 +410,27 @@
       return `<span style="color: ${color};">${(n * 100).toFixed(0)}%</span>`;
     }
 
-    function arfSetStatus(message, error) {
+    function arfSetStatus(message, error, details) {
       const el = document.getElementById('arf-status');
       if (!el) return;
-      if (error) {
-        el.style.display = 'block';
-        el.style.color = 'var(--error)';
-        el.textContent = error;
-        return;
+      const parts = [];
+      if (error) parts.push(`<div style="color: var(--error);">${escapeHtml(error)}</div>`);
+      else if (message) parts.push(`<div>${escapeHtml(message)}</div>`);
+
+      if (details && details.length) {
+        parts.push('<div style="margin-top: 0.4rem; font-family: monospace; font-size: 0.75rem;">' +
+          details.map(d => `${escapeHtml(d.key)}: ${escapeHtml(d.status || '—')}`).join('  ·  ') +
+          '</div>');
       }
-      el.style.color = 'var(--text-secondary)';
-      el.textContent = message || '';
-      el.style.display = message ? 'block' : 'none';
+      // Only offered while a run is stored — starting over mid-generation is
+      // what produces the duplicate rejections.
+      if (arfRunLoad()) {
+        parts.push('<div style="margin-top: 0.4rem;">' +
+          '<a onclick="arfStartOver()" style="cursor: pointer; text-decoration: underline;">' +
+          'Abandon these and request fresh reports</a></div>');
+      }
+      el.innerHTML = parts.join('');
+      el.style.display = parts.length ? 'block' : 'none';
     }
 
     function arfSetBlurb(text) {

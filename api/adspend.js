@@ -1555,7 +1555,22 @@ async function requestCampaignReport(accessToken, spec) {
       lastErr = err;
       // 425 is "already running", not a bad column set — retrying with fewer
       // columns would just earn a second duplicate rejection.
-      if (/\(425\)/.test(err.message)) throw err;
+      if (/\(425\)/.test(err.message)) {
+        // Amazon sometimes names the in-flight report in the duplicate body.
+        // Adopting that id recovers a run that would otherwise be orphaned —
+        // generating at Amazon with nothing left able to poll it.
+        const m = err.message.match(/"reportId"\s*:\s*"([^"]+)"/);
+        if (m && REPORT_ID_RE.test(m[1])) {
+          return {
+            reportId: m[1],
+            columnSet: i,
+            hasBudgetColumns: columns.includes('campaignBudgetAmount'),
+            degraded: i > 0,
+            adopted: true
+          };
+        }
+        throw err;
+      }
       if (!/\(4\d\d\)/.test(err.message)) throw err;
       console.error(`[ADREPORTS] ${spec.key} column set ${i} rejected:`, err.message);
       await sleep(300);
