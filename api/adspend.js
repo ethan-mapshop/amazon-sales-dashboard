@@ -860,7 +860,7 @@ const RF_CONFIG = {
   RUNAWAY_MULTIPLE:     2,      // 7-day spend > 2x trailing weekly average
   RETENTION_GOOD:       0.50,   // check 1 — worth feeding
   RETENTION_BAD:        0.25,   // check 2 — not worth defending
-  STALLED_MIN_CLICKS:   10,     // check 3
+  STALLED_MIN_CLICKS:   15,     // check 3 — PORTFOLIO level, not campaign
   PACING_DEVIATION:     0.30,   // check 4 — brand spend vs baseline, either way
   CAPPED_RATIO:         0.95,   // day counts as capped at >= 95% of daily budget
   CAPPED_DAYS_MIN:      3,      // ... on at least this many days of the week
@@ -914,14 +914,14 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // to confirm the full sets rather than assuming them.
 const COLUMN_SETS = {
   sp: [
-    ['date', 'campaignId', 'campaignName', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
+    ['date', 'portfolioId', 'campaignId', 'campaignName', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
      'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d'],
     ['date', 'campaignId', 'campaignName', 'campaignBudgetAmount', 'campaignBudgetType',
      'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d'],
     ['date', 'campaignId', 'campaignName', 'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d']
   ],
   sb: [
-    ['date', 'campaignId', 'campaignName', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
+    ['date', 'portfolioId', 'campaignId', 'campaignName', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
      'cost', 'clicks', 'impressions', 'purchases', 'sales'],
     ['date', 'campaignId', 'campaignName', 'campaignBudgetAmount', 'campaignBudgetType',
      'cost', 'clicks', 'impressions', 'purchases', 'sales'],
@@ -1073,13 +1073,17 @@ async function handleWeeklyCollect(req, res) {
       });
     }
 
-    const mappings = await loadMappings();
+    const [mappings, portfolioNames] = await Promise.all([
+      loadMappings(),
+      fetchPortfolios(accessToken)
+    ]);
 
     const result = computeRedFlags({
       weekRows:     [...(byKey.spWeek || []), ...(byKey.sbWeek || [])],
       baselineRows: [...(byKey.spBase || []), ...(byKey.sbBase || [])],
       window,
-      mappings
+      mappings,
+      portfolioNames
     });
 
     return res.status(200).json({
@@ -1188,7 +1192,7 @@ function daySpan(start, end) {
 // Stage order matters: brand aggregates (stage 4) are computed BEFORE the
 // $5 eligibility filter (stage 5), or sub-$5 campaigns would silently drop out
 // of brand pacing totals.
-function computeRedFlags({ weekRows, baselineRows, window, mappings }) {
+function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNames }) {
   // Stage 2 — aggregate per campaign. Keyed by id, not name: a campaign
   // renamed mid-window would otherwise split into two identities.
   const camps = new Map();
@@ -1199,7 +1203,7 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings }) {
     if (!c) {
       c = {
         key, adProduct: r.adProduct, campaignId: r.campaignId, campaignName: r.campaignName,
-        campaignStatus: r.campaignStatus || '',
+        campaignStatus: r.campaignStatus || '', portfolioId: r.portfolioId || '',
         spend7: 0, clicks7: 0, impressions7: 0, orders7: 0, sales7: 0,
         spend28: 0, days28: new Set(),
         budgetByDate: new Map(), spendByDate: new Map(),
@@ -1209,6 +1213,7 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings }) {
     }
     if (r.campaignName) c.campaignName = r.campaignName;
     if (r.campaignStatus) c.campaignStatus = r.campaignStatus;
+    if (r.portfolioId) c.portfolioId = r.portfolioId;
     if (r.budgetType) c.budgetType = r.budgetType;
     return c;
   };
@@ -1229,9 +1234,13 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings }) {
     if (r.cost > 0) c.days28.add(r.date);
   }
 
-  // Stage 3 — attribution.
+  // Stage 3 — attribution (brand for margin, portfolio for grouping).
+  const pfNames = portfolioNames || {};
   const mappingConflicts = [];
   for (const c of camps.values()) {
+    const pf = resolvePortfolio(c, pfNames);
+    c.portfolio = pf.name;
+    c.portfolioSource = pf.source;
     const resolved = resolveBrand(c.campaignName, c.adProduct, mappings);
     c.brand = resolved.brand;
     c.brandSource = resolved.source;
@@ -1254,6 +1263,33 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings }) {
     b.spend7 += c.spend7;
     b.spend28 += c.spend28;
     for (const d of c.days28) b.days28.add(d);
+  }
+
+  // Stage 4b — portfolio aggregates for check 3. Deliberately spans every
+  // campaign regardless of the per-campaign spend floor: the products this
+  // check exists to find are ones where four campaigns each sit under the bar
+  // while the product as a whole clearly stopped converting.
+  const portfolios = new Map();
+  for (const c of camps.values()) {
+    let p = portfolios.get(c.portfolio);
+    if (!p) {
+      p = {
+        portfolio: c.portfolio, portfolioSource: c.portfolioSource, brand: c.brand || null,
+        clicks7: 0, orders7: 0, spend7: 0, sales7: 0, impressions7: 0, campaigns: []
+      };
+      portfolios.set(c.portfolio, p);
+    }
+    p.clicks7 += c.clicks7;
+    p.orders7 += c.orders7;
+    p.spend7 += c.spend7;
+    p.sales7 += c.sales7;
+    p.impressions7 += c.impressions7;
+    if (!p.brand && c.brand) p.brand = c.brand;
+    p.campaigns.push({
+      campaign: c.campaignName, adProduct: c.adProduct,
+      clicks7: Math.round(c.clicks7), orders7: Math.round(c.orders7),
+      spend7: r2(c.spend7), status: c.campaignStatus || null
+    });
   }
 
   // Stage 6 — per-campaign metrics.
@@ -1342,10 +1378,30 @@ function computeRedFlags({ weekRows, baselineRows, window, mappings }) {
       flags.runaway.push(arfRow(c));
     }
 
-    // 3 — Stalled. Needs no margin, so unmapped campaigns are still
-    // evaluated. Gates on orders, not sales.
-    if (c.clicks7 >= RF_CONFIG.STALLED_MIN_CLICKS && c.orders7 === 0) {
-      flags.stalled.push(arfRow(c));
+  }
+
+  // 3 — Stalled, at PORTFOLIO level. A stalled product is a listing problem —
+  // inventory, Buy Box, reviews, pricing — and those stop every campaign for
+  // the product at once, so reporting per campaign reported one fact four
+  // times while missing products whose campaigns were each under the old bar.
+  // Needs no margin, so unmapped portfolios are still evaluated.
+  for (const p of portfolios.values()) {
+    if (p.spend7 < RF_CONFIG.MIN_WEEKLY_SPEND) continue;
+    // Clicks and orders are integers per day, so the sums are exact — but round
+    // before comparing anyway, for the same reason the ratio checks do. A
+    // portfolio sitting exactly on the threshold shouldn't turn on float dust.
+    const pClicks = Math.round(p.clicks7);
+    if (pClicks >= RF_CONFIG.STALLED_MIN_CLICKS && Math.round(p.orders7) === 0) {
+      flags.stalled.push({
+        portfolio: p.portfolio,
+        portfolioSource: p.portfolioSource,
+        brand: p.brand,
+        clicks7: pClicks,
+        impressions7: Math.round(p.impressions7),
+        spend7: r2(p.spend7),
+        campaignCount: p.campaigns.length,
+        campaigns: p.campaigns.sort((a, b) => b.spend7 - a.spend7)
+      });
     }
   }
 
@@ -1453,6 +1509,18 @@ function resolveBrand(campaignName, adProduct, mappings) {
   return { brand: null, segment: null, source: 'unmapped', conflict };
 }
 
+// Portfolio is the grouping unit for the stalled check, and in this account it
+// is effectively the product: 140 campaigns across 42 portfolios, one per SKU.
+// When the report carries no portfolioId, fall back to the product implied by
+// the campaign name — "SOK World Blank (Auto)" becomes "SOK World Blank".
+// Checked against the April export, the two grouped identically.
+function resolvePortfolio(c, pfNames) {
+  const byId = c.portfolioId && pfNames[c.portfolioId];
+  if (byId) return { name: byId, source: 'portfolio' };
+  const derived = String(c.campaignName || '').replace(/\s*\([^)]*\)\s*$/, '').trim();
+  return { name: derived || c.campaignName || '(unknown)', source: 'name' };
+}
+
 // Longest prefix wins, and the prefix must be followed by a non-alphanumeric
 // character or end of string — otherwise "BWX Something" matches "BW".
 function brandFromPrefix(campaignName) {
@@ -1465,6 +1533,46 @@ function brandFromPrefix(campaignName) {
     }
   }
   return { brand: null, segment: null };
+}
+
+// Portfolio names for the stalled check's grouping. Tries the v3 list
+// endpoint, then v2. Returns {} on any failure — the caller falls back to the
+// product implied by the campaign name, which grouped identically across all
+// 140 campaigns when this was checked against the April export.
+async function fetchPortfolios(accessToken) {
+  try {
+    const res = await fetch('https://advertising-api.amazon.com/portfolios/list', {
+      method: 'POST',
+      headers: adsAuthHeaders(accessToken, {
+        'Content-Type': 'application/vnd.portfolio.v3+json',
+        'Accept': 'application/vnd.portfolio.v3+json'
+      }),
+      body: JSON.stringify({ maxResults: 100 })
+    });
+    if (res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const list = body.portfolios || [];
+      if (list.length) {
+        return Object.fromEntries(list.map(p => [String(p.portfolioId), p.name]));
+      }
+    }
+  } catch (err) {
+    console.error('[ADREPORTS] portfolios v3 failed:', err.message);
+  }
+  try {
+    const res = await fetch('https://advertising-api.amazon.com/v2/portfolios', {
+      headers: adsAuthHeaders(accessToken)
+    });
+    if (res.ok) {
+      const list = await res.json().catch(() => []);
+      if (Array.isArray(list) && list.length) {
+        return Object.fromEntries(list.map(p => [String(p.portfolioId), p.name]));
+      }
+    }
+  } catch (err) {
+    console.error('[ADREPORTS] portfolios v2 failed:', err.message);
+  }
+  return {};
 }
 
 async function loadMappings() {
@@ -1486,6 +1594,7 @@ function arfNormalizeRows(rawRows, adProduct) {
     date:           String(arfPick(r, ['date', 'startDate']) || '').substring(0, 10),
     adProduct,
     campaignId:     String(arfPick(r, ['campaignId']) || ''),
+    portfolioId:    String(arfPick(r, ['portfolioId']) || ''),
     campaignName:   String(arfPick(r, ['campaignName']) || ''),
     campaignStatus: String(arfPick(r, ['campaignStatus', 'status']) || ''),
     budgetAmount:   num(arfPick(r, ['campaignBudgetAmount', 'budgetAmount', 'budget'])),

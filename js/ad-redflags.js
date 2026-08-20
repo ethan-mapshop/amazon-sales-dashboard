@@ -263,9 +263,9 @@
           blurb: 'Spend more than doubled against the 4-week baseline while retention is poor.',
           cols: ['Campaign', 'Brand', 'Spend', 'Baseline/wk', 'Multiple', 'ACoS', 'Retention']
         }) +
-        arfSection('3 · Stalled campaigns', f.stalled, arfCampaignTable, {
-          blurb: 'Ten or more clicks and zero orders — usually a listing problem rather than an ads problem.',
-          cols: ['Campaign', 'Brand', 'Clicks', 'Spend', 'Status']
+        arfSection('3 · Stalled products', f.stalled, arfPortfolioTable, {
+          blurb: 'Fifteen or more clicks and zero orders across the whole portfolio. Usually a listing problem — inventory, Buy Box, reviews, pricing — rather than an ads problem. Expand a row for the campaign breakdown.',
+          cols: ['Portfolio', 'Brand', 'Clicks', 'Spend', 'Campaigns']
         }) +
         arfSection('4 · Brand pacing', f.brandPacing, arfBrandTable, {
           blurb: 'Brand-level spend more than 30% off its 4-week weekly average, in either direction.',
@@ -290,7 +290,6 @@
     function arfCampaignTable(rows, cols, title) {
       const isCap = title.startsWith('1');
       const isRun = title.startsWith('2');
-      const isStall = title.startsWith('3');
       const cells = (r) => {
         if (isCap) return [
           arfName(r), arfBrand(r), arfMoney(r.spend7), arfMoney(r.dailyBudget),
@@ -301,13 +300,41 @@
           r.spendMultiple ? `${r.spendMultiple.toFixed(1)}×` : '—',
           arfPct(r.acos), arfRetention(r.retention)
         ];
-        if (isStall) return [
-          arfName(r), arfBrand(r), String(Math.round(r.clicks7)), arfMoney(r.spend7),
-          escapeHtml(r.status || '—')
-        ];
         return [arfName(r), arfBrand(r), arfMoney(r.spend7)];
       };
       return arfTable(cols, rows.map(cells));
+    }
+
+    // Stalled rows are portfolios, not campaigns. The per-campaign breakdown is
+    // kept as expandable detail: when a product's campaigns disagree — some
+    // still converting, some not — that points at targeting rather than the
+    // listing, and it's the case worth looking at closely.
+    function arfPortfolioTable(rows, cols) {
+      const detail = (r) => r.campaigns.map(c =>
+        `${escapeHtml(c.campaign)} — ${c.clicks7} clicks, $${formatNumber(c.spend7)}`
+      ).join('<br>');
+      return `
+        <div style="overflow-x: auto;">
+          <table>
+            <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+            <tbody>${rows.map(r => `
+              <tr>
+                <td>
+                  <details>
+                    <summary style="cursor: pointer;">${escapeHtml(r.portfolio || '—')}</summary>
+                    <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.6;">
+                      ${detail(r)}
+                    </div>
+                  </details>
+                </td>
+                <td>${arfBrand(r)}</td>
+                <td>${r.clicks7}</td>
+                <td>${arfMoney(r.spend7)}</td>
+                <td>${r.campaignCount}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
     }
 
     function arfBrandTable(rows, cols) {
