@@ -219,6 +219,11 @@ if (pageName === 'salesvolume' && accessToken) {
         loadChangeLogASINs(); // Load ASINs for dropdown
         loadChangeLog(); // Load change log table
       }
+
+      // Renders the cached result only — never auto-starts a report run.
+      if (pageName === 'adredflags' && accessToken) {
+        loadAdRedFlags();
+      }
     }
     
     // Client ID management

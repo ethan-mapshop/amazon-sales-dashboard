@@ -234,6 +234,9 @@
         case 'integrations':
           if (typeof loadCredentialStatus === 'function') loadCredentialStatus();
           break;
+        case 'adredflags':
+          if (typeof loadAdRedFlags === 'function') loadAdRedFlags();
+          break;
         // upload page has no data fetch
       }
     }

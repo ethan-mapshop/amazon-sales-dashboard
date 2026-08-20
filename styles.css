@@ -1249,7 +1249,8 @@
     .main-content:has(#salesvolume-page.active),
     .main-content:has(#catalog-page.active),
     .main-content:has(#mapping-page.active),
-    .main-content:has(#listing-page.active) {
+    .main-content:has(#listing-page.active),
+    .main-content:has(#adredflags-page.active) {
       max-width: none;
       margin: 0;
     }

@@ -33,6 +33,7 @@
     <a class="nav-item" onclick="showPage('salesvolume')">Sales &amp; Volume</a>
     <a class="nav-item active" onclick="showPage('overview')">Profitability Overview</a>
     <a class="nav-item" onclick="showPage('listing')">Listing Optimization</a>
+    <a class="nav-item" onclick="showPage('adredflags')">Ad Red Flags</a>
 
     <div class="nav-group-label">Tools</div>
     <a class="nav-item" onclick="showPage('catalog')">Product Catalog</a>
@@ -2038,6 +2039,22 @@
           </div>
         </div>
     </div>
+
+    <!-- AD RED FLAGS PAGE -->
+    <div id="adredflags-page" class="page">
+      <div class="page-header">
+        <div class="page-header-top">
+          <h2 class="section-title">Ad Red Flags</h2>
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <div id="adredflags-blurb" class="header-data-blurb"></div>
+            <button class="btn btn-primary" id="arf-run-btn" onclick="arfRun()">Run weekly check</button>
+          </div>
+        </div>
+        <div id="arf-status" style="display: none; font-size: 0.8125rem; color: var(--text-secondary); margin-top: 0.5rem;"></div>
+      </div>
+
+      <div id="adredflags-content"></div>
+    </div>
   </div> <!-- End main-content -->
 
   <script src="js/core.js"></script>
@@ -2051,5 +2068,6 @@
   <script src="js/listings.js"></script>
   <script src="js/sessions.js"></script>
   <script src="js/sales-volume.js"></script>
+  <script src="js/ad-redflags.js"></script>
 </body>
 </html>
