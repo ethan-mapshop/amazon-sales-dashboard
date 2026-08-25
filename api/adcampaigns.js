@@ -306,6 +306,16 @@ async function handleWhoami(req, res) {
       cached: verdict.cached === true
     };
 
+    // Opening this URL in the address bar sends no Authorization header, so the
+    // honest verdict is "no token" — which reads like a failure when it is just
+    // the wrong way to call it. Say so rather than letting it look broken.
+    if (verdict.code === 'no_token') {
+      payload.hint = 'No Authorization header was sent. If you opened this in the address bar ' +
+                     'that is expected — run it from the dashboard console instead: ' +
+                     "fetch('/api/adcampaigns?action=whoami', { headers: { Authorization: " +
+                     '`Bearer ${accessToken}` } }).then(r => r.json()).then(console.log)';
+    }
+
     // Anyone who can already reach this endpoint learns their own verdict;
     // that is the point. Break-glass only adds the reason string.
     if (breakGlass) payload.message = verdict.message || null;
