@@ -1696,6 +1696,20 @@
 
     .aco-cell-num { min-width: 6rem; text-align: right; }
 
+    .aco-cell-num::-webkit-outer-spin-button,
+    .aco-cell-num::-webkit-inner-spin-button,
+    .aco-cell-pct::-webkit-outer-spin-button,
+    .aco-cell-pct::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .aco-cell-num,
+    .aco-cell-pct {
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+
     .aco-lock { opacity: 0.4; font-size: 0.7rem; margin-left: 0.25rem; cursor: help; }
 
     .aco-placement-inputs { display: inline-flex; gap: 0.3rem; }
@@ -1729,6 +1743,8 @@
        other columns do not. Faint until the row is hovered, so a long table
        is not a column of pencils. */
     .aco-edit-affordance {
+      display: inline-block;
+      transform: scaleX(-1);
       margin-left: 0.4rem;
       cursor: pointer;
       opacity: 0;
