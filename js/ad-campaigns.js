@@ -232,15 +232,14 @@
 
       return `
         <div class="catalog-toolbar" style="flex-wrap: wrap; gap: 0.75rem;">
-          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-            <input type="search" id="aco-search" placeholder="Search campaigns…" value="${escapeHtml(acoSearch)}"
-                   style="padding: 0.5rem 0.75rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); min-width: 16rem;">
+          <div class="aco-filter-row">
+            <input type="search" id="aco-search" placeholder="Search campaigns…" value="${escapeHtml(acoSearch)}">
             ${filters}
             <label class="catalog-active-toggle">
               <input type="checkbox" id="aco-only-enabled"${acoOnlyEnabled ? ' checked' : ''}> Only enabled
             </label>
           </div>
-          <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <div class="aco-toolbar-actions">
             <button class="btn btn-secondary" id="aco-toggle-all" type="button">Collapse all</button>
             <button class="btn btn-secondary" id="aco-export" type="button">Export CSV</button>
           </div>
