@@ -237,6 +237,9 @@
         case 'adredflags':
           if (typeof loadAdRedFlags === 'function') loadAdRedFlags();
           break;
+        case 'adcampaigns':
+          if (typeof loadAdCampaigns === 'function') loadAdCampaigns();
+          break;
         // upload page has no data fetch
       }
     }

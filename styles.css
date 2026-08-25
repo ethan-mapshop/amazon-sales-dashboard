@@ -1250,7 +1250,8 @@
     .main-content:has(#catalog-page.active),
     .main-content:has(#mapping-page.active),
     .main-content:has(#listing-page.active),
-    .main-content:has(#adredflags-page.active) {
+    .main-content:has(#adredflags-page.active),
+    .main-content:has(#adcampaigns-page.active) {
       max-width: none;
       margin: 0;
     }
@@ -1495,4 +1496,68 @@
     .btn-icon:hover {
       background: var(--bg-primary);
       border-color: var(--accent-orange);
+    }
+
+    /* Campaign Overview — grouped table. Borrows the mechanics of .bp-table
+       (sticky thead, sticky group rows, expand caret) without its column
+       dividers and right-aligned monospace, which suit a metrics grid rather
+       than a name-heavy configuration table. */
+    .aco-table-wrapper {
+      overflow: auto;
+      max-height: 70vh;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .aco-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .aco-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 8;
+      background: var(--bg-secondary);
+      padding: 0.75rem;
+      white-space: nowrap;
+    }
+
+    /* Each portfolio gets its own tbody so sibling sticky rows replace one
+       another on scroll instead of stacking up. */
+    .aco-table tbody.aco-group tr.aco-portfolio-row td {
+      position: sticky;
+      top: var(--aco-thead-height, 42px);
+      z-index: 6;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 0.6rem 0.75rem;
+      cursor: pointer;
+    }
+
+    .aco-table tbody.aco-group tr.aco-portfolio-row:hover td {
+      background: var(--bg-secondary);
+    }
+
+    .aco-table tr.aco-campaign-row td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+
+    .aco-table tr.aco-campaign-row td:first-child {
+      padding-left: 2rem;
+    }
+
+    .aco-table .expand-icon {
+      display: inline-block;
+      margin-right: 0.5rem;
+      font-size: 0.6rem;
+      color: var(--text-secondary);
+      transition: transform 0.15s ease;
+    }
+
+    .aco-table tr.aco-portfolio-row.expanded .expand-icon {
+      transform: rotate(90deg);
     }

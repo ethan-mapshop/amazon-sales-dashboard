@@ -224,6 +224,11 @@ if (pageName === 'salesvolume' && accessToken) {
       if (pageName === 'adredflags' && accessToken) {
         loadAdRedFlags();
       }
+
+      // Reads the stored snapshot only — refreshing from Amazon is explicit.
+      if (pageName === 'adcampaigns' && accessToken) {
+        loadAdCampaigns();
+      }
     }
     
     // Client ID management

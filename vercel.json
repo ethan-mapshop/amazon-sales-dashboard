@@ -50,6 +50,9 @@
     },
     "api/adspend.js": {
       "maxDuration": 60
+    },
+    "api/adcampaigns.js": {
+      "maxDuration": 60
     }
   },
   "rewrites": [
