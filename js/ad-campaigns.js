@@ -13,14 +13,14 @@
     // state, so shadowing it would silently break Product Catalog's filter row.
 
     const ACO_COLUMNS = [
-      { field: 'name',            label: 'Campaign' },
+      { field: 'name',            label: 'Campaign',      editable: 'text' },
       { field: 'campaignType',    label: 'Type',          filter: true },
       { field: 'adProduct',       label: 'Ad',            filter: true },
-      { field: 'state',           label: 'State',         filter: true },
+      { field: 'state',           label: 'State',         filter: true, editable: 'state' },
       { field: 'brand',           label: 'Brand',         filter: true, editable: 'brand' },
-      { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money' },
-      { field: 'biddingStrategy', label: 'Bidding' },
-      { field: 'placements',      label: 'Placements',    format: 'placements' },
+      { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money', editable: 'money' },
+      { field: 'biddingStrategy', label: 'Bidding',       editable: 'bidding' },
+      { field: 'placements',      label: 'Placements',    format: 'placements', editable: 'placements' },
       // Hidden rather than deleted: gone from the table, still in the CSV.
       { field: 'startDate',       label: 'Started',       hidden: true },
       // Present in the CSV, absent from the table. Without ids an export can't
@@ -56,6 +56,8 @@
         PLACEMENT_REST_OF_SEARCH: 'Rest of search'
       }
     };
+
+    const ACO_PLACEMENT_TYPES = ['PLACEMENT_TOP', 'PLACEMENT_PRODUCT_PAGE', 'PLACEMENT_REST_OF_SEARCH'];
 
     // Short forms for the table cell; the full names go in the title.
     const ACO_PLACEMENT_SHORT = {
@@ -486,7 +488,9 @@
       const cells = ACO_VISIBLE.map(col => {
         // Editable columns are always controls — there is no edit mode.
         if (col.editable) {
-          return `<td class="aco-cell-editing">${acoEditCell(col, c)}</td>`;
+          const err = col.field === 'name' && rowError
+            ? `<div class="aco-row-error">${escapeHtml(rowError)}</div>` : '';
+          return `<td class="aco-cell-editing">${acoEditCell(col, c)}${err}</td>`;
         }
         const align = col.align === 'right' ? 'text-align: right;' : '';
         const mono = col.mono ? "font-family: 'Roboto Mono', monospace;" : '';
@@ -547,6 +551,101 @@
 
     function acoEditCell(col, c) {
       const pending = acoPending[c.campaignId] || {};
+      const dirty = (f) => f in pending;
+      const cls = (f) => 'aco-cell-input' + (dirty(f) ? ' aco-dirty' : '');
+      const idAttr = `data-aco-id="${escapeHtml(c.campaignId)}"`;
+
+      // Only Sponsored Products can be written here; SB uses a different
+      // endpoint and body shape entirely. Archived campaigns are locked for the
+      // same practical reason — Amazon will not take the write.
+      const archived = String(c.state).toUpperCase() === 'ARCHIVED' || !!c.presumedArchived;
+      const sbLocked = c.adProduct !== 'SP' || archived;
+      const lockReason = archived
+        ? 'Archived campaigns cannot be changed here'
+        : 'Sponsored Brands campaigns are read-only here';
+
+      if (col.editable === 'text') {
+        const value = 'name' in pending ? pending.name : (c.name || '');
+        if (sbLocked) return `${escapeHtml(c.name)}${acoLockNote(lockReason)}`;
+        return `<input type="text" class="${cls('name')}" data-aco-input="name" ${idAttr}
+                       value="${escapeHtml(value)}" spellcheck="false">`;
+      }
+
+      if (col.editable === 'state') {
+        // ARCHIVED is deliberately absent from the options: it is irreversible
+        // on Amazon and would sit one option away from the other two. Archive
+        // in Campaign Manager instead.
+        if (sbLocked) return acoStateCell(c.state);
+        const value = 'state' in pending ? pending.state : (c.state || '');
+        return `<select class="${cls('state')}" data-aco-input="state" ${idAttr}>
+          ${['ENABLED', 'PAUSED'].map(v =>
+            `<option value="${v}"${value === v ? ' selected' : ''}>${escapeHtml(acoLabel('state', v))}</option>`).join('')}
+        </select>`;
+      }
+
+      if (col.editable === 'money') {
+        if (sbLocked) return typeof c.dailyBudget === 'number' ? '$' + formatNumber(c.dailyBudget) : '—';
+        // The API needs budgetType alongside the amount; the server refuses the
+        // write without it, so do not offer the box.
+        if (typeof c.dailyBudget === 'number' && !c.budgetType) {
+          return `$${formatNumber(c.dailyBudget)}${acoLockNote('Amazon did not return a budget type for this campaign, so the budget cannot be changed safely')}`;
+        }
+        if (typeof c.dailyBudget !== 'number') {
+          // null means UNKNOWN. Pre-filling an input from unknown is how you
+          // send a number Amazon never told you.
+          return `<span style="color: var(--warning);">unknown</span>${acoLockNote('Amazon did not return a budget for this campaign')}`;
+        }
+        const value = 'dailyBudget' in pending ? pending.dailyBudget : c.dailyBudget;
+        return `<input type="number" step="0.01" min="0" class="${cls('dailyBudget')} aco-cell-num"
+                       data-aco-input="dailyBudget" ${idAttr} value="${escapeHtml(String(value))}">`;
+      }
+
+      if (col.editable === 'bidding') {
+        if (sbLocked) return escapeHtml(acoLabel('biddingStrategy', c.biddingStrategy) || '—');
+        // Strategy and placements share one object on Amazon's side. Unknown
+        // placements means the server will refuse a strategy write too, so the
+        // control is locked here rather than failing at save time.
+        if (c.placements === null || c.placements === undefined) {
+          return `${escapeHtml(acoLabel('biddingStrategy', c.biddingStrategy) || '—')}${acoLockNote('Amazon did not return bidding details for this campaign, so bidding and placements cannot be changed safely')}`;
+        }
+        const value = 'biddingStrategy' in pending ? pending.biddingStrategy : (c.biddingStrategy || '');
+        // The current value is included even when it is not one of the three
+        // known strategies, so an unfamiliar one cannot be silently replaced
+        // just by the cell rendering.
+        const known = Object.keys(ACO_LABELS.biddingStrategy);
+        const options = known.includes(value) || !value ? known : [value, ...known];
+        return `<select class="${cls('biddingStrategy')}" data-aco-input="biddingStrategy" ${idAttr}>
+          ${options.map(v =>
+            `<option value="${escapeHtml(v)}"${value === v ? ' selected' : ''}>${escapeHtml(acoLabel('biddingStrategy', v))}</option>`).join('')}
+        </select>`;
+      }
+
+      if (col.editable === 'placements') {
+        if (sbLocked) {
+          const text = acoPlacementsText(c.placements);
+          if (text === null) return '<span style="color: var(--warning);">unknown</span>';
+          return text === ''
+            ? '<span style="color: var(--text-secondary);">—</span>'
+            : escapeHtml(text);
+        }
+        if (c.placements === null || c.placements === undefined) {
+          // Mirrors the server's refusal: without knowing the current
+          // percentages, writing bidding at all could wipe them.
+          return `<span style="color: var(--warning);">unknown</span>${acoLockNote('Amazon did not return placement modifiers, so these cannot be changed safely')}`;
+        }
+        const pendingList = 'placements' in pending ? pending.placements : null;
+        const byType = {};
+        for (const p of (pendingList || c.placements || [])) byType[p.placement] = p.percentage;
+        return `<span class="aco-placement-inputs">${ACO_PLACEMENT_TYPES.map(t => `
+          <label title="${escapeHtml(acoLabel('placement', t))}">
+            <span>${escapeHtml(ACO_PLACEMENT_SHORT[t] || t)}</span>
+            <input type="number" min="0" max="900" step="1"
+                   class="${cls('placements')} aco-cell-pct"
+                   data-aco-input="placements" data-aco-placement="${t}" ${idAttr}
+                   value="${byType[t] === undefined ? '' : escapeHtml(String(byType[t]))}">
+          </label>`).join('')}</span>`;
+      }
+
       if (col.editable === 'brand') {
         // '' is the "use the name prefix" option, which is how an override is
         // cleared. Distinct from a brand that happens to equal the prefix.
@@ -568,6 +667,10 @@
       return '';
     }
 
+    function acoLockNote(reason) {
+      return ` <span class="aco-lock" title="${escapeHtml(reason)}">&#128274;</span>`;
+    }
+
     function acoBrandOptions() {
       // Server-supplied, so the options always match what the update action
       // accepts. Falling back to the loaded data would silently offer fewer
@@ -583,26 +686,88 @@
       const c = acoData.campaigns.find(x => x.campaignId === campaignId);
       if (!c) return;
 
-      let value = rawValue;
-      let current;
-      if (field === 'brand') {
-        value = rawValue === '' ? null : rawValue;
-        const effective = value === null ? (c.brandFromPrefix || null) : value;
-        current = c.brand || null;
-        if ((effective || null) === current) {
+      const setOrClear = (unchanged, value) => {
+        if (unchanged) {
           if (acoPending[campaignId]) delete acoPending[campaignId][field];
         } else {
           acoPending[campaignId] = acoPending[campaignId] || {};
           acoPending[campaignId][field] = value;
         }
+      };
+
+      if (field === 'brand') {
+        const value = rawValue === '' ? null : rawValue;
+        const effective = value === null ? (c.brandFromPrefix || null) : value;
+        setOrClear((effective || null) === (c.brand || null), value);
+
+      } else if (field === 'name') {
+        const value = String(rawValue);
+        setOrClear(value.trim() === String(c.name || '').trim(), value);
+
+      } else if (field === 'state') {
+        setOrClear(rawValue === c.state, rawValue);
+
+      } else if (field === 'dailyBudget') {
+        const value = parseFloat(rawValue);
+        // An unparseable box is left pending so the save bar can refuse it,
+        // rather than silently discarding what was typed.
+        const unchanged = Number.isFinite(value) &&
+                          Math.round(value * 100) === Math.round((c.dailyBudget || 0) * 100);
+        setOrClear(unchanged, Number.isFinite(value) ? value : rawValue);
+
+      } else if (field === 'biddingStrategy') {
+        setOrClear(rawValue === c.biddingStrategy, rawValue);
+
+      } else if (field === 'placements') {
+        // Read every placement box in this row, not just the one that changed —
+        // placements are written as a whole array.
+        const list = acoReadPlacementInputs(campaignId);
+        setOrClear(acoPlacementsKey(list) === acoPlacementsKey(c.placements || []), list);
       }
 
       if (acoPending[campaignId] && !Object.keys(acoPending[campaignId]).length) {
         delete acoPending[campaignId];
       }
       delete acoRowErrors[campaignId];
-      acoRenderTable();
+      acoSyncRowMarkers(campaignId);
       acoRenderSaveBar();
+    }
+
+    // Re-renders nothing: repaints the dirty highlighting for one row in place,
+    // so typing never destroys the element being typed into.
+    function acoSyncRowMarkers(campaignId) {
+      const pending = acoPending[campaignId] || {};
+      const row = document.querySelector(`tr.aco-campaign-row[data-aco-id="${CSS.escape(campaignId)}"]`);
+      if (!row) return;
+      row.classList.toggle('aco-row-dirty', Object.keys(pending).length > 0);
+      row.classList.remove('aco-row-failed');
+      const err = row.querySelector('.aco-row-error');
+      if (err) err.remove();
+      row.querySelectorAll('[data-aco-input]').forEach(el => {
+        el.classList.toggle('aco-dirty', el.dataset.acoInput in pending);
+      });
+    }
+
+    // The row's placement boxes, as the array the API expects. Blank means "no
+    // adjustment for this placement" and is omitted rather than sent as 0.
+    function acoReadPlacementInputs(campaignId) {
+      const inputs = document.querySelectorAll(
+        `[data-aco-input="placements"][data-aco-id="${CSS.escape(campaignId)}"]`);
+      const out = [];
+      inputs.forEach(el => {
+        const raw = el.value.trim();
+        if (raw === '') return;
+        const pct = parseFloat(raw);
+        out.push({ placement: el.dataset.acoPlacement, percentage: Number.isFinite(pct) ? pct : raw });
+      });
+      return out.sort((a, b) => a.placement.localeCompare(b.placement));
+    }
+
+    // Same canonical form the server uses, so the two agree about what changed.
+    function acoPlacementsKey(list) {
+      return (list || []).slice()
+        .sort((a, b) => a.placement.localeCompare(b.placement))
+        .map(p => `${p.placement}:${p.percentage}`).join('|');
     }
 
     function acoPendingList() {
@@ -613,7 +778,17 @@
           const effective = fields.brand === null ? (c?.brandFromPrefix || null) : fields.brand;
           diffs.push({ field: 'brand', label: 'Brand', scope: 'local', from: c?.brand || null, to: effective });
         }
-        return { campaignId, name: c?.name || campaignId, fields, diffs };
+        if ('name' in fields) diffs.push({ field: 'name', label: 'Name', scope: 'amazon', from: c?.name, to: fields.name });
+        if ('state' in fields) diffs.push({ field: 'state', label: 'State', scope: 'amazon',
+          from: acoLabel('state', c?.state), to: acoLabel('state', fields.state) });
+        if ('dailyBudget' in fields) diffs.push({ field: 'dailyBudget', label: 'Budget', scope: 'amazon',
+          from: typeof c?.dailyBudget === 'number' ? '$' + formatNumber(c.dailyBudget) : '—',
+          to: typeof fields.dailyBudget === 'number' ? '$' + formatNumber(fields.dailyBudget) : String(fields.dailyBudget) });
+        if ('biddingStrategy' in fields) diffs.push({ field: 'biddingStrategy', label: 'Bidding', scope: 'amazon',
+          from: acoLabel('biddingStrategy', c?.biddingStrategy), to: acoLabel('biddingStrategy', fields.biddingStrategy) });
+        if ('placements' in fields) diffs.push({ field: 'placements', label: 'Placements', scope: 'amazon',
+          from: acoPlacementsText(c?.placements) || 'none', to: acoPlacementsText(fields.placements) || 'none' });
+        return { campaignId, name: c?.name || campaignId, fields, diffs, campaign: c };
       });
     }
 
@@ -629,6 +804,8 @@
       }
 
       const failed = list.filter(p => acoRowErrors[p.campaignId]);
+      const problems = acoPendingProblems(list);
+      const warnings = acoPendingWarnings(list);
       const n = list.length;
 
       bar.style.display = 'block';
@@ -637,16 +814,68 @@
           <div class="aco-save-bar-summary">
             <strong>${n} unsaved change${n === 1 ? '' : 's'}</strong>
             <span class="aco-save-bar-detail">${list.slice(0, 3).map(p =>
-              `${escapeHtml(p.name)}: ${p.diffs.map(d => `${d.label} → ${escapeHtml(d.to ?? 'from name')}`).join(', ')}`
+              `${escapeHtml(p.name)}: ${p.diffs.map(d =>
+                `${d.label} ${acoDiffText(d.from)} → ${acoDiffText(d.to)}`).join(', ')}`
             ).join(' · ')}${n > 3 ? ` · and ${n - 3} more` : ''}</span>
             ${failed.length ? `<span class="aco-save-bar-failed">${failed.length} failed — still unsaved</span>` : ''}
+            ${problems.map(w => `<span class="aco-save-bar-failed">${escapeHtml(w)}</span>`).join('')}
+            ${warnings.map(w => `<span class="aco-save-bar-warn">${escapeHtml(w)}</span>`).join('')}
           </div>
           <div class="aco-save-bar-actions">
             <button class="btn btn-secondary" data-aco-bar="discard"${acoSaveBusy ? ' disabled' : ''}>Discard</button>
-            <button class="btn btn-primary" data-aco-bar="save"${acoSaveBusy ? ' disabled' : ''}>${
+            <button class="btn btn-primary" data-aco-bar="save"${acoSaveBusy || problems.length ? ' disabled' : ''}>${
               acoSaveBusy ? 'Saving<span class="loading"></span>' : 'Save changes'}</button>
           </div>
         </div>`;
+    }
+
+    // One side of a diff, short enough that three campaigns still fit on the bar.
+    function acoDiffText(v) {
+      if (v === null || v === undefined || v === '') return '—';
+      const t = String(v);
+      return escapeHtml(t.length > 28 ? t.slice(0, 27) + '…' : t);
+    }
+
+    // Hard stops — the save button is disabled while any of these hold.
+    function acoPendingProblems(list) {
+      const out = [];
+      for (const item of list) {
+        const f = item.fields;
+        if ('dailyBudget' in f && !(Number.isFinite(f.dailyBudget) && f.dailyBudget > 0)) {
+          out.push(`${item.name}: budget must be a number above zero`);
+        }
+        if ('name' in f && !String(f.name).trim()) {
+          out.push(`${item.name}: name cannot be empty`);
+        }
+        if ('placements' in f) {
+          for (const p of f.placements) {
+            const pct = p.percentage;
+            if (!Number.isFinite(pct) || pct < 0 || pct > 900 || Math.round(pct) !== pct) {
+              out.push(`${item.name}: placement percentages must be whole numbers 0–900`);
+              break;
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    // Soft warnings — shown, but they do not block the save.
+    function acoPendingWarnings(list) {
+      const out = [];
+      for (const item of list) {
+        const f = item.fields;
+        const c = item.campaign || {};
+        if (f.state === 'ENABLED' && c.state !== 'ENABLED') {
+          const budget = 'dailyBudget' in f ? f.dailyBudget : c.dailyBudget;
+          out.push(`${item.name} will start spending${typeof budget === 'number' ? ` up to $${formatNumber(budget)}/day` : ''}`);
+        }
+        if ('dailyBudget' in f && typeof c.dailyBudget === 'number' && c.dailyBudget > 0 &&
+            Number.isFinite(f.dailyBudget) && f.dailyBudget >= c.dailyBudget * 3) {
+          out.push(`${item.name}: budget ${Math.round(f.dailyBudget / c.dailyBudget)}× higher than now`);
+        }
+      }
+      return out;
     }
 
     function acoDiscardPending() {
@@ -660,6 +889,7 @@
       if (acoSaveBusy || !accessToken) return;
       const list = acoPendingList();
       if (!list.length) return;
+      if (acoPendingProblems(list).length) return;
 
       acoSaveBusy = true;
       acoRowErrors = {};
@@ -675,13 +905,29 @@
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
             body: JSON.stringify({
               campaignId: item.campaignId,
-              adProduct: (acoData.campaigns.find(x => x.campaignId === item.campaignId) || {}).adProduct,
+              adProduct: (item.campaign || {}).adProduct,
               local: 'brand' in item.fields ? { brand: item.fields.brand } : {},
-              amazon: {}
+              amazon: acoAmazonPayload(item.fields),
+              // What the row displayed. The server compares this against
+              // Amazon's current values and refuses rather than silently
+              // reverting a change made in Campaign Manager since the sync.
+              expected: acoExpectedFor(item.campaign, item.fields)
             })
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok || !data.success) throw new Error(data.error || `Save failed (${res.status})`);
+          if (!res.ok || !data.success) {
+            if (data.conflicts && data.conflicts.length) {
+              const c0 = data.conflicts[0];
+              throw new Error(`Amazon now has ${c0.field} = ${c0.amazonHasNow ?? '—'} (you saw ${c0.youSaw ?? '—'}). Refresh and try again.`);
+            }
+            throw new Error(data.error || `Save failed (${res.status})`);
+          }
+          if (data.notApplied && data.notApplied.length) {
+            console.warn('[ACO] Amazon accepted but did not apply:', data.notApplied);
+          }
+          if (data.collateral && data.collateral.length) {
+            console.warn('[ACO] fields changed that were not requested:', data.collateral);
+          }
           saved.push(item);
           delete acoPending[item.campaignId];
         } catch (err) {
@@ -708,6 +954,24 @@
         // No optimistic update — the rows come back from the server.
         loadAdCampaigns();
       }
+    }
+
+    function acoAmazonPayload(fields) {
+      const out = {};
+      for (const k of ['name', 'state', 'dailyBudget', 'biddingStrategy', 'placements']) {
+        if (k in fields) out[k] = fields[k];
+      }
+      return out;
+    }
+
+    function acoExpectedFor(c, fields) {
+      const out = {};
+      if (!c) return out;
+      for (const k of ['name', 'state', 'dailyBudget', 'biddingStrategy']) {
+        if (k in fields) out[k] = c[k] ?? null;
+      }
+      if ('placements' in fields) out.placementsSummary = c.placementsSummary ?? null;
+      return out;
     }
 
     // Shows the flash without a full re-render, for the partial-failure case
@@ -785,13 +1049,15 @@
 
       // Delegated so it survives every re-render of the table.
       const wrap = document.getElementById('aco-table-wrap');
-      // Delegated, so controls survive every table re-render.
-      if (wrap) wrap.addEventListener('change', e => {
+      // Delegated, so controls survive every table re-render. Both events:
+      // `input` keeps the save bar live while typing, `change` catches the
+      // number spinners and any programmatic set.
+      if (wrap) ['input', 'change'].forEach(evt => wrap.addEventListener(evt, e => {
         const el = e.target;
         const field = el && el.dataset && el.dataset.acoInput;
         if (!field) return;
         acoSetPending(el.dataset.acoId, field, el.value);
-      });
+      }));
 
       const bar = document.getElementById('aco-save-bar');
       if (bar) bar.addEventListener('click', e => {
@@ -818,8 +1084,10 @@
         const enriched = { ...c, portfolio: pfById.get(c.portfolioId)?.name || '' };
         return fields.map(f => {
           const v = enriched[f];
-          if (v === null || v === undefined) return csvEscape('');
+          // Placements first: null means UNKNOWN, and an empty cell would read
+          // as "no modifiers", which is a different fact.
           if (f === 'placements') return csvEscape(acoPlacementsText(v) ?? 'unknown');
+          if (v === null || v === undefined) return csvEscape('');
           return csvEscape(ACO_LABELS[f] ? acoLabel(f, v) : v);
         }).join(',');
       });

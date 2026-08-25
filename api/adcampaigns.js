@@ -390,17 +390,11 @@ async function handleUpdate(req, res) {
       return res.status(400).json({ error: 'Nothing to change' });
     }
 
-    if (hasAmazon) {
-      return res.status(501).json({
-        error: 'Amazon field updates are not enabled yet — brand is dashboard-only and works now.',
-        stage: 'validate'
-      });
-    }
-
     // ── brand override ──────────────────────────────────────────────────────
-    // A dashboard-local field must never cause an Amazon API call.
-    const requested = local.brand === null ? null : acStr(local.brand);
-    if (requested !== null && !acKnownBrands().includes(requested)) {
+    // A dashboard-local field must never cause an Amazon API call, so it is
+    // applied first and independently of anything Amazon does.
+    const requested = hasLocal ? (local.brand === null ? null : acStr(local.brand)) : undefined;
+    if (requested !== undefined && requested !== null && !acKnownBrands().includes(requested)) {
       return res.status(400).json({
         error: `Unknown brand. Expected one of: ${acKnownBrands().join(', ')}`,
         stage: 'validate'
@@ -426,52 +420,313 @@ async function handleUpdate(req, res) {
     const prefixBrand = row.brandFromPrefix ?? acBrandFromPrefix(row.name);
 
     const next = { ...overrides };
-    // Storing an override equal to the prefix result would freeze this campaign
-    // against a later prefix-table change, so record nothing in that case.
-    if (requested === null || requested === prefixBrand) delete next[campaignId];
-    else next[campaignId] = { brand: requested, at: new Date().toISOString() };
+    if (hasLocal) {
+      // Storing an override equal to the prefix result would freeze this
+      // campaign against a later prefix-table change, so record nothing then.
+      if (requested === null || requested === prefixBrand) delete next[campaignId];
+      else next[campaignId] = { brand: requested, at: new Date().toISOString() };
+    }
 
-    const updatedRow = acApplyBrandOverride(
+    let updatedRow = acApplyBrandOverride(
       { ...row, brand: prefixBrand, brandSource: prefixBrand ? 'prefix' : 'none' },
       next
     );
 
-    const writes = [kv.set('adcampaigns:overrides', next)];
+    const writes = hasLocal ? [kv.set('adcampaigns:overrides', next)] : [];
+    const changeRecords = [];
+    const result = { applied: {}, notApplied: [], collateral: [], amazonErrors: [] };
 
-    if ((updatedRow.brand || null) !== before) {
+    if (hasLocal && (updatedRow.brand || null) !== before) {
+      result.applied.brand = { from: before, to: updatedRow.brand || null };
+      changeRecords.push(acEditRecord(campaignId, row, 'brand', before, updatedRow.brand || null));
+    }
+
+    // ── Amazon fields ───────────────────────────────────────────────────────
+    let stage = 'store';
+    if (hasAmazon) {
+      const amazonResult = await acWriteAmazonFields({ campaignId, row, amazon, expected: req.body?.expected || {} });
+      stage = amazonResult.stage;
+
+      if (!amazonResult.ok) {
+        // Nothing was written to Amazon. The brand override may still have been
+        // valid, so persist that rather than discarding a change the user made.
+        if (writes.length) await Promise.all(writes);
+        return res.status(200).json({
+          success: false, stage, campaignId,
+          error: amazonResult.error,
+          conflicts: amazonResult.conflicts || null,
+          ...result
+        });
+      }
+
+      Object.assign(result.applied, amazonResult.applied);
+      result.notApplied = amazonResult.notApplied;
+      result.collateral = amazonResult.collateral;
+      updatedRow = acApplyBrandOverride({
+        ...amazonResult.row,
+        // acMapCampaign does not emit presence fields; carry them forward or the
+        // row loses its history and looks brand new.
+        firstSeenAt: row.firstSeenAt,
+        lastSeenAt: new Date().toISOString(),
+        missingRuns: 0,
+        presumedArchived: false
+      }, next);
+
+      for (const [field, d] of Object.entries(amazonResult.applied)) {
+        changeRecords.push(acEditRecord(campaignId, row, field, d.from, d.to));
+      }
+    }
+
+    if (Object.keys(result.applied).length) {
       const nextRows = rows.slice();
       nextRows[idx] = updatedRow;
       writes.push(kv.set('adcampaigns:current', { ...current, rows: nextRows }));
+    }
 
+    if (changeRecords.length) {
       const stored = await kv.get('adcampaigns:changes');
-      const record = {
-        // The |w suffix keeps this distinct from the drift record the next
-        // refresh would generate for the same campaign/field/day — without it
-        // acAppendChanges would dedupe them and the edit would vanish.
-        id: `${campaignId}|brand|${_ptDate(new Date())}|w${Date.now()}`,
-        campaignId, name: row.name, adProduct: row.adProduct,
-        field: 'brand', from: before, to: updatedRow.brand || null,
-        ptDate: _ptDate(new Date()), at: new Date().toISOString(),
-        source: 'edit'
-      };
       writes.push(kv.set('adcampaigns:changes', {
-        rows: acAppendChanges((stored && stored.rows) || [], [record])
+        rows: acAppendChanges((stored && stored.rows) || [], changeRecords)
       }));
     }
 
     await Promise.all(writes);
 
     return res.status(200).json({
-      success: true,
-      stage: 'store',
-      campaignId,
-      applied: { brand: { from: before, to: updatedRow.brand || null } },
-      row: updatedRow
+      success: true, stage, campaignId, ...result, row: updatedRow
     });
   } catch (error) {
     console.error('[ADCAMPAIGNS UPDATE] Error:', error);
     return res.status(500).json({ error: 'Update failed: ' + error.message });
   }
+}
+
+// Change-log record for a dashboard-initiated edit. The |w suffix keeps it
+// distinct from the drift record the next refresh generates for the same
+// campaign/field/day — without it acAppendChanges would dedupe them and the
+// edit would silently vanish from the log.
+function acEditRecord(campaignId, row, field, from, to) {
+  return {
+    id: `${campaignId}|${field}|${_ptDate(new Date())}|w${Date.now()}`,
+    campaignId, name: row.name, adProduct: row.adProduct,
+    field, from, to,
+    ptDate: _ptDate(new Date()), at: new Date().toISOString(),
+    source: 'edit'
+  };
+}
+
+// Read → conflict-check → write → verify, for one campaign.
+//
+// The whole shape of this function is dictated by one hazard: dynamicBidding
+// holds BOTH the bidding strategy and the placement percentages. A partial
+// write of one can clear the other, so the live object is always read first and
+// sent back whole.
+async function acWriteAmazonFields({ campaignId, row, amazon, expected }) {
+  if (row.adProduct !== 'SP') {
+    return { ok: false, stage: 'validate', error: 'Only Sponsored Products campaigns can be edited here.' };
+  }
+  if (row.presumedArchived || (row.missingRuns || 0) > 0) {
+    return { ok: false, stage: 'validate',
+             error: 'Amazon has not returned this campaign recently — refresh before editing it.' };
+  }
+
+  const invalid = acValidateAmazonFields(amazon);
+  if (invalid) return { ok: false, stage: 'validate', error: invalid };
+
+  const accessToken = await getAdsAccessToken();
+
+  // ── read ──
+  // v3 only. Reading v2's bidding.adjustments and writing a v3 dynamicBidding
+  // is another way placements end up cleared.
+  const read = await acAdsList(accessToken, AC_ENDPOINTS.spV3, {
+    probeOnly: true,
+    bodyExtra: { campaignIdFilter: { include: [campaignId] } }
+  });
+  if (!read.ok) {
+    return { ok: false, stage: 'read',
+             error: `Could not read the campaign from Amazon (${read.status}): ${String(read.bodyText || '').slice(0, 300)}` };
+  }
+  const live = (read.items || []).find(i => String(i.campaignId) === campaignId);
+  if (!live) {
+    return { ok: false, stage: 'read', error: 'Amazon did not return this campaign.' };
+  }
+
+  const liveRow = acMapCampaign(live, 'SP', {});
+
+  // ── conflict ──
+  // acSame, not ===, or 25 vs 25.0 from a JSON round-trip false-conflicts on
+  // every budget edit.
+  const conflicts = [];
+  for (const field of Object.keys(amazon)) {
+    if (!(field in expected)) continue;
+    const key = field === 'placements' ? 'placementsSummary' : field;
+    const wasShown = field === 'placements' ? expected.placementsSummary : expected[field];
+    if (!acSame(wasShown ?? null, liveRow[key] ?? null)) {
+      conflicts.push({ field, youSaw: wasShown ?? null, amazonHasNow: liveRow[key] ?? null });
+    }
+  }
+  if (conflicts.length) {
+    return { ok: false, stage: 'conflict', conflicts,
+             error: 'Amazon has changed since this page loaded — refresh and try again.' };
+  }
+
+  // ── build the payload ──
+  const payload = { campaignId };
+  if ('name' in amazon)  payload.name = acStr(amazon.name);
+  if ('state' in amazon) payload.state = acStr(amazon.state).toUpperCase();
+
+  if ('dailyBudget' in amazon) {
+    // Refuse rather than guess DAILY: sending a budget without its type is how
+    // the type gets cleared.
+    if (!liveRow.budgetType) {
+      return { ok: false, stage: 'write',
+               error: 'Amazon did not return this campaign\'s budget type, so the budget cannot be changed safely.' };
+    }
+    payload.budget = { budget: acNum(amazon.dailyBudget), budgetType: liveRow.budgetType };
+  }
+
+  if ('biddingStrategy' in amazon || 'placements' in amazon) {
+    // If Amazon never showed us dynamicBidding we do not know the placement
+    // percentages, and writing a strategy would wipe values we never saw.
+    if (!live.dynamicBidding || typeof live.dynamicBidding !== 'object') {
+      return { ok: false, stage: 'write',
+               error: 'Amazon did not return this campaign\'s bidding details, so bidding and placements cannot be changed safely.' };
+    }
+    payload.dynamicBidding = {
+      ...live.dynamicBidding,
+      strategy: 'biddingStrategy' in amazon ? acStr(amazon.biddingStrategy) : live.dynamicBidding.strategy,
+      // Requested placements, or the live array echoed back VERBATIM. This is
+      // what makes a strategy-only change safe.
+      placementBidding: 'placements' in amazon
+        ? (amazon.placements || []).map(p => ({
+            placement: acStr(p.placement),
+            percentage: acNum(p.percentage)
+          }))
+        : (Array.isArray(live.dynamicBidding.placementBidding) ? live.dynamicBidding.placementBidding : [])
+    };
+  }
+
+  // ── write ──
+  const put = await acAdsWrite(accessToken, AC_ENDPOINTS.spV3, { campaigns: [payload] });
+  if (!put.ok) {
+    return { ok: false, stage: 'write',
+             error: `Amazon rejected the change (${put.status}): ${String(put.bodyText || '').slice(0, 400)}` };
+  }
+
+  // ── verify ──
+  // Store what Amazon confirms, never what was requested: a 200 does not prove
+  // the value was applied.
+  const reread = await acAdsList(accessToken, AC_ENDPOINTS.spV3, {
+    probeOnly: true,
+    bodyExtra: { campaignIdFilter: { include: [campaignId] } }
+  });
+  const after = reread.ok ? (reread.items || []).find(i => String(i.campaignId) === campaignId) : null;
+  if (!after) {
+    return { ok: false, stage: 'verify',
+             error: 'Amazon accepted the change but it could not be confirmed. Refresh to see the current values.' };
+  }
+  const afterRow = acMapCampaign(after, 'SP', {});
+
+  const applied = {};
+  const notApplied = [];
+  for (const field of Object.keys(amazon)) {
+    const key = field === 'placements' ? 'placementsSummary' : field;
+    const from = liveRow[key] ?? null;
+    const to = afterRow[key] ?? null;
+    if (acSame(from, to)) notApplied.push({ field, value: from });
+    else applied[key] = { from, to };
+  }
+
+  // Anything that changed but was not asked for. Ten lines, and it is the alarm
+  // that would catch a PUT turning out to be full-replace rather than partial.
+  const requestedKeys = new Set(Object.keys(amazon).map(f => f === 'placements' ? 'placementsSummary' : f));
+  const collateral = [];
+  for (const field of AC_TRACKED_FIELDS) {
+    if (requestedKeys.has(field)) continue;
+    if (!acSame(liveRow[field] ?? null, afterRow[field] ?? null)) {
+      collateral.push({ field, from: liveRow[field] ?? null, to: afterRow[field] ?? null });
+    }
+  }
+
+  return { ok: true, stage: 'store', applied, notApplied, collateral, row: afterRow };
+}
+
+function acValidateAmazonFields(amazon) {
+  if ('name' in amazon) {
+    const n = acStr(amazon.name);
+    if (!n) return 'Campaign name cannot be empty.';
+    if (n.length > 255) return 'Campaign name is too long.';
+  }
+  if ('state' in amazon) {
+    // ARCHIVED is irreversible on Amazon and is deliberately not offered.
+    if (!['ENABLED', 'PAUSED'].includes(acStr(amazon.state).toUpperCase())) {
+      return 'State must be Enabled or Paused.';
+    }
+  }
+  if ('dailyBudget' in amazon) {
+    const b = acNum(amazon.dailyBudget);
+    if (b === null || !(b > 0)) return 'Daily budget must be greater than zero.';
+    if (b > 100000) return 'Daily budget looks implausibly large.';
+  }
+  if ('biddingStrategy' in amazon) {
+    if (!acStr(amazon.biddingStrategy)) return 'Bidding strategy cannot be empty.';
+  }
+  if ('placements' in amazon) {
+    if (!Array.isArray(amazon.placements)) return 'Placements must be a list.';
+    for (const p of amazon.placements) {
+      const pct = acNum(p && p.percentage);
+      if (!acStr(p && p.placement)) return 'A placement is missing its name.';
+      if (pct === null || pct < 0 || pct > 900 || Math.round(pct) !== pct) {
+        return 'Placement percentages must be whole numbers between 0 and 900.';
+      }
+    }
+  }
+  return null;
+}
+
+// The one place a mutating Amazon call happens. Like acAdsList it never
+// swallows: a non-2xx comes back with the status and body.
+async function acAdsWrite(accessToken, spec, body) {
+  try {
+    const headers = adsAuthHeaders(accessToken, {
+      'Content-Type': spec.contentType,
+      'Accept': spec.accept
+    });
+    // Retries only on 429. withAdsRetry also retries 5xx, which is wrong for a
+    // mutating request: a 500 may mean the write landed, and retrying could
+    // apply it twice.
+    let res = await fetch(spec.url, { method: 'PUT', headers, body: JSON.stringify(body) });
+    if (res.status === 429) {
+      await sleep(2000);
+      res = await fetch(spec.url, { method: 'PUT', headers, body: JSON.stringify(body) });
+    }
+    const text = await res.text();
+    if (!res.ok) return { ok: false, status: res.status, bodyText: text };
+
+    // 207 is res.ok, so per-item errors must be inspected rather than assumed
+    // away — otherwise a partial failure reads as complete success.
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch { /* non-JSON success */ }
+    const errs = acCollectItemErrors(parsed);
+    if (errs.length) {
+      return { ok: false, status: res.status, bodyText: JSON.stringify(errs).slice(0, 400) };
+    }
+    return { ok: true, status: res.status, body: parsed };
+  } catch (err) {
+    return { ok: false, status: 0, bodyText: 'write threw: ' + err.message };
+  }
+}
+
+function acCollectItemErrors(parsed) {
+  if (!parsed || typeof parsed !== 'object') return [];
+  const out = [];
+  for (const value of Object.values(parsed)) {
+    if (!value || typeof value !== 'object') continue;
+    const list = Array.isArray(value.error) ? value.error
+               : Array.isArray(value.errors) ? value.errors : null;
+    if (list && list.length) out.push(...list);
+  }
+  return out;
 }
 
 // ─── SYNC CORE ───────────────────────────────────────────────────────────────
@@ -1180,4 +1435,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
-         acPlacementsSummary, acApplyBrandOverride, acKnownBrands, AC_CONFIG };
+         acPlacementsSummary, acApplyBrandOverride, acKnownBrands,
+         acValidateAmazonFields, acCollectItemErrors, AC_CONFIG };

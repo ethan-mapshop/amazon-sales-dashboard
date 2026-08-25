@@ -1693,3 +1693,34 @@
       gap: 0.5rem;
       flex: 0 0 auto;
     }
+
+    .aco-cell-num { min-width: 6rem; text-align: right; }
+
+    .aco-lock { opacity: 0.4; font-size: 0.7rem; margin-left: 0.25rem; cursor: help; }
+
+    .aco-placement-inputs { display: inline-flex; gap: 0.3rem; }
+
+    .aco-placement-inputs label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.15rem;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .aco-placement-inputs label > span {
+      font-size: 0.65rem;
+      color: var(--text-secondary);
+    }
+
+    .aco-cell-pct {
+      width: 3.4rem;
+      min-width: 0;
+      padding: 0.25rem 0.3rem;
+      text-align: right;
+    }
+
+    .aco-save-bar-warn {
+      font-size: 0.75rem;
+      color: var(--warning);
+    }
