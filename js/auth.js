@@ -11,8 +11,8 @@
 
     const AUTH_BANNER_WARN_MS = 5 * 60 * 1000; // warn 5 min before expiry
 
-    function showAuthBanner(state) {
-      // state: 'expired' | 'warn' | 'hide'
+    function showAuthBanner(state, detail) {
+      // state: 'expired' | 'warn' | 'denied' | 'unavailable' | 'hide'
       const banner = document.getElementById('auth-expired-banner');
       const text   = document.getElementById('auth-expired-text');
       const btn    = document.getElementById('auth-expired-signin-btn');
@@ -20,23 +20,101 @@
       if (state === 'hide') {
         banner.style.display = 'none';
         document.body.classList.remove('auth-banner-active');
+        banner.dataset.authState = '';
         return;
       }
-      banner.classList.toggle('warn', state === 'warn');
+      banner.classList.toggle('warn', state === 'warn' || state === 'unavailable');
+      banner.dataset.authState = state;
       const expiry  = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
       const minutes = Math.max(1, Math.ceil((expiry - Date.now()) / 60000));
+
       if (state === 'warn') {
         text.textContent = `⚠ Your Google sign-in expires in ${minutes} minute${minutes === 1 ? '' : 's'}. Click to renew.`;
         btn.textContent = 'Renew';
+        btn.style.display = '';
+      } else if (state === 'denied') {
+        // Deliberately does NOT clear the token and does NOT offer "Sign In" —
+        // re-authing as the same account would just be denied again, forever.
+        text.textContent = detail || '⚠ This Google account is not authorized for this dashboard.';
+        btn.textContent = 'Sign in with a different account';
+        btn.style.display = '';
+      } else if (state === 'unavailable') {
+        // Google could not be reached. The token is probably fine; clearing it
+        // would turn a transient outage into a forced sign-out loop.
+        text.textContent = detail || '⚠ Could not reach Google to verify your sign-in. Retrying shortly.';
+        btn.style.display = 'none';
       } else {
         text.textContent = '⚠ Your Google sign-in has expired. Click Sign In to continue.';
         btn.textContent = 'Sign In';
+        btn.style.display = '';
       }
       banner.style.display = 'flex';
       document.body.classList.add('auth-banner-active');
     }
 
+    // ── SCOPE VERSION FUSE ───────────────────────────────────────────────────
+    // Bump whenever the requested OAuth scope changes. A stored token minted
+    // under an older scope is discarded on load, so the browser re-consents
+    // BEFORE any server rejects it. Without this, a scope change strands every
+    // existing session: tokenExpiry is still in the future so no banner fires,
+    // the sidebar still says "Signed In", and every request 401s with the only
+    // escape being to guess that button is really Sign Out.
+    const AUTH_SCOPE_VERSION = 2;
+    const AUTH_SCOPE = 'openid email https://www.googleapis.com/auth/spreadsheets';
+
+    function clearStoredToken() {
+      localStorage.removeItem('googleAccessToken');
+      localStorage.removeItem('tokenExpiry');
+      localStorage.removeItem('tokenScopeVersion');
+      accessToken = null;
+    }
+
+    function storedTokenIsCurrentScope() {
+      return parseInt(localStorage.getItem('tokenScopeVersion') || '0', 10) === AUTH_SCOPE_VERSION;
+    }
+
+    // ── ONE 401 HANDLER FOR ALL /api CALLS ───────────────────────────────────
+    // There are ~66 fetch sites across js/. Rather than touch every one, wrap
+    // window.fetch here — auth.js loads after core.js and before every module
+    // that fetches, and nothing fetches at load time, so the patch is always
+    // installed in time.
+    //
+    // It reads the `x-auth-error` RESPONSE HEADER, never the body: consuming
+    // the body would break every existing `await res.json()` call site.
+    (function installAuthFetchInterceptor() {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async function (input, init) {
+        const res = await nativeFetch(input, init);
+        try {
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (!url.includes('/api/')) return res;
+          if (res.status !== 401 && res.status !== 403 && res.status !== 503) return res;
+
+          const code = res.headers.get('x-auth-error');
+          if (!code) return res;   // not an auth failure, just an endpoint error
+
+          if (code === 'not_allowed' || code === 'allowlist_unconfigured') {
+            showAuthBanner('denied');
+          } else if (code === 'auth_unavailable') {
+            showAuthBanner('unavailable');
+          } else {
+            // invalid_token | expired | insufficient_scope | wrong_client
+            clearStoredToken();
+            showAuthBanner('expired');
+          }
+        } catch (err) {
+          console.error('[AUTH] interceptor error:', err);
+        }
+        return res;
+      };
+    })();
+
     function checkAuthExpiry() {
+      // A denial is not about expiry and must not be cleared by this timer —
+      // otherwise the message flickers away every 30 seconds.
+      const banner = document.getElementById('auth-expired-banner');
+      if (banner && banner.dataset.authState === 'denied') return;
+
       const expiry = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
       // No saved token yet → not signed in. The initial auth UI handles
       // that case; banner stays hidden.
@@ -59,6 +137,12 @@
       const btn    = document.getElementById('auth-expired-signin-btn');
       if (btn) {
         btn.addEventListener('click', () => {
+          // When denied, the only useful action is switching accounts — a
+          // silent re-auth would return the same rejected identity.
+          if (banner && banner.dataset.authState === 'denied') {
+            signOut();
+            return;
+          }
           // Disable the button so the user can't double-click while
           // the OAuth popup is open.
           btn.disabled = true;
@@ -92,24 +176,30 @@
       const savedToken = localStorage.getItem('googleAccessToken');
       const tokenExpiry = localStorage.getItem('tokenExpiry');
       
-      if (savedToken && tokenExpiry && Date.now() < parseInt(tokenExpiry)) {
+      if (savedToken && tokenExpiry && Date.now() < parseInt(tokenExpiry) && storedTokenIsCurrentScope()) {
         accessToken = savedToken;
         displayUserInfo(null);
         enableUpload();
         return; // Already signed in
+      }
+      // Present but minted under an older scope — drop it and re-consent.
+      if (savedToken && !storedTokenIsCurrentScope()) {
+        console.info('[AUTH] stored token predates the current scope; re-authenticating.');
+        clearStoredToken();
       }
       
       // Only initialize token client if google.accounts is available
       if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
         tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: config.clientId,
-          scope: 'https://www.googleapis.com/auth/spreadsheets',
+          scope: AUTH_SCOPE,
           callback: (response) => {
             if (response.access_token) {
               accessToken = response.access_token;
               // Save token (expires in 1 hour)
               localStorage.setItem('googleAccessToken', accessToken);
               localStorage.setItem('tokenExpiry', Date.now() + 3600000); // 1 hour
+              localStorage.setItem('tokenScopeVersion', String(AUTH_SCOPE_VERSION));
               // Show signed in state
               displayUserInfo(null);
               enableUpload();
@@ -269,6 +359,7 @@
       accessToken = null;
       localStorage.removeItem('googleAccessToken');
       localStorage.removeItem('tokenExpiry');
+      localStorage.removeItem('tokenScopeVersion');
       // Hide the expiry banner before reload — without this, the brief
       // moment between removing tokenExpiry and the page reload would
       // re-trigger checkAuthExpiry and flash the "expired" banner.

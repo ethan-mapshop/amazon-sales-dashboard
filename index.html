@@ -92,22 +92,8 @@
 
         <div class="config-group">
           <label>OAuth Client ID</label>
-          <div id="clientIdDisplay" style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center;">
-            <span>Default client configured ✓</span>
-            <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
-          </div>
-          <div id="clientIdChange" style="display: none; margin-top: 0.75rem;">
-            <input 
-              type="text" 
-              id="customClientId" 
-              placeholder="Enter custom OAuth2 Client ID"
-              style="margin-bottom: 0.5rem;"
-            >
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="btn btn-primary" onclick="saveCustomClientId()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Save</button>
-              <button class="btn btn-secondary" onclick="resetClientId()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Reset to Default</button>
-              <button class="btn btn-secondary" onclick="cancelClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Cancel</button>
-            </div>
+          <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; font-family: 'Roboto Mono', monospace; font-size: 0.875rem; color: var(--text-secondary);">
+            Default client configured &#10003;
           </div>
         </div>
       </div>

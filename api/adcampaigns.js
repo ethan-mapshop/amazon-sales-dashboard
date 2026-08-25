@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { requireUser, verifyUser, authMode } from '../lib/auth.js';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 // Campaign Overview — Amazon ad campaign and portfolio CONFIGURATION.
@@ -7,6 +8,7 @@ import { kv } from '@vercel/kv';
 //   GET ?action=refresh  — fetch from Amazon, diff, store. ?dry=1 computes
 //                          everything and returns it WITHOUT writing.
 //   GET ?action=probe    — raw, unmapped Amazon responses for every endpoint
+//   GET ?action=whoami   — what the server sees for the caller (auth debugging)
 //
 // All three are auth-gated. Nothing here is cron-driven yet.
 //
@@ -181,6 +183,7 @@ export default async function handler(req, res) {
     if (action === 'get')     return handleGet(req, res);
     if (action === 'refresh') return handleRefresh(req, res);
     if (action === 'probe')   return handleProbe(req, res);
+    if (action === 'whoami')  return handleWhoami(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -190,8 +193,7 @@ export default async function handler(req, res) {
 // Pure KV read. The page calls this on every load and it never touches Amazon.
 async function handleGet(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     const [current, portfolios, changes, meta] = await Promise.all([
       kv.get('adcampaigns:current'),
@@ -217,8 +219,7 @@ async function handleGet(req, res) {
 // ─── REFRESH ─────────────────────────────────────────────────────────────────
 async function handleRefresh(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     const missing = missingAdsCredentials();
     if (missing.length) {
@@ -241,8 +242,7 @@ async function handleRefresh(req, res) {
 // this action answered — read its output before trusting a mapped column.
 async function handleProbe(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     const missing = missingAdsCredentials();
     if (missing.length) {
@@ -280,6 +280,40 @@ async function handleProbe(req, res) {
   } catch (error) {
     console.error('[ADCAMPAIGNS PROBE] Error:', error);
     return res.status(500).json({ error: 'Probe failed: ' + error.message });
+  }
+}
+
+// ─── WHOAMI ──────────────────────────────────────────────────────────────────
+// Reports what the server sees for the caller. Deliberately usable while being
+// rejected: an auth change you cannot diagnose from inside the app is one you
+// cannot safely roll forward. Never returns the allowlist contents.
+async function handleWhoami(req, res) {
+  try {
+    const breakGlass = process.env.ADMIN_TOKEN &&
+                       req.headers['x-admin-token'] === process.env.ADMIN_TOKEN;
+
+    const verdict = await verifyUser(req);
+    const payload = {
+      mode: authMode(),
+      ok: verdict.ok === true,
+      code: verdict.code,
+      email: verdict.email || null,
+      audMatches: verdict.audMatches === true,
+      scopes: verdict.scopes || [],
+      tokenLive: verdict.tokenLive === true,
+      googleClientIdConfigured: !!process.env.GOOGLE_CLIENT_ID,
+      allowlistConfigured: !!String(process.env.ALLOWED_EMAILS || '').trim(),
+      cached: verdict.cached === true
+    };
+
+    // Anyone who can already reach this endpoint learns their own verdict;
+    // that is the point. Break-glass only adds the reason string.
+    if (breakGlass) payload.message = verdict.message || null;
+
+    return res.status(200).json({ success: true, ...payload });
+  } catch (error) {
+    console.error('[ADCAMPAIGNS WHOAMI] Error:', error);
+    return res.status(500).json({ error: 'Whoami failed: ' + error.message });
   }
 }
 
@@ -866,14 +900,6 @@ function acTally(values) {
     out[k] = (out[k] || 0) + 1;
   }
   return out;
-}
-
-async function verifyGoogleToken(req) {
-  const accessToken = req.headers.authorization?.replace('Bearer ', '');
-  if (!accessToken) return { ok: false, error: 'No access token provided' };
-  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
-  return { ok: true };
 }
 
 // UTC instant → 'YYYY-MM-DD' in America/Los_Angeles. Vercel runs UTC; Amazon ad

@@ -108,8 +108,13 @@
     const SPREADSHEET_ID = '10EDxzRhOdmu2ldvYHpoVSI0iuJoucy7OZFjM8sfgs80';
     const DEFAULT_CLIENT_ID = '617399879817-55qv09jv9h3qqkthr7ic6m3beiirvp8u.apps.googleusercontent.com';
     
+    // No custom-client-ID override: the API pins the OAuth client id server
+    // side, so a browser minting tokens under a different client would 401 on
+    // every request with no in-app way back. Any stale override is discarded.
+    localStorage.removeItem('customClientId');
+
     let config = {
-      clientId: localStorage.getItem('customClientId') || DEFAULT_CLIENT_ID,
+      clientId: DEFAULT_CLIENT_ID,
       spreadsheetId: SPREADSHEET_ID
     };
 
@@ -229,51 +234,6 @@ if (pageName === 'salesvolume' && accessToken) {
       if (pageName === 'adcampaigns' && accessToken) {
         loadAdCampaigns();
       }
-    }
-    
-    // Client ID management
-    function showClientIdChange() {
-      document.getElementById('clientIdChange').style.display = 'block';
-      const customId = localStorage.getItem('customClientId');
-      if (customId && customId !== DEFAULT_CLIENT_ID) {
-        document.getElementById('customClientId').value = customId;
-      }
-    }
-    
-    function cancelClientIdChange() {
-      document.getElementById('clientIdChange').style.display = 'none';
-      document.getElementById('customClientId').value = '';
-    }
-    
-    function saveCustomClientId() {
-      const newClientId = document.getElementById('customClientId').value.trim();
-      if (!newClientId) {
-        alert('Please enter a valid Client ID');
-        return;
-      }
-      localStorage.setItem('customClientId', newClientId);
-      config.clientId = newClientId;
-      document.getElementById('clientIdDisplay').innerHTML = `
-        <span>Custom client configured ✓</span>
-        <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
-      `;
-      cancelClientIdChange();
-      tokenClient = null;
-      initializeGoogleAuth();
-      alert('Client ID updated! Please sign in again.');
-    }
-    
-    function resetClientId() {
-      localStorage.removeItem('customClientId');
-      config.clientId = DEFAULT_CLIENT_ID;
-      document.getElementById('clientIdDisplay').innerHTML = `
-        <span>Default client configured ✓</span>
-        <button class="btn btn-secondary" onclick="showClientIdChange()" style="padding: 0.5rem 1rem; font-size: 0.8rem;">Change</button>
-      `;
-      cancelClientIdChange();
-      tokenClient = null;
-      initializeGoogleAuth();
-      alert('Reset to default Client ID! Please sign in again.');
     }
     
     // Tab switching (Upload "data-tab" + Campaign Mapping "data-mapping-tab")
