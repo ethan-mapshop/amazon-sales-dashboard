@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { requireUser } from '../lib/auth.js';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 // ShipStation V1 API (ssapi.shipstation.com) with HTTP Basic auth.
@@ -109,8 +110,7 @@ async function handleSync(req, res) {
 // ─── READ ────────────────────────────────────────────────────────────────────
 async function handleGet(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     const { month } = req.query;
     if (!/^\d{4}-\d{2}$/.test(month || '')) return res.status(400).json({ error: 'month=YYYY-MM required' });
@@ -132,8 +132,7 @@ async function handleGet(req, res) {
 
 async function handleGetRange(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     const { startMonth, endMonth } = req.query;
     if (!startMonth || !endMonth) return res.status(400).json({ error: 'startMonth and endMonth required' });
@@ -153,8 +152,7 @@ async function handleGetRange(req, res) {
 
 async function handleGetMonths(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const index = (await kv.get('shipping:index')) || [];
     return res.status(200).json({ success: true, months: index });
   } catch (error) {
@@ -168,8 +166,7 @@ async function handleGetMonths(req, res) {
 // choose to lump them into the FBM total or surface as "pre-API" shipments.
 async function handleMigrateFromSheets(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
 
     const spreadsheetId = req.body?.spreadsheetId;
@@ -252,8 +249,7 @@ async function handleMigrateFromSheets(req, res) {
 // _shippingParseDateServer handles both.
 async function handleUploadYearlyCsv(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : null;
     if (!rawRows) return res.status(400).json({ error: 'rows array required in body' });
@@ -385,8 +381,7 @@ function _shippingParseDateServer(v) {
 // ─── DELETE SHEETS-ONLY ROWS (same cleanup helper as adspend) ────────────────
 async function handleDeleteSheetsRows(req, res) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const { month } = req.body || {};
     if (!/^\d{4}-\d{2}$/.test(month || '')) return res.status(400).json({ error: 'month=YYYY-MM required' });
 
@@ -543,14 +538,6 @@ function normalizeShipments(shipments) {
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-async function verifyGoogleToken(req) {
-  const accessToken = req.headers.authorization?.replace('Bearer ', '');
-  if (!accessToken) return { ok: false, error: 'No access token provided' };
-  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
-  return { ok: true };
-}
 
 function monthBoundDates(yyyymm) {
   const [y, m] = yyyymm.split('-').map(Number);

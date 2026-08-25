@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { requireUser } from '../lib/auth.js';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 // Single endpoint serving product, brand, and fee mappings via ?type=.
@@ -50,8 +51,7 @@ export default async function handler(req, res) {
 // ─── READ ────────────────────────────────────────────────────────────────────
 async function handleGet(req, res, type) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const [mappings, updatedAt] = await Promise.all([
       kv.get(kvKey(type)),
       kv.get(`${kvKey(type)}:updated-at`)
@@ -69,8 +69,7 @@ async function handleGet(req, res, type) {
 
 async function handleLastUpdated(req, res, type) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const updatedAt = await kv.get(`${kvKey(type)}:updated-at`);
     return res.status(200).json({ success: true, updatedAt: updatedAt || null });
   } catch (error) {
@@ -84,8 +83,7 @@ async function handleLastUpdated(req, res, type) {
 // and no skus means unmapped" semantics.
 async function handleSaveOne(req, res, type) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
 
     // Fee mappings are keyed differently — by feeType (a Finances-API
     // breakdownType / FeeType string) rather than campaign name. Body is
@@ -132,8 +130,7 @@ async function handleSaveOne(req, res, type) {
 // ─── DELETE ONE ──────────────────────────────────────────────────────────────
 async function handleDeleteOne(req, res, type) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     // Fee mappings key by feeType; product/brand by campaign.
     const keyField = type === 'fee' ? 'feeType' : 'campaign';
     const key = String(req.body?.[keyField] || '').trim();
@@ -155,8 +152,7 @@ async function handleDeleteOne(req, res, type) {
 // present in the upload are preserved. Headers matched case-insensitively.
 async function handleBulkUpsert(req, res, type) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
     if (!rows) return res.status(400).json({ error: 'rows array required' });
 
@@ -212,8 +208,7 @@ async function handleBulkUpsert(req, res, type) {
 // write the KV dict. Replaces the existing KV state for that type.
 async function handleMigrate(req, res, type) {
   try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
+    if (!await requireUser(req, res)) return;
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
 
     const spreadsheetId = req.body?.spreadsheetId;
@@ -296,10 +291,3 @@ function readField(row, name) {
   return '';
 }
 
-async function verifyGoogleToken(req) {
-  const accessToken = req.headers.authorization?.replace('Bearer ', '');
-  if (!accessToken) return { ok: false, error: 'No access token provided' };
-  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
-  return { ok: true };
-}

@@ -1,5 +1,6 @@
 import SellingPartner from 'amazon-sp-api';
 import { kv } from '@vercel/kv';
+import { requireUser } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   const { action } = req.query;
@@ -43,11 +44,7 @@ export default async function handler(req, res) {
 // Returns stored orders from Upstash, optionally filtered by date range
 async function handleGet(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const { startDate, endDate } = req.query;
 
@@ -161,10 +158,7 @@ async function handleSync(req, res) {
 // Returns pre-aggregated monthly summary from cache. Fast single KV read.
 async function handleGetSummary(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const summary = await kv.get('orders:monthly-summary');
     return res.status(200).json({ success: true, summary: summary || [] });
@@ -197,10 +191,7 @@ async function rebuildSummaryCache() {
 // HTTP handler — auth-gated, calls rebuildSummaryCache()
 async function handleRebuildSummary(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const summary = await rebuildSummaryCache();
     return res.status(200).json({ success: true, records: summary.length });
@@ -218,11 +209,7 @@ async function handleRebuildSummary(req, res) {
 // rollback.
 async function handleGetV2(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const { startDate, endDate } = req.query;
 
@@ -277,10 +264,7 @@ async function handleGetV2(req, res) {
 // Case-tolerant on keys (matches the transactions uploader pattern).
 async function handleUploadOrdersReport(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : null;
     if (!rawRows) return res.status(400).json({ error: 'rows array required in body' });
@@ -643,10 +627,7 @@ async function handleRequestFlatFileReport(req, res) {
   // per-request failure to lastResults (surfaces in the UI status panel).
   let resultKey;
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const { month, start, end } = req.body || {};
     let tag, dataStartTime, dataEndTime;
@@ -881,10 +862,7 @@ function _extractSpApiErrorMessage(err) {
 // Returns { success, collected, stillPending, failed, remaining }.
 async function handlePollFlatFileReport(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const overwrite = req.query.overwrite === 'true';
     const result = await _pollPendingReports({ overwrite, mergeMode: false });
@@ -1146,10 +1124,7 @@ async function _pollPendingReports({ overwrite = false, mergeMode = false } = {}
 // without triggering a poll (which would consume SP-API quota).
 async function handleListPendingReports(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const [pending, lastResults] = await Promise.all([
       kv.get('orders:v2:pending-reports'),
@@ -1182,10 +1157,7 @@ async function handleListPendingReports(req, res) {
 // Body: { months: ['YYYY-MM', ...] }
 async function handleDeleteV2Months(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const months = Array.isArray(req.body?.months) ? req.body.months : null;
     if (!months || months.length === 0) {
@@ -1463,10 +1435,7 @@ async function handleCronDataCheck(req, res) {
 // banner. Auth-gated (unlike the cron actions).
 async function handleGetAlerts(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const [alertsRaw, heartbeat] = await Promise.all([
       kv.get('orders:v2:alerts'),
@@ -1491,10 +1460,7 @@ async function handleGetAlerts(req, res) {
 // audit, but doesn't render in the banner). Body: { id }.
 async function handleDismissAlert(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!accessToken) return res.status(401).json({ error: 'No access token provided' });
-    const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    if (!verify.ok) return res.status(401).json({ error: 'Invalid access token' });
+    if (!await requireUser(req, res)) return;
 
     const id = req.body?.id;
     if (!id) return res.status(400).json({ error: 'id required in body' });

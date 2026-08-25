@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { requireUser } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   const { action } = req.query;
@@ -28,18 +29,7 @@ export default async function handler(req, res) {
 // SAVE: Save encrypted credential to Upstash
 async function handleSave(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!accessToken) {
-      return res.status(401).json({ error: 'No access token provided' });
-    }
-
-    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    
-    if (!verifyResponse.ok) {
-      return res.status(401).json({ error: 'Invalid access token' });
-    }
-
+    if (!await requireUser(req, res)) return;
     const { key, value } = req.body;
 
     if (!key || !value) {
@@ -123,18 +113,7 @@ async function decryptValue(encryptedHex, key) {
 // GET: Retrieve all encrypted credentials
 async function handleGet(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!accessToken) {
-      return res.status(401).json({ error: 'No access token provided' });
-    }
-
-    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    
-    if (!verifyResponse.ok) {
-      return res.status(401).json({ error: 'Invalid access token' });
-    }
-
+    if (!await requireUser(req, res)) return;
     const encryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
     if (!encryptionKey) {
       return res.status(500).json({ error: 'Encryption key not configured' });
@@ -186,18 +165,7 @@ async function handleGet(req, res) {
 // VERCEL-STATUS: Check which credentials exist in Vercel env vars
 async function handleVercelStatus(req, res) {
   try {
-    const accessToken = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!accessToken) {
-      return res.status(401).json({ error: 'No access token provided' });
-    }
-
-    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
-    
-    if (!verifyResponse.ok) {
-      return res.status(401).json({ error: 'Invalid access token' });
-    }
-
+    if (!await requireUser(req, res)) return;
     const vercelToken = process.env.VERCEL_TOKEN;
     const projectId = process.env.VERCEL_PROJECT_ID;
 
