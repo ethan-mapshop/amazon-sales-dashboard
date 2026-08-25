@@ -17,7 +17,7 @@
       { field: 'campaignType',    label: 'Type',          filter: true },
       { field: 'adProduct',       label: 'Ad',            filter: true },
       { field: 'state',           label: 'State',         filter: true },
-      { field: 'brand',           label: 'Brand',         filter: true },
+      { field: 'brand',           label: 'Brand',         filter: true, editable: 'brand' },
       { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money' },
       { field: 'biddingStrategy', label: 'Bidding' },
       { field: 'placements',      label: 'Placements',    format: 'placements' },
@@ -98,7 +98,6 @@
     // re-render mid-edit then restores what was typed instead of discarding it.
     let acoEditingId = null;
     let acoEditDraft = null;
-    let acoEditStage = 'form';   // 'form' | 'confirm'
     let acoEditBusy = false;
     let acoEditError = null;
     let acoFlash = null;
@@ -475,8 +474,15 @@
     }
 
     function acoCampaignRow(c, pfId, collapsed) {
-      const editIcon = `<span class="aco-edit-affordance" data-aco-edit="${escapeHtml(c.campaignId)}" title="Edit this campaign">&#9998;</span>`;
+      const editing = c.campaignId === acoEditingId;
+      const editIcon = editing
+        ? acoRowActions(c)
+        : `<span class="aco-edit-affordance" data-aco-edit="${escapeHtml(c.campaignId)}" title="Edit this campaign">&#9998;</span>`;
       const cells = ACO_VISIBLE.map(col => {
+        // An editable column swaps its display value for a control in place.
+        if (editing && col.editable) {
+          return `<td class="aco-cell-editing">${acoEditCell(col, c)}</td>`;
+        }
         const align = col.align === 'right' ? 'text-align: right;' : '';
         const mono = col.mono ? "font-family: 'Roboto Mono', monospace;" : '';
         let value;
@@ -515,90 +521,57 @@
         } else {
           value = escapeHtml(c[col.field] === null || c[col.field] === undefined ? '—' : c[col.field]);
         }
-        if (col.field === 'name') value += editIcon;
+        if (col.field === 'name') {
+          value += editIcon;
+          // The failure message belongs next to the row that failed, not in a
+          // banner somewhere else on the page.
+          if (editing && acoEditError) {
+            value += `<div class="aco-row-error">${escapeHtml(acoEditError)}</div>`;
+          }
+        }
         return `<td style="${align} ${mono}">${value}</td>`;
       }).join('');
 
       const archived = c.presumedArchived ? ' title="Absent from recent syncs — presumed archived"' : '';
       // A collapsed group must not hide the row being edited.
-      const editing = c.campaignId === acoEditingId;
       const hidden = collapsed && !editing;
-      const row = `<tr class="aco-campaign-row" data-aco-pf="${escapeHtml(pfId)}" data-aco-id="${escapeHtml(c.campaignId)}"${archived}
+      return `<tr class="aco-campaign-row${editing ? ' aco-row-editing' : ''}" data-aco-pf="${escapeHtml(pfId)}" data-aco-id="${escapeHtml(c.campaignId)}"${archived}
                   style="display: ${hidden ? 'none' : 'table-row'};${c.presumedArchived ? ' opacity: 0.5;' : ''}">${cells}</tr>`;
-      return editing ? row + acoEditRow(c) : row;
     }
 
     // ── EDITOR ───────────────────────────────────────────────────────────────
+    // Editing happens IN the row: the editable cells become controls in place
+    // and the ✎ is replaced by Save / Cancel, following the in-place pattern in
+    // js/credentials.js rather than opening a panel underneath.
 
-    function acoEditRow(c) {
-      const body = acoEditStage === 'confirm' ? acoEditConfirm(c) : acoEditForm(c);
-      return `<tr class="aco-edit-row"><td colspan="${ACO_VISIBLE.length}">${body}</td></tr>`;
-    }
-
-    function acoEditForm(c) {
-      const brands = acoBrandOptions();
+    // Renders the control for one editable cell, valued from the draft so an
+    // unrelated re-render (search keystroke, filter change) restores what was
+    // chosen rather than discarding it.
+    function acoEditCell(col, c) {
       const draft = acoEditDraft || {};
-      const selected = draft.brand === null || draft.brand === undefined ? '' : draft.brand;
-
-      return `
-        <div class="aco-edit-panel">
-          <div class="aco-edit-title">Editing <strong>${escapeHtml(c.name)}</strong></div>
-          <div class="aco-edit-grid">
-            <label class="aco-edit-field">
-              <span>Brand
-                <em title="Stored in the dashboard only — Amazon has no brand field">dashboard only</em>
-              </span>
-              <select data-aco-input="brand">
-                <option value=""${selected === '' ? ' selected' : ''}>Use name prefix${c.brandFromPrefix ? ` (${escapeHtml(c.brandFromPrefix)})` : ' — no match'}</option>
-                ${brands.map(b => `<option value="${escapeHtml(b)}"${selected === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
-              </select>
-            </label>
-          </div>
-          ${acoEditErrorBlock()}
-          <div class="aco-edit-actions">
-            <button class="btn btn-primary" data-aco-action="review"${acoEditDiffs(c).length ? '' : ' disabled'}>Review change</button>
-            <button class="btn btn-secondary" data-aco-action="cancel">Cancel</button>
-          </div>
-        </div>`;
+      if (col.editable === 'brand') {
+        const selected = draft.brand === null || draft.brand === undefined ? '' : draft.brand;
+        const opts = acoBrandOptions();
+        return `<select class="aco-cell-input" data-aco-input="brand"
+                        title="Stored in the dashboard only — Amazon has no brand field">
+          <option value=""${selected === '' ? ' selected' : ''}>${c.brandFromPrefix ? escapeHtml(c.brandFromPrefix) + ' (from name)' : 'unmapped'}</option>
+          ${opts.map(b => `<option value="${escapeHtml(b)}"${selected === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+        </select>`;
+      }
+      return '';
     }
 
-    function acoEditConfirm(c) {
-      const diffs = acoEditDiffs(c);
-      const local = diffs.filter(d => d.scope === 'local');
-      const amazon = diffs.filter(d => d.scope === 'amazon');
-
-      // Two headings, always. Five of the six editable fields go to Amazon and
-      // one does not; a single undifferentiated list invites the wrong
-      // conclusion about where the change landed.
-      const section = (title, list, note) => list.length ? `
-        <div class="aco-edit-section">
-          <div class="aco-edit-section-title">${escapeHtml(title)}</div>
-          ${note ? `<div class="aco-edit-note">${escapeHtml(note)}</div>` : ''}
-          ${list.map(d => `
-            <div class="aco-edit-diff">
-              <span>${escapeHtml(d.label)}</span>
-              <span class="aco-edit-from">${escapeHtml(d.from ?? '—')}</span>
-              <span>&rarr;</span>
-              <strong>${escapeHtml(d.to ?? '—')}</strong>
-            </div>`).join('')}
-        </div>` : '';
-
-      return `
-        <div class="aco-edit-panel aco-edit-confirming">
-          <div class="aco-edit-title">Confirm change to <strong>${escapeHtml(c.name)}</strong></div>
-          ${section('Sent to Amazon', amazon)}
-          ${section('Dashboard only', local, 'Stored here; nothing is sent to Amazon.')}
-          ${acoEditErrorBlock()}
-          <div class="aco-edit-actions">
-            <button class="btn btn-primary" data-aco-action="save"${acoEditBusy ? ' disabled' : ''}>${acoEditBusy ? 'Saving<span class="loading"></span>' : 'Confirm'}</button>
-            <button class="btn btn-secondary" data-aco-action="back"${acoEditBusy ? ' disabled' : ''}>Back</button>
-          </div>
-        </div>`;
-    }
-
-    function acoEditErrorBlock() {
-      if (!acoEditError) return '';
-      return `<div class="aco-edit-error">${escapeHtml(acoEditError)}</div>`;
+    // Save / Cancel take the ✎'s place, so no extra column is needed.
+    function acoRowActions(c) {
+      const dirty = acoEditDiffs(c).length > 0;
+      if (acoEditBusy) {
+        return `<span class="aco-row-actions"><span class="loading"></span></span>`;
+      }
+      return `<span class="aco-row-actions">
+        <button class="aco-row-btn aco-row-save" data-aco-action="save"${dirty ? '' : ' disabled'}
+                title="${dirty ? 'Save changes' : 'Nothing changed yet'}">&#10003;</button>
+        <button class="aco-row-btn" data-aco-action="cancel" title="Cancel">&#10005;</button>
+      </span>`;
     }
 
     function acoBrandOptions() {
@@ -612,10 +585,12 @@
     function acoEditDiffs(c) {
       const draft = acoEditDraft || {};
       const out = [];
-      const wanted = draft.brand === '' ? null : draft.brand;
-      const effective = wanted === null ? (c.brandFromPrefix || null) : wanted;
-      if ((effective || null) !== (c.brand || null)) {
-        out.push({ field: 'brand', label: 'Brand', scope: 'local', from: c.brand, to: effective });
+      if ('brand' in draft) {
+        const wanted = draft.brand === '' ? null : draft.brand;
+        const effective = wanted === null ? (c.brandFromPrefix || null) : wanted;
+        if ((effective || null) !== (c.brand || null)) {
+          out.push({ field: 'brand', label: 'Brand', scope: 'local', from: c.brand, to: effective });
+        }
       }
       return out;
     }
@@ -624,7 +599,6 @@
       const c = acoData.campaigns.find(x => x.campaignId === campaignId);
       if (!c) return;
       acoEditingId = campaignId;
-      acoEditStage = 'form';
       acoEditError = null;
       acoEditDraft = { brand: c.brandSource === 'override' ? c.brand : '' };
       acoCollapsed.delete(c.portfolioId || '(none)');
@@ -634,7 +608,6 @@
     function acoCancelEdit() {
       acoEditingId = null;
       acoEditDraft = null;
-      acoEditStage = 'form';
       acoEditError = null;
       acoRenderTable();
     }
@@ -665,19 +638,17 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) throw new Error(data.error || `Save failed (${res.status})`);
 
-        acoFlash = `Updated ${c.name}: ${diffs.map(d => `${d.label} ${d.from ?? '—'} → ${d.to ?? '—'}`).join(', ')}`;
+        acoFlash = `${c.name}: ${diffs.map(d => `${d.label} ${d.from ?? '—'} → ${d.to ?? '—'}`).join(', ')}`;
         acoEditingId = null;
         acoEditDraft = null;
-        acoEditStage = 'form';
         // No optimistic update — the row's new values come back from the server.
         loadAdCampaigns();
       } catch (err) {
         console.error('[ACO] save failed:', err);
         acoEditError = err.message;
       } finally {
-        // Clear busy BEFORE re-rendering, or the failed save leaves the Confirm
-        // button disabled for good and the only way to retry is to cancel and
-        // start the edit again.
+        // Clear busy BEFORE re-rendering, or a failed save leaves Save disabled
+        // for good and the only way to retry is to cancel and start again.
         acoEditBusy = false;
         if (acoEditingId) acoRenderTable();
       }
@@ -754,7 +725,7 @@
         const key = e.target && e.target.dataset && e.target.dataset.acoInput;
         if (!key || !acoEditDraft) return;
         acoEditDraft[key] = e.target.value;
-        acoRenderTable();   // re-enables "Review change" once something differs
+        acoRenderTable();   // re-evaluates whether Save should be enabled
       });
 
       if (wrap) wrap.addEventListener('click', e => {
@@ -765,9 +736,7 @@
         if (action) {
           const what = action.dataset.acoAction;
           if (what === 'cancel') acoCancelEdit();
-          else if (what === 'review') { acoEditStage = 'confirm'; acoEditError = null; acoRenderTable(); }
-          else if (what === 'back')   { acoEditStage = 'form';    acoEditError = null; acoRenderTable(); }
-          else if (what === 'save')   acoSaveEdit();
+          else if (what === 'save') acoSaveEdit();
           return;
         }
 
