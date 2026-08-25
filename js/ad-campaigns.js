@@ -168,9 +168,9 @@
       );
 
       container.innerHTML =
-        acoStats() + acoCoverageBanner() + acoToolbar() +
+        acoStats() + acoCoverageNotes() + acoCoverageBanner() + acoToolbar() +
         '<div id="aco-table-wrap"></div>' +
-        acoChangesCard() + '<div id="aco-diagnostic"></div>';
+        acoChangesCard() + acoCoverageDetails() + '<div id="aco-diagnostic"></div>';
 
       acoRenderTable();
       acoBindControls();
@@ -190,33 +190,82 @@
         </div>`;
     }
 
-    // Under-resolved fields are the thing this page exists to make visible.
-    // A budget column that silently resolved for 3 of 142 is exactly the
-    // failure that took three attempts to find last time.
+    // Warns about WRONG KEYS, not absent values. A field that is legitimately
+    // empty — an open-ended campaign has no end date, Sponsored Brands has no
+    // targetingType — is not a failure, and reporting it as one buried the
+    // single case this exists to catch. Coverage counts enabled campaigns only.
     function acoCoverageBanner() {
-      const cov = acoData.meta && acoData.meta.coverage && acoData.meta.coverage.campaigns;
+      const cov = acoCoverage();
       if (!cov) return '';
-      const short = Object.entries(cov)
-        .filter(([, v]) => v.total && v.resolved < v.total)
-        .sort((a, b) => (a[1].resolved / a[1].total) - (b[1].resolved / b[1].total));
-      if (!short.length) return '';
+      const wrong = Object.entries(cov.fields).filter(([, v]) => v.looksWrong);
+      if (!wrong.length) return '';
 
-      const severe = short.some(([, v]) => v.resolved < v.total * 0.5);
       return `
-        <div class="card" style="margin-bottom: 1.5rem; border-left: 3px solid ${severe ? 'var(--error)' : 'var(--warning)'};">
-          <div style="font-weight: 600; color: ${severe ? 'var(--error)' : 'var(--warning)'}; margin-bottom: 0.5rem;">
-            ${short.length} field${short.length === 1 ? '' : 's'} did not resolve for every campaign
+        <div class="card" style="margin-bottom: 1.5rem; border-left: 3px solid var(--error);">
+          <div style="font-weight: 600; color: var(--error); margin-bottom: 0.5rem;">
+            ${wrong.length} field${wrong.length === 1 ? ' looks' : 's look'} like the wrong key
           </div>
           <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 0.75rem;">
-            Amazon returned no usable value for these. If a field is near zero, the key it is being
-            read from is probably wrong — run the raw probe below to see the real field names.
+            These are missing on campaigns that should have them, or resolving through more than one
+            key — which means the shape varies and at least one guess is wrong. Run the raw probe to
+            see the real field names.
           </div>
           <div style="font-family: monospace; font-size: 0.75rem; line-height: 1.7;">
-            ${short.map(([f, v]) => {
+            ${wrong.map(([f, v]) => {
               const via = Object.entries(v.viaKey || {}).map(([k, n]) => `${escapeHtml(k)}×${n}`).join(', ');
-              return `<div>${escapeHtml(f)}: ${v.resolved} of ${v.total}${via ? ` — via ${via}` : ''}</div>`;
+              return `<div>${escapeHtml(f)}: ${v.resolved} of ${v.applicable}${v.appliesTo ? ` ${escapeHtml(v.appliesTo)}` : ''} enabled${via ? ` — via ${via}` : ''}</div>`;
             }).join('')}
           </div>
+        </div>`;
+    }
+
+    function acoCoverage() {
+      const cov = acoData.meta && acoData.meta.coverage && acoData.meta.coverage.campaigns;
+      // Snapshots written before coverage gained its rules have the old flat
+      // shape; skip rather than render nonsense until the next refresh.
+      return cov && cov.fields ? cov : null;
+    }
+
+    // Absences that are facts about the account rather than mapping errors.
+    // Worth knowing, not worth a warning.
+    function acoCoverageNotes() {
+      const cov = acoCoverage();
+      if (!cov) return '';
+      const notes = Object.entries(cov.fields)
+        .filter(([, v]) => v.informational && v.applicable && v.resolved < v.applicable)
+        .map(([f, v]) => `${v.applicable - v.resolved} of ${v.applicable} without ${escapeHtml(f === 'portfolioId' ? 'a portfolio' : f)}`);
+      if (!notes.length) return '';
+      return `<div style="color: var(--text-secondary); font-size: 0.8125rem; margin: -0.75rem 0 1.25rem 0;">
+        Across ${cov.scope.counted} enabled campaigns: ${notes.join(' · ')}.
+      </div>`;
+    }
+
+    // The full picture, for when you want it rather than in your face.
+    function acoCoverageDetails() {
+      const cov = acoCoverage();
+      if (!cov) return '';
+      const rows = Object.entries(cov.fields).map(([f, v]) => {
+        const note = v.optional ? 'optional' : v.informational ? 'informational'
+                   : v.appliesTo ? `${v.appliesTo} only` : '';
+        const via = Object.entries(v.viaKey || {}).map(([k, n]) => `${k}×${n}`).join(', ');
+        const colour = v.looksWrong ? 'var(--error)'
+                     : v.resolved === v.applicable ? 'var(--success)' : 'var(--text-secondary)';
+        return `<tr>
+          <td>${escapeHtml(f)}</td>
+          <td style="color: ${colour};">${v.resolved} of ${v.applicable}</td>
+          <td style="color: var(--text-secondary);">${escapeHtml(note)}</td>
+          <td style="font-family: monospace; font-size: 0.7rem; color: var(--text-secondary);">${escapeHtml(via)}</td>
+        </tr>`;
+      }).join('');
+      return `
+        <div class="card card-flat" style="margin-top: 1.5rem;">
+          <details>
+            <summary style="cursor: pointer; font-weight: 600;">Field coverage (${cov.scope.counted} enabled of ${cov.scope.of})</summary>
+            <div style="margin-top: 1rem; overflow-x: auto;">
+              <table><thead><tr><th>Field</th><th>Resolved</th><th></th><th>Read from</th></tr></thead>
+              <tbody>${rows}</tbody></table>
+            </div>
+          </details>
         </div>`;
     }
 

@@ -90,6 +90,29 @@ const AC_PORTFOLIO_KEYS = {
   inBudget:     ['inBudget']
 };
 
+// Coverage is a wrong-key detector, not an absence detector. Without these
+// rules it reports legitimately-empty fields as failures and buries the one
+// case it exists to catch.
+//
+//   optional      - absent is normal (an open-ended campaign has no end date)
+//   informational - absence is a fact about the account, not a mapping error
+//   appliesTo     - the field only exists for that ad product, so measuring it
+//                   against the whole account understates it by design
+const AC_FIELD_RULES = {
+  endDate:         { optional: true },
+  portfolioId:     { informational: true },
+  targetingType:   { appliesTo: 'SP' },
+  biddingStrategy: { appliesTo: 'SP' }
+};
+
+const AC_PORTFOLIO_RULES = {
+  budgetAmount: { informational: true },
+  budgetPolicy: { informational: true },
+  budgetStart:  { optional: true },
+  budgetEnd:    { optional: true },
+  inBudget:     { optional: true }
+};
+
 // Brand prefixes, longest first. MUST stay in step with PRODUCT_BRAND_SHORT in
 // js/core.js — these strings are how this data would ever join to anything else
 // in the dashboard. This is the third copy of this table in the repo (the
@@ -288,12 +311,14 @@ async function acRunSync({ dry = false, force = false } = {}) {
 
   const coverage = {
     campaigns:  acFieldCoverage(campaigns, AC_CAMPAIGN_KEYS, hits),
-    portfolios: acFieldCoverage(portfolios, AC_PORTFOLIO_KEYS, pfHits)
+    portfolios: acFieldCoverage(portfolios, AC_PORTFOLIO_KEYS, pfHits, AC_PORTFOLIO_RULES)
   };
 
-  for (const [field, c] of Object.entries(coverage.campaigns)) {
-    if (c.total && c.resolved < c.total) {
-      warnings.push(`campaigns.${field}: resolved ${c.resolved} of ${c.total}`);
+  for (const [field, c] of Object.entries(coverage.campaigns.fields)) {
+    if (acCoverageLooksWrong(c)) {
+      const keys = Object.keys(c.viaKey || {}).length;
+      warnings.push(`campaigns.${field}: resolved ${c.resolved} of ${c.applicable} enabled` +
+                    (keys > 1 ? ` via ${keys} different keys` : ''));
     }
   }
 
@@ -477,19 +502,31 @@ function acBuildRequest(accessToken, spec, nextToken, offset) {
 // ─── MAPPING ─────────────────────────────────────────────────────────────────
 
 function acMapCampaign(raw, adProduct, hits) {
-  const scope = hits[adProduct] = hits[adProduct] || {};
+  // State is read first because it decides which bucket the key-hits land in.
+  // Coverage counts enabled campaigns only, so the viaKey tally has to be
+  // measured over that same population or the two numbers disagree.
+  const stateHits = {};
+  const state = acStr(acPick(raw, AC_CAMPAIGN_KEYS.state, stateHits, 'state')).toUpperCase() || null;
+  const bucket = state === 'ENABLED' ? 'enabled' : 'other';
+  const scope = hits[bucket] = hits[bucket] || {};
+  acMergeHits(scope, stateHits);
+
   const name = acStr(acPick(raw, AC_CAMPAIGN_KEYS.name, scope, 'name'));
-  const type = acCampaignType(name, acStr(acPick(raw, AC_CAMPAIGN_KEYS.targetingType, scope, 'targetingType')));
+  // Read once and reused. Picking it twice - once here, once for the field -
+  // double-counted every hit and made the tally disagree with the resolved
+  // count, which is the fastest way to make a diagnostic untrustworthy.
+  const targeting = acStr(acPick(raw, AC_CAMPAIGN_KEYS.targetingType, scope, 'targetingType'));
+  const type = acCampaignType(name, targeting);
 
   return {
     campaignId:      acStr(acPick(raw, AC_CAMPAIGN_KEYS.campaignId, scope, 'campaignId')),
     adProduct,
     name,
-    state:           acStr(acPick(raw, AC_CAMPAIGN_KEYS.state, scope, 'state')).toUpperCase() || null,
+    state,
     // null means UNKNOWN, never 0 — a zero budget is a real and different fact.
     dailyBudget:     acNum(acPick(raw, AC_CAMPAIGN_KEYS.dailyBudget, scope, 'dailyBudget')),
     budgetType:      acStr(acPick(raw, AC_CAMPAIGN_KEYS.budgetType, scope, 'budgetType')) || null,
-    targetingType:   acStr(acPick(raw, AC_CAMPAIGN_KEYS.targetingType, scope, 'targetingType')) || null,
+    targetingType:   targeting || null,
     biddingStrategy: acStr(acPick(raw, AC_CAMPAIGN_KEYS.biddingStrategy, scope, 'biddingStrategy')) || null,
     portfolioId:     acStr(acPick(raw, AC_CAMPAIGN_KEYS.portfolioId, scope, 'portfolioId')) || null,
     startDate:       acDate(acPick(raw, AC_CAMPAIGN_KEYS.startDate, scope, 'startDate')),
@@ -502,11 +539,15 @@ function acMapCampaign(raw, adProduct, hits) {
 }
 
 function acMapPortfolio(raw, hits) {
-  const scope = hits.pf = hits.pf || {};
+  const stateHits = {};
+  const state = acStr(acPick(raw, AC_PORTFOLIO_KEYS.state, stateHits, 'state'));
+  const bucket = (String(state).toUpperCase() === 'ENABLED' || state === '') ? 'enabled' : 'other';
+  const scope = hits[bucket] = hits[bucket] || {};
+  acMergeHits(scope, stateHits);
   return {
     portfolioId:  acStr(acPick(raw, AC_PORTFOLIO_KEYS.portfolioId, scope, 'portfolioId')),
     name:         acStr(acPick(raw, AC_PORTFOLIO_KEYS.name, scope, 'name')),
-    state:        acStr(acPick(raw, AC_PORTFOLIO_KEYS.state, scope, 'state')) || null,
+    state:        state || null,
     budgetAmount: acNum(acPick(raw, AC_PORTFOLIO_KEYS.budgetAmount, scope, 'budgetAmount')),
     // Policy is load-bearing: a portfolio budget is a PERIOD TOTAL, not a daily
     // cap. Dropping it invites comparing it against a sum of daily budgets,
@@ -553,21 +594,54 @@ function acBrandFromPrefix(name) {
 // ─── COVERAGE ────────────────────────────────────────────────────────────────
 // "resolved 3 of 142 via budget.amount" on run one beats discovering a week
 // later that a check has quietly been evaluating nothing.
-function acFieldCoverage(rows, keySpec, hits) {
-  const out = {};
-  const total = rows.length;
-  const allHits = {};
-  for (const scope of Object.values(hits || {})) {
-    for (const [field, byKey] of Object.entries(scope)) {
-      allHits[field] = allHits[field] || {};
-      for (const [k, n] of Object.entries(byKey)) allHits[field][k] = (allHits[field][k] || 0) + n;
-    }
-  }
+function acFieldCoverage(rows, keySpec, hits, rules) {
+  const ruleSet = rules || AC_FIELD_RULES;
+  // Enabled only. A paused campaign with no portfolio is not a finding, and a
+  // wrong key would fail across every state anyway - so enabled is a valid
+  // sample and a far quieter one.
+  const enabled = rows.filter(r => !r.state || String(r.state).toUpperCase() === 'ENABLED');
+  const enabledHits = (hits && hits.enabled) || {};
+
+  const fields = {};
   for (const field of Object.keys(keySpec)) {
-    const resolved = rows.filter(r => r[field] !== null && r[field] !== undefined && r[field] !== '').length;
-    out[field] = { resolved, total, viaKey: allHits[field] || {} };
+    const rule = ruleSet[field] || {};
+    const applicableRows = rule.appliesTo
+      ? enabled.filter(r => r.adProduct === rule.appliesTo)
+      : enabled;
+    const resolved = applicableRows.filter(
+      r => r[field] !== null && r[field] !== undefined && r[field] !== ''
+    ).length;
+    fields[field] = {
+      resolved,
+      applicable: applicableRows.length,
+      viaKey: enabledHits[field] || {},
+      optional: !!rule.optional,
+      informational: !!rule.informational,
+      appliesTo: rule.appliesTo || null
+    };
+    // Stamped here rather than recomputed in the browser, so there is one
+    // definition of "this looks like a wrong key" instead of two.
+    fields[field].looksWrong = acCoverageLooksWrong(fields[field]);
   }
-  return out;
+
+  return { scope: { basis: 'enabled', counted: enabled.length, of: rows.length }, fields };
+}
+
+// A wrong key looks like: a required field missing on a tenth or more of the
+// campaigns it applies to, or one field resolving through several different
+// keys - which means the shape varies between campaigns and at least one of
+// the guesses is wrong.
+function acCoverageLooksWrong(c) {
+  if (c.optional || c.informational) return false;
+  if (Object.keys(c.viaKey || {}).length > 1) return true;
+  return c.applicable > 0 && c.resolved < c.applicable * 0.9;
+}
+
+function acMergeHits(target, source) {
+  for (const [field, byKey] of Object.entries(source || {})) {
+    target[field] = target[field] || {};
+    for (const [k, n] of Object.entries(byKey)) target[field][k] = (target[field][k] || 0) + n;
+  }
 }
 
 // ─── PRESENCE ────────────────────────────────────────────────────────────────
@@ -790,4 +864,5 @@ function _ptDate(instant) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage, AC_CONFIG };
+export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
+         acCoverageLooksWrong, AC_CONFIG };
