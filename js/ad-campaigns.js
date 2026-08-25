@@ -33,7 +33,7 @@
     let acoData = { campaigns: [], portfolios: [], changes: [], meta: null, syncedAt: null };
     let acoFilters = {};
     let acoSearch = '';
-    let acoOnlyEnabled = false;
+    let acoOnlyEnabled = true;   // most of the time you only care about what's running
     let acoCollapsed = new Set();
     let acoBusy = false;
 
@@ -240,6 +240,14 @@
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(c);
       }
+      // Unfiltered, so the portfolio summary stays a fact about the portfolio
+      // rather than a restatement of the filter.
+      const allByPf = new Map();
+      for (const c of acoData.campaigns) {
+        const key = c.portfolioId || '(none)';
+        if (!allByPf.has(key)) allByPf.set(key, []);
+        allByPf.get(key).push(c);
+      }
 
       if (!groups.size) {
         wrap.innerHTML = '<div style="padding: 3rem; text-align: center; color: var(--text-secondary);">No campaigns match these filters.</div>';
@@ -259,7 +267,7 @@
         const pf = pfById.get(pfId);
         const collapsed = acoCollapsed.has(pfId);
         return `<tbody class="aco-group">
-          ${acoPortfolioRow(pfId, pf, rows, collapsed)}
+          ${acoPortfolioRow(pfId, pf, allByPf.get(pfId) || rows, rows.length, collapsed)}
           ${rows.sort((a, b) => String(a.name).localeCompare(String(b.name)))
                 .map(c => acoCampaignRow(c, pfId, collapsed)).join('')}
         </tbody>`;
@@ -276,7 +284,8 @@
       });
     }
 
-    function acoPortfolioRow(pfId, pf, rows, collapsed) {
+    function acoPortfolioRow(pfId, pf, allRows, shownCount, collapsed) {
+      const rows = allRows;
       const enabled = rows.filter(r => r.state === 'ENABLED');
       const total = enabled.reduce((s, r) => s + (typeof r.dailyBudget === 'number' ? r.dailyBudget : 0), 0);
       const name = pf ? pf.name : '(no portfolio)';
@@ -294,7 +303,9 @@
           <td><span class="expand-icon">▶</span><strong>${escapeHtml(name)}</strong></td>
           <td>${acoTypeChips(rows)}</td>
           <td></td>
-          <td style="color: var(--text-secondary);">${enabled.length} of ${rows.length} on</td>
+          <td style="color: var(--text-secondary);">${enabled.length} of ${rows.length} on${
+            shownCount < rows.length ? ` <span style="opacity: 0.6;">(${shownCount} shown)</span>` : ''
+          }</td>
           <td style="color: var(--text-secondary);">${escapeHtml(rows[0]?.brand || '—')}</td>
           <td style="text-align: right; font-family: monospace;">$${formatNumber(total)}</td>
           <td colspan="2" style="color: var(--text-secondary); font-size: 0.75rem;">${cap}</td>
@@ -306,9 +317,17 @@
     // would miss exactly the SKU that has no portfolio.
     function acoTypeChips(rows) {
       const present = new Set(rows.filter(r => r.state !== 'ARCHIVED').map(r => r.campaignType));
+      const live = new Set(rows.filter(r => r.state === 'ENABLED').map(r => r.campaignType));
       return ['Auto', 'Broad', 'Exact', 'ASIN'].map(t => {
-        const on = present.has(t);
-        return `<span title="campaign types in this portfolio" style="display: inline-block; margin-right: 0.35rem; font-size: 0.7rem; color: ${on ? 'var(--success)' : 'var(--text-secondary)'}; opacity: ${on ? 1 : 0.45};">${t}</span>`;
+        const exists = present.has(t);
+        const running = live.has(t);
+        const title = running ? `${t}: running`
+                    : exists ? `${t}: exists but not enabled`
+                    : `${t}: no campaign of this type in this portfolio`;
+        // Three states, because "paused" and "absent" are different findings —
+        // one is a campaign to switch on, the other is a gap to fill.
+        const color = running ? 'var(--success)' : exists ? 'var(--warning)' : 'var(--text-secondary)';
+        return `<span title="${escapeHtml(title)}" style="display: inline-block; margin-right: 0.35rem; font-size: 0.7rem; color: ${color}; opacity: ${exists ? 1 : 0.4};">${t}</span>`;
       }).join('');
     }
 
