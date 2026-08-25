@@ -1,6 +1,5 @@
 import SellingPartner from 'amazon-sp-api';
 import { kv } from '@vercel/kv';
-import { requireUser } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   const { action } = req.query;
@@ -40,7 +39,18 @@ export default async function handler(req, res) {
 // REQUEST: Request a new report
 async function handleRequest(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!accessToken) {
+      return res.status(401).json({ error: 'No access token provided' });
+    }
+
+    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    
+    if (!verifyResponse.ok) {
+      return res.status(401).json({ error: 'Invalid access token' });
+    }
+
     const { startDate, endDate } = req.body;
 
     if (!startDate || !endDate) {
@@ -173,7 +183,18 @@ async function handleDownload(req, res) {
 // GET: Retrieve stored session data
 async function handleGet(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!accessToken) {
+      return res.status(401).json({ error: 'No access token provided' });
+    }
+
+    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    
+    if (!verifyResponse.ok) {
+      return res.status(401).json({ error: 'Invalid access token' });
+    }
+
     const sessionData = await kv.get('session_data');
     
     if (!sessionData) {
@@ -197,7 +218,18 @@ async function handleGet(req, res) {
 // BACKFILL: Backfill custom date range
 async function handleBackfill(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const accessToken = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!accessToken) {
+      return res.status(401).json({ error: 'No access token provided' });
+    }
+
+    const verifyResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+    
+    if (!verifyResponse.ok) {
+      return res.status(401).json({ error: 'Invalid access token' });
+    }
+
     const { startDate, endDate } = req.body;
     
     if (!startDate || !endDate) {

@@ -1,5 +1,4 @@
 import { kv } from '@vercel/kv';
-import { requireUser } from '../lib/auth.js';
 import { gunzip } from 'zlib';
 import { promisify } from 'util';
 
@@ -225,7 +224,8 @@ async function handleSyncCollect(req, res) {
 
 async function handleSyncStatus(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const pending = (await kv.get('adspend:pending')) || [];
     return res.status(200).json({ success: true, pending, count: pending.length });
   } catch (error) {
@@ -236,7 +236,8 @@ async function handleSyncStatus(req, res) {
 // ─── READ ────────────────────────────────────────────────────────────────────
 async function handleGet(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { type, month } = req.query;
     if (!['sp', 'sb'].includes(type)) return res.status(400).json({ error: 'type must be sp or sb' });
@@ -260,7 +261,8 @@ async function handleGet(req, res) {
 
 async function handleGetRange(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { type, startMonth, endMonth } = req.query;
     if (!['sp', 'sb'].includes(type)) return res.status(400).json({ error: 'type must be sp or sb' });
@@ -281,7 +283,8 @@ async function handleGetRange(req, res) {
 
 async function handleGetMonths(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const [spIndex, sbIndex, spLatestMap, sbLatestMap] = await Promise.all([
       kv.get('adspend:sp:index'),
@@ -351,7 +354,8 @@ async function handleGetMonths(req, res) {
 // existing campaign→SKU mapping for allocation.
 async function handleMigrateFromSheets(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
 
     const spreadsheetId = req.body?.spreadsheetId;
@@ -443,7 +447,8 @@ async function handleMigrateFromSheets(req, res) {
 // to know which format the API expects.
 async function handleUploadYearlyCsv(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const type = String(req.body?.type || '').toLowerCase();
     if (!['sp', 'sb'].includes(type)) {
@@ -549,7 +554,8 @@ function _adspendParseDateServer(s) {
 // POST body: { type: 'sp' | 'sb', month: 'YYYY-MM' }
 async function handleDeleteSheetsRows(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { type, month } = req.body || {};
     if (!['sp', 'sb'].includes(type)) return res.status(400).json({ error: 'type must be sp or sb' });
@@ -594,7 +600,8 @@ function round2(n) {
 //   month omitted ⇒ walk every month in the type's index.
 async function handleDedupeSheetsVsApi(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { type, month } = req.body || {};
     if (!['sp', 'sb'].includes(type)) return res.status(400).json({ error: 'type must be sp or sb' });
@@ -783,6 +790,14 @@ function dedupeRows(rows) {
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
+async function verifyGoogleToken(req) {
+  const accessToken = req.headers.authorization?.replace('Bearer ', '');
+  if (!accessToken) return { ok: false, error: 'No access token provided' };
+  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
+  return { ok: true };
+}
+
 function num(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : 0;
@@ -802,6 +817,7 @@ function previousMonthISO() {
   const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
 }
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 // WEEKLY RED FLAG MONITOR
@@ -921,7 +937,8 @@ const COLUMN_SETS = {
 // reports are fired in the same tick — so no Promise.all here.
 async function handleWeeklyRequest(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const missing = missingAdsCredentials();
     if (missing.length) {
@@ -971,7 +988,8 @@ async function handleWeeklyRequest(req, res) {
 // ─── WEEKLY STATUS ───────────────────────────────────────────────────────────
 async function handleWeeklyStatus(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const parsed = parseReportsParam(req.query.reports);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
@@ -1014,7 +1032,8 @@ async function handleWeeklyStatus(req, res) {
 // the reports were built for.
 async function handleWeeklyCollect(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const parsed = parseReportsParam(req.query.reports);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
@@ -1094,7 +1113,8 @@ async function handleWeeklyCollect(req, res) {
 // Amazon revs the report schema.
 async function handleProbeColumns(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const missing = missingAdsCredentials();
     if (missing.length) {

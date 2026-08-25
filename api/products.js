@@ -1,5 +1,4 @@
 import { kv } from '@vercel/kv';
-import { requireUser } from '../lib/auth.js';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 //  GET  ?action=get                          — read full catalog
@@ -52,7 +51,8 @@ export default async function handler(req, res) {
 // ─── GET ─────────────────────────────────────────────────────────────────────
 async function handleGet(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const [products, updatedAt] = await Promise.all([
       kv.get('products'),
@@ -71,7 +71,8 @@ async function handleGet(req, res) {
 
 async function handleLastUpdated(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const updatedAt = await kv.get('products:updated-at');
     return res.status(200).json({ success: true, updatedAt: updatedAt || null });
   } catch (error) {
@@ -84,7 +85,8 @@ async function handleLastUpdated(req, res) {
 // Same semantics as the current Sheets-based flow (update-or-add-by-SKU).
 async function handleBulkUpsert(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const incoming = Array.isArray(req.body?.products) ? req.body.products : null;
     if (!incoming) return res.status(400).json({ error: 'products array required' });
@@ -131,7 +133,8 @@ async function handleBulkUpsert(req, res) {
 // Nukes the catalog and writes the provided array wholesale. Use with care.
 async function handleReplace(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const incoming = Array.isArray(req.body?.products) ? req.body.products : null;
     if (!incoming) return res.status(400).json({ error: 'products array required' });
@@ -155,7 +158,8 @@ async function handleReplace(req, res) {
 // POST body: { spreadsheetId }    (the user's Google token comes via header)
 async function handleMigrate(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
 
     const spreadsheetId = req.body?.spreadsheetId;
@@ -267,3 +271,10 @@ function defaultsFor(_partial) {
   };
 }
 
+async function verifyGoogleToken(req) {
+  const accessToken = req.headers.authorization?.replace('Bearer ', '');
+  if (!accessToken) return { ok: false, error: 'No access token provided' };
+  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
+  return { ok: true };
+}

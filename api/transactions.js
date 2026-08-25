@@ -1,6 +1,5 @@
 import SellingPartner from 'amazon-sp-api';
 import { kv } from '@vercel/kv';
-import { requireUser } from '../lib/auth.js';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 //   GET  ?action=sync            [&month=YYYY-MM]            — pull SP-API → KV (v0 listFinancialEvents)
@@ -257,7 +256,8 @@ async function readMonthV2024(month) {
 // ─── READ v2024 ──────────────────────────────────────────────────────────────
 async function handleGetV2024(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { month } = req.query;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
@@ -282,7 +282,8 @@ async function handleGetV2024(req, res) {
 
 async function handleGetRangeV2024(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { startMonth, endMonth } = req.query;
     if (!startMonth || !endMonth) {
@@ -344,7 +345,8 @@ async function handleGetRangeV2024(req, res) {
 
 async function handleGetMonthsV2024(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const [index, importedIndex, storedMap] = await Promise.all([
       kv.get('transactions:v2024:index'),
       kv.get('transactions:v2024:imported-index'),
@@ -398,7 +400,8 @@ async function handleGetMonthsV2024(req, res) {
 // ─── READ ────────────────────────────────────────────────────────────────────
 async function handleGet(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { month } = req.query;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
@@ -423,7 +426,8 @@ async function handleGet(req, res) {
 
 async function handleGetRange(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { startMonth, endMonth } = req.query;
     if (!startMonth || !endMonth) {
@@ -450,7 +454,8 @@ async function handleGetRange(req, res) {
 
 async function handleGetMonths(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const index = (await kv.get('transactions:index')) || [];
     return res.status(200).json({ success: true, months: index });
   } catch (error) {
@@ -464,7 +469,8 @@ async function handleGetMonths(req, res) {
 // fit on one page.
 async function handleFetchOrderRaw(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const orderId = req.query.orderId;
     if (!orderId) return res.status(400).json({ error: 'orderId query param required' });
@@ -829,7 +835,8 @@ function countEvents(fe) {
 // the raw index (see processUpload in js/upload.js).
 async function handleUploadYearlyCsv(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
     if (!rows) return res.status(400).json({ error: 'rows array required in body' });
@@ -1082,6 +1089,14 @@ function _parseAmazonDateServer(s) {
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+async function verifyGoogleToken(req) {
+  const accessToken = req.headers.authorization?.replace('Bearer ', '');
+  if (!accessToken) return { ok: false, error: 'No access token provided' };
+  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
+  return { ok: true };
+}
 
 function monthBounds(yyyymm) {
   const [y, m] = yyyymm.split('-').map(Number);

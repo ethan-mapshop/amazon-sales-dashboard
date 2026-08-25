@@ -1,5 +1,4 @@
 import { kv } from '@vercel/kv';
-import { requireUser } from '../lib/auth.js';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 // Listing-optimization Change Log. Used by the Listing Optimizations →
@@ -53,7 +52,8 @@ export default async function handler(req, res) {
 // ─── READ ────────────────────────────────────────────────────────────────────
 async function handleGet(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const entries = (await kv.get('changelog:entries')) || [];
     // Newest first by user-supplied date, then by createdAt as a stable
@@ -71,7 +71,8 @@ async function handleGet(req, res) {
 // ─── ADD ─────────────────────────────────────────────────────────────────────
 async function handleAdd(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const body = req.body || {};
     const cleaned = cleanEntry(body);
@@ -93,7 +94,8 @@ async function handleAdd(req, res) {
 // ─── BULK ADD ────────────────────────────────────────────────────────────────
 async function handleBulkAdd(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const body = req.body || {};
     const incoming = Array.isArray(body.entries) ? body.entries : [];
@@ -135,7 +137,8 @@ async function handleBulkAdd(req, res) {
 // ─── DELETE ──────────────────────────────────────────────────────────────────
 async function handleDelete(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
 
     const { id } = req.body || {};
     if (!id) return res.status(400).json({ error: 'id required' });
@@ -160,7 +163,8 @@ async function handleDelete(req, res) {
 // token to read the Sheet so we don't need server-side Sheets creds.
 async function handleMigrateFromSheets(req, res) {
   try {
-    if (!await requireUser(req, res)) return;
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
     const accessToken = req.headers.authorization?.replace('Bearer ', '');
 
     const spreadsheetId = req.body?.spreadsheetId;
@@ -233,3 +237,10 @@ function newId() {
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
 
+async function verifyGoogleToken(req) {
+  const accessToken = req.headers.authorization?.replace('Bearer ', '');
+  if (!accessToken) return { ok: false, error: 'No access token provided' };
+  const verify = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${accessToken}`);
+  if (!verify.ok) return { ok: false, error: 'Invalid access token' };
+  return { ok: true };
+}
