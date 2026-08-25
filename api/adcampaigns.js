@@ -57,7 +57,7 @@ const AC_CONFIG = {
 // deep-equal helper needed or wanted.
 const AC_TRACKED_FIELDS = [
   'name', 'state', 'dailyBudget', 'budgetType', 'targetingType',
-  'biddingStrategy', 'portfolioId', 'startDate', 'endDate'
+  'biddingStrategy', 'portfolioId', 'startDate', 'endDate', 'placementsSummary'
 ];
 
 const AC_PORTFOLIO_TRACKED = ['name', 'state', 'budgetAmount', 'budgetPolicy', 'budgetEnd'];
@@ -102,7 +102,19 @@ const AC_FIELD_RULES = {
   endDate:         { optional: true },
   portfolioId:     { informational: true },
   targetingType:   { appliesTo: 'SP' },
-  biddingStrategy: { appliesTo: 'SP' }
+  biddingStrategy: { appliesTo: 'SP' },
+  // Informational: a campaign legitimately having no modifiers is not a wrong
+  // key, so it should not turn the banner red.
+  placements:      { appliesTo: 'SP', informational: true }
+};
+
+// v2 returns placements as bidding.adjustments with `predicate` names; v3 uses
+// dynamicBidding.placementBidding with `placement` enums. Normalised in the
+// mapper so the browser only ever sees one vocabulary.
+const AC_PLACEMENT_ALIASES = {
+  placementTop:          'PLACEMENT_TOP',
+  placementProductPage:  'PLACEMENT_PRODUCT_PAGE',
+  placementRestOfSearch: 'PLACEMENT_REST_OF_SEARCH'
 };
 
 const AC_PORTFOLIO_RULES = {
@@ -252,9 +264,21 @@ async function handleProbe(req, res) {
     const accessToken = await getAdsAccessToken();
     const results = [];
 
-    for (const spec of [AC_ENDPOINTS.spV3, AC_ENDPOINTS.spV2, AC_ENDPOINTS.sbV4,
-                        AC_ENDPOINTS.pfV3, AC_ENDPOINTS.pfV2]) {
-      const out = await acAdsList(accessToken, spec, { probeOnly: true });
+    // ?campaignId= narrows the SP v3 probe to one campaign, which is how the
+    // placement question gets answered against a campaign whose modifiers you
+    // already know from Campaign Manager. It also proves campaignIdFilter
+    // works, which the read-modify-write depends on.
+    const onlyId = String(req.query.campaignId || '').trim();
+    const specs = onlyId
+      ? [AC_ENDPOINTS.spV3]
+      : [AC_ENDPOINTS.spV3, AC_ENDPOINTS.spV2, AC_ENDPOINTS.sbV4,
+         AC_ENDPOINTS.pfV3, AC_ENDPOINTS.pfV2];
+
+    for (const spec of specs) {
+      const bodyExtra = (onlyId && spec === AC_ENDPOINTS.spV3)
+        ? { campaignIdFilter: { include: [onlyId] } }
+        : null;
+      const out = await acAdsList(accessToken, spec, { probeOnly: true, bodyExtra });
       const items = out.items || [];
       const keyUnion = new Set();
       for (const it of items.slice(0, 50)) {
@@ -270,17 +294,64 @@ async function handleProbe(req, res) {
         nextTokenPresent: !!out.nextTokenPresent,
         keyUnion: [...keyUnion].sort(),
         stateBreakdown: acTally(items.map(i => i && (i.state || i.campaignStatus))),
+        // Over the WHOLE page, not the 3-item sample: "does a campaign with no
+        // modifiers return an empty array or omit the key" cannot be answered
+        // from three rows, and it decides whether absence means "none" or
+        // "unknown" — which in turn decides whether a bidding write is safe.
+        placementCensus: acPlacementCensus(items),
         sample: items.slice(0, 3),
         responseBodyHead: out.bodyText ? String(out.bodyText).slice(0, 2000) : null
       });
       await sleep(200);
     }
 
-    return res.status(200).json({ success: true, probedAt: new Date().toISOString(), results });
+    return res.status(200).json({
+      success: true,
+      probedAt: new Date().toISOString(),
+      campaignId: onlyId || null,
+      results
+    });
   } catch (error) {
     console.error('[ADCAMPAIGNS PROBE] Error:', error);
     return res.status(500).json({ error: 'Probe failed: ' + error.message });
   }
+}
+
+// Counts how campaigns actually carry placement modifiers, so the three
+// possible shapes can be told apart before any mapper is written:
+//   dynamicBidding absent        → we do not know this campaign's placements
+//   dynamicBidding, no array     → ?
+//   dynamicBidding, empty array  → genuinely no modifiers
+function acPlacementCensus(items) {
+  const census = {
+    total: items.length,
+    withDynamicBidding: 0,
+    withPlacementArray: 0,
+    withEmptyPlacementArray: 0,
+    withNonEmptyPlacementArray: 0,
+    withV2Adjustments: 0,
+    placementTypesSeen: {},
+    placementCountDistribution: {}
+  };
+  for (const it of items) {
+    if (!it) continue;
+    if (Array.isArray(it.bidding && it.bidding.adjustments)) census.withV2Adjustments++;
+    const db = it.dynamicBidding;
+    if (!db || typeof db !== 'object') continue;
+    census.withDynamicBidding++;
+    const pb = db.placementBidding;
+    if (!Array.isArray(pb)) continue;
+    census.withPlacementArray++;
+    if (pb.length === 0) census.withEmptyPlacementArray++;
+    else census.withNonEmptyPlacementArray++;
+    const n = String(pb.length);
+    census.placementCountDistribution[n] = (census.placementCountDistribution[n] || 0) + 1;
+    for (const entry of pb) {
+      const k = String((entry && (entry.placement || entry.predicate)) || '(unnamed)');
+      census.placementTypesSeen[k] = (census.placementTypesSeen[k] || 0) + 1;
+    }
+  }
+  return census;
 }
 
 // ─── SYNC CORE ───────────────────────────────────────────────────────────────
@@ -433,7 +504,7 @@ async function acFetchWithFallback(accessToken, primary, fallback, warnings, err
 // Non-2xx returns { ok:false, status, bodyText } — it never swallows, and it
 // never converts an HTTP failure into an empty result set. That conversion is
 // exactly what made the previous three attempts undiagnosable.
-async function acAdsList(accessToken, spec, { probeOnly = false } = {}) {
+async function acAdsList(accessToken, spec, { probeOnly = false, bodyExtra = null } = {}) {
   const items = [];
   let pages = 0;
   let nextToken = null;
@@ -443,7 +514,7 @@ async function acAdsList(accessToken, spec, { probeOnly = false } = {}) {
 
   try {
     do {
-      const { url, init } = acBuildRequest(accessToken, spec, nextToken, items.length);
+      const { url, init } = acBuildRequest(accessToken, spec, nextToken, items.length, bodyExtra);
       const res = await withAdsRetry(() => fetch(url, init));
       const text = await res.text();
 
@@ -477,13 +548,13 @@ async function acAdsList(accessToken, spec, { probeOnly = false } = {}) {
   }
 }
 
-function acBuildRequest(accessToken, spec, nextToken, offset) {
+function acBuildRequest(accessToken, spec, nextToken, offset, bodyExtra) {
   const headers = adsAuthHeaders(accessToken, {});
   if (spec.accept) headers['Accept'] = spec.accept;
 
   if (spec.method === 'POST') {
     headers['Content-Type'] = spec.contentType;
-    const body = { maxResults: AC_CONFIG.PAGE_SIZE };
+    const body = { maxResults: AC_CONFIG.PAGE_SIZE, ...(bodyExtra || {}) };
     if (nextToken && nextToken !== 'more') body.nextToken = nextToken;
     return { url: spec.url, init: { method: 'POST', headers, body: JSON.stringify(body) } };
   }
@@ -523,6 +594,7 @@ function acMapCampaign(raw, adProduct, hits) {
   // count, which is the fastest way to make a diagnostic untrustworthy.
   const targeting = acStr(acPick(raw, AC_CAMPAIGN_KEYS.targetingType, scope, 'targetingType'));
   const type = acCampaignType(name, targeting);
+  const placements = acReadPlacements(raw, scope);
 
   return {
     campaignId:      acStr(acPick(raw, AC_CAMPAIGN_KEYS.campaignId, scope, 'campaignId')),
@@ -540,7 +612,12 @@ function acMapCampaign(raw, adProduct, hits) {
     brand:           acBrandFromPrefix(name),
     brandSource:     acBrandFromPrefix(name) ? 'prefix' : 'none',
     campaignType:    type.type,
-    typeSource:      type.source
+    typeSource:      type.source,
+    // null means UNKNOWN, [] means genuinely none. Never conflate them: writing
+    // a bidding strategy for a campaign whose placements we never saw is how
+    // the percentages get wiped.
+    placements,
+    placementsSummary: acPlacementsSummary(placements)
   };
 }
 
@@ -564,6 +641,60 @@ function acMapPortfolio(raw, hits) {
     budgetEnd:    acDate(acPick(raw, AC_PORTFOLIO_KEYS.budgetEnd, scope, 'budgetEnd')),
     inBudget:     acPick(raw, AC_PORTFOLIO_KEYS.inBudget, scope, 'inBudget') ?? null
   };
+}
+
+// Reads placement bid adjustments, recording which shape produced them so the
+// coverage table shows it like every other field.
+//
+// The three cases are deliberately distinguished:
+//   dynamicBidding present + array   -> those modifiers   (known)
+//   dynamicBidding present, no array -> []                (known: none)
+//   dynamicBidding absent entirely   -> null              (UNKNOWN)
+function acReadPlacements(raw, hits) {
+  const record = (path) => {
+    if (!hits) return;
+    hits.placements = hits.placements || {};
+    hits.placements[path] = (hits.placements[path] || 0) + 1;
+  };
+
+  const db = raw && raw.dynamicBidding;
+  if (db && typeof db === 'object') {
+    if (Array.isArray(db.placementBidding)) {
+      record('dynamicBidding.placementBidding');
+      return acNormalizePlacements(db.placementBidding);
+    }
+    // Strategy came back but no placement array: Amazon reports campaigns with
+    // no adjustments this way.
+    record('dynamicBidding (no placements)');
+    return [];
+  }
+
+  const v2 = raw && raw.bidding;
+  if (v2 && Array.isArray(v2.adjustments)) {
+    record('bidding.adjustments');
+    return acNormalizePlacements(v2.adjustments);
+  }
+
+  return null;
+}
+
+function acNormalizePlacements(list) {
+  return (list || [])
+    .map(e => {
+      const rawName = acStr(e && (e.placement || e.predicate));
+      const pct = acNum(e && e.percentage);
+      if (!rawName || pct === null) return null;
+      return { placement: AC_PLACEMENT_ALIASES[rawName] || rawName.toUpperCase(), percentage: pct };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.placement.localeCompare(b.placement));
+}
+
+// Deterministic, or it manufactures phantom diffs. '' = none, null = unknown.
+function acPlacementsSummary(placements) {
+  if (placements === null || placements === undefined) return null;
+  if (!placements.length) return '';
+  return placements.map(p => `${p.placement}:${p.percentage}`).join('|');
 }
 
 // Type comes from the name suffix, cross-checked against the API's own
@@ -724,8 +855,20 @@ function acDiffSnapshot(prevRows, nextRows, ptDate, now) {
     if (row.missingRuns > 0) continue;
 
     for (const field of AC_TRACKED_FIELDS) {
+      // A field that did not exist in the previous snapshot's schema is not a
+      // change. Without this, the first refresh after adding a tracked field
+      // diffs undefined -> value on every campaign and can flush the capped
+      // change log with self-inflicted noise.
+      if (!(field in prev)) continue;
+
       const from = prev[field] ?? null;
       const to = row[field] ?? null;
+
+      // Never log a transition INTO unknown. A read that omits dynamicBidding
+      // for one run would otherwise report every campaign changing, then
+      // changing back. A real removal arrives as '', not null.
+      if (field === 'placementsSummary' && to === null) continue;
+
       if (acSame(from, to)) continue;
       records.push(acChange(row, field, from, to, ptDate, now));
     }
@@ -888,4 +1031,5 @@ function _ptDate(instant) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
-         acCoverageLooksWrong, AC_CONFIG };
+         acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
+         acPlacementsSummary, AC_CONFIG };

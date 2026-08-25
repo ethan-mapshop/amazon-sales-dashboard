@@ -20,6 +20,7 @@
       { field: 'brand',           label: 'Brand',         filter: true },
       { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money' },
       { field: 'biddingStrategy', label: 'Bidding' },
+      { field: 'placements',      label: 'Placements',    format: 'placements' },
       { field: 'startDate',       label: 'Started',       mono: true },
       // Present in the CSV, absent from the table. Without ids an export can't
       // be joined back to anything after the first rename.
@@ -47,8 +48,30 @@
         ENABLED:  'Enabled',
         PAUSED:   'Paused',
         ARCHIVED: 'Archived'
+      },
+      placement: {
+        PLACEMENT_TOP:            'Top of search',
+        PLACEMENT_PRODUCT_PAGE:   'Product pages',
+        PLACEMENT_REST_OF_SEARCH: 'Rest of search'
       }
     };
+
+    // Short forms for the table cell; the full names go in the title.
+    const ACO_PLACEMENT_SHORT = {
+      PLACEMENT_TOP:            'TOS',
+      PLACEMENT_PRODUCT_PAGE:   'PP',
+      PLACEMENT_REST_OF_SEARCH: 'ROS'
+    };
+
+    // null means Amazon did not tell us, which is a different fact from "none"
+    // and is rendered differently — same treatment as an unknown daily budget.
+    function acoPlacementsText(placements) {
+      if (placements === null || placements === undefined) return null;
+      if (!placements.length) return '';
+      return placements
+        .map(p => `${ACO_PLACEMENT_SHORT[p.placement] || p.placement} ${p.percentage}%`)
+        .join(' · ');
+    }
 
     // Unknown values fall through to the raw string rather than rendering
     // blank — a new Amazon enum should look unfamiliar, not disappear.
@@ -397,7 +420,7 @@
           }</td>
           <td style="color: var(--text-secondary);">${escapeHtml(rows[0]?.brand || '—')}</td>
           <td style="text-align: right; font-family: monospace;">$${formatNumber(total)}</td>
-          <td colspan="2" style="color: var(--text-secondary); font-size: 0.75rem;">${cap}</td>
+          <td colspan="${ACO_VISIBLE.length - 6}" style="color: var(--text-secondary); font-size: 0.75rem;">${cap}</td>
         </tr>`;
     }
 
@@ -425,7 +448,18 @@
         const align = col.align === 'right' ? 'text-align: right;' : '';
         const mono = col.mono ? "font-family: 'Roboto Mono', monospace;" : '';
         let value;
-        if (col.format === 'money') {
+        if (col.format === 'placements') {
+          const text = acoPlacementsText(c.placements);
+          if (text === null) {
+            value = '<span style="color: var(--warning);" title="Amazon did not return placement modifiers for this campaign">unknown</span>';
+          } else if (text === '') {
+            value = '<span style="color: var(--text-secondary);">—</span>';
+          } else {
+            const full = (c.placements || [])
+              .map(p => `${acoLabel('placement', p.placement)}: ${p.percentage}%`).join(', ');
+            value = `<span title="${escapeHtml(full)}">${escapeHtml(text)}</span>`;
+          }
+        } else if (col.format === 'money') {
           value = typeof c[col.field] === 'number'
             ? '$' + formatNumber(c[col.field])
             : '<span style="color: var(--warning);">unknown</span>';
@@ -531,6 +565,7 @@
         return fields.map(f => {
           const v = enriched[f];
           if (v === null || v === undefined) return csvEscape('');
+          if (f === 'placements') return csvEscape(acoPlacementsText(v) ?? 'unknown');
           return csvEscape(ACO_LABELS[f] ? acoLabel(f, v) : v);
         }).join(',');
       });
