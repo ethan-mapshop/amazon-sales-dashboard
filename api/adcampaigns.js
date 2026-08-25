@@ -525,11 +525,6 @@ async function acWriteAmazonFields({ campaignId, row, amazon, expected }) {
   if (row.adProduct !== 'SP') {
     return { ok: false, stage: 'validate', error: 'Only Sponsored Products campaigns can be edited here.' };
   }
-  if (row.presumedArchived || (row.missingRuns || 0) > 0) {
-    return { ok: false, stage: 'validate',
-             error: 'Amazon has not returned this campaign recently — refresh before editing it.' };
-  }
-
   const invalid = acValidateAmazonFields(amazon);
   if (invalid) return { ok: false, stage: 'validate', error: invalid };
 
@@ -548,7 +543,10 @@ async function acWriteAmazonFields({ campaignId, row, amazon, expected }) {
   }
   const live = (read.items || []).find(i => String(i.campaignId) === campaignId);
   if (!live) {
-    return { ok: false, stage: 'read', error: 'Amazon did not return this campaign.' };
+    // This, not the stored snapshot, is what "the campaign is gone" means.
+    return { ok: false, stage: 'read',
+             error: 'Amazon no longer returns this campaign, so it cannot be edited. ' +
+                    'It may have been archived or deleted in Campaign Manager — refresh to update this page.' };
   }
 
   const liveRow = acMapCampaign(live, 'SP', {});
