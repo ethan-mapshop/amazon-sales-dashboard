@@ -156,6 +156,7 @@ const AC_ENDPOINTS = {
   spV3: {
     label: 'sp-campaigns-v3', adProduct: 'SP', version: 'v3',
     url: `${ADS_HOST}/sp/campaigns/list`, method: 'POST',
+    writeUrl: `${ADS_HOST}/sp/campaigns`,
     contentType: 'application/vnd.spCampaign.v3+json',
     accept: 'application/vnd.spCampaign.v3+json',
     listField: 'campaigns', paging: 'token'
@@ -685,6 +686,12 @@ function acValidateAmazonFields(amazon) {
 // The one place a mutating Amazon call happens. Like acAdsList it never
 // swallows: a non-2xx comes back with the status and body.
 async function acAdsWrite(accessToken, spec, body) {
+  // Explicit rather than falling back to spec.url: the list and write URLs
+  // differ by a path segment, and PUTting to the list one fails as a 403 about
+  // Authorization parsing, which sends you looking at credentials for an hour.
+  if (!spec.writeUrl) {
+    return { ok: false, status: 0, bodyText: `no write endpoint configured for ${spec.label}` };
+  }
   try {
     const headers = adsAuthHeaders(accessToken, {
       'Content-Type': spec.contentType,
@@ -693,10 +700,10 @@ async function acAdsWrite(accessToken, spec, body) {
     // Retries only on 429. withAdsRetry also retries 5xx, which is wrong for a
     // mutating request: a 500 may mean the write landed, and retrying could
     // apply it twice.
-    let res = await fetch(spec.url, { method: 'PUT', headers, body: JSON.stringify(body) });
+    let res = await fetch(spec.writeUrl, { method: 'PUT', headers, body: JSON.stringify(body) });
     if (res.status === 429) {
       await sleep(2000);
-      res = await fetch(spec.url, { method: 'PUT', headers, body: JSON.stringify(body) });
+      res = await fetch(spec.writeUrl, { method: 'PUT', headers, body: JSON.stringify(body) });
     }
     const text = await res.text();
     if (!res.ok) return { ok: false, status: res.status, bodyText: text };
@@ -1434,4 +1441,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
          acPlacementsSummary, acApplyBrandOverride, acKnownBrands,
-         acValidateAmazonFields, acCollectItemErrors, AC_CONFIG };
+         acValidateAmazonFields, acCollectItemErrors, acAdsWrite,
+         AC_ENDPOINTS, AC_CONFIG };
