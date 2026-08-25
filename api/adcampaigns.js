@@ -7,6 +7,8 @@ import { kv } from '@vercel/kv';
 //   GET ?action=refresh  — fetch from Amazon, diff, store. ?dry=1 computes
 //                          everything and returns it WITHOUT writing.
 //   GET ?action=probe    — raw, unmapped Amazon responses for every endpoint
+//  POST ?action=update   — edit one campaign. Brand is dashboard-local; the
+//                          other fields are written to Amazon.
 //
 // All three are auth-gated. Nothing here is cron-driven yet.
 //
@@ -35,6 +37,12 @@ import { kv } from '@vercel/kv';
 //   adcampaigns:changes     → { rows: [change] }   capped 200, human-facing
 //   adcampaigns:meta        → { lastSyncAt, lastSyncOk, counts, sources,
 //                               pages, coverage, warnings, lastError }
+//   adcampaigns:overrides   → { [campaignId]: { brand, at } }  dashboard-only
+//
+// The brand override deliberately does NOT live on the campaign row. acRunSync
+// rebuilds rows from acMapCampaign and acMergePresence carries forward only
+// firstSeenAt, so a row-resident override would be erased by the next refresh —
+// silently reverting to "unmapped", the exact symptom it exists to fix.
 //
 // Campaigns are keyed by campaignId, never by name — a rename is a diff, not a
 // new campaign. (Campaign Mapping keys by name, which is why a rename silently
@@ -189,6 +197,10 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
+  if (req.method === 'POST') {
+    if (action === 'update') return handleUpdate(req, res);
+  }
+
   if (req.method === 'GET') {
     if (action === 'get')     return handleGet(req, res);
     if (action === 'refresh') return handleRefresh(req, res);
@@ -218,7 +230,11 @@ async function handleGet(req, res) {
       campaigns:  current?.rows || [],
       portfolios: portfolios?.rows || [],
       changes:    changes?.rows || [],
-      meta:       meta || null
+      meta:       meta || null,
+      // The brands an override may be set to. Sent from here so the browser
+      // does not carry a fourth copy of the prefix table, and so the options
+      // match exactly what the update action will accept.
+      knownBrands: acKnownBrands()
     });
   } catch (error) {
     console.error('[ADCAMPAIGNS GET] Error:', error);
@@ -354,6 +370,110 @@ function acPlacementCensus(items) {
   return census;
 }
 
+// ─── UPDATE ──────────────────────────────────────────────────────────────────
+// Edits one campaign. Brand is written to the dashboard's own override map and
+// never sent to Amazon; the other fields are Amazon writes.
+async function handleUpdate(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const campaignId = acStr(req.body?.campaignId);
+    if (!campaignId) return res.status(400).json({ error: 'campaignId required' });
+
+    const local = (req.body && req.body.local) || {};
+    const amazon = (req.body && req.body.amazon) || {};
+    const hasLocal = Object.prototype.hasOwnProperty.call(local, 'brand');
+    const hasAmazon = Object.keys(amazon).length > 0;
+
+    if (!hasLocal && !hasAmazon) {
+      return res.status(400).json({ error: 'Nothing to change' });
+    }
+
+    if (hasAmazon) {
+      return res.status(501).json({
+        error: 'Amazon field updates are not enabled yet — brand is dashboard-only and works now.',
+        stage: 'validate'
+      });
+    }
+
+    // ── brand override ──────────────────────────────────────────────────────
+    // A dashboard-local field must never cause an Amazon API call.
+    const requested = local.brand === null ? null : acStr(local.brand);
+    if (requested !== null && !acKnownBrands().includes(requested)) {
+      return res.status(400).json({
+        error: `Unknown brand. Expected one of: ${acKnownBrands().join(', ')}`,
+        stage: 'validate'
+      });
+    }
+
+    const [current, overrides] = await Promise.all([
+      kv.get('adcampaigns:current'),
+      acLoadOverrides()
+    ]);
+
+    const rows = (current && current.rows) || [];
+    const idx = rows.findIndex(r => String(r.campaignId) === campaignId);
+    if (idx === -1) {
+      return res.status(404).json({
+        error: 'Campaign is not in the stored snapshot — refresh first.',
+        stage: 'validate'
+      });
+    }
+
+    const row = rows[idx];
+    const before = row.brand || null;
+    const prefixBrand = row.brandFromPrefix ?? acBrandFromPrefix(row.name);
+
+    const next = { ...overrides };
+    // Storing an override equal to the prefix result would freeze this campaign
+    // against a later prefix-table change, so record nothing in that case.
+    if (requested === null || requested === prefixBrand) delete next[campaignId];
+    else next[campaignId] = { brand: requested, at: new Date().toISOString() };
+
+    const updatedRow = acApplyBrandOverride(
+      { ...row, brand: prefixBrand, brandSource: prefixBrand ? 'prefix' : 'none' },
+      next
+    );
+
+    const writes = [kv.set('adcampaigns:overrides', next)];
+
+    if ((updatedRow.brand || null) !== before) {
+      const nextRows = rows.slice();
+      nextRows[idx] = updatedRow;
+      writes.push(kv.set('adcampaigns:current', { ...current, rows: nextRows }));
+
+      const stored = await kv.get('adcampaigns:changes');
+      const record = {
+        // The |w suffix keeps this distinct from the drift record the next
+        // refresh would generate for the same campaign/field/day — without it
+        // acAppendChanges would dedupe them and the edit would vanish.
+        id: `${campaignId}|brand|${_ptDate(new Date())}|w${Date.now()}`,
+        campaignId, name: row.name, adProduct: row.adProduct,
+        field: 'brand', from: before, to: updatedRow.brand || null,
+        ptDate: _ptDate(new Date()), at: new Date().toISOString(),
+        source: 'edit'
+      };
+      writes.push(kv.set('adcampaigns:changes', {
+        rows: acAppendChanges((stored && stored.rows) || [], [record])
+      }));
+    }
+
+    await Promise.all(writes);
+
+    return res.status(200).json({
+      success: true,
+      stage: 'store',
+      campaignId,
+      applied: { brand: { from: before, to: updatedRow.brand || null } },
+      row: updatedRow
+    });
+  } catch (error) {
+    console.error('[ADCAMPAIGNS UPDATE] Error:', error);
+    return res.status(500).json({ error: 'Update failed: ' + error.message });
+  }
+}
+
 // ─── SYNC CORE ───────────────────────────────────────────────────────────────
 // Build the whole snapshot in memory, validate it, THEN write. A timeout
 // mid-build costs nothing; a timeout mid-write would leave a corrupt source of
@@ -392,10 +512,11 @@ async function acRunSync({ dry = false, force = false } = {}) {
     }
   }
 
-  const [prevCurrent, prevPortfolios, prevChanges] = await Promise.all([
+  const [prevCurrent, prevPortfolios, prevChanges, overrides] = await Promise.all([
     kv.get('adcampaigns:current'),
     kv.get('adcampaigns:portfolios'),
-    kv.get('adcampaigns:changes')
+    kv.get('adcampaigns:changes'),
+    acLoadOverrides()
   ]);
   const prevRows = prevCurrent?.rows || [];
   const isBaseline = prevRows.length === 0;
@@ -408,7 +529,8 @@ async function acRunSync({ dry = false, force = false } = {}) {
   const now = new Date().toISOString();
   const ptDate = _ptDate(new Date());
 
-  const merged = acMergePresence(prevRows, campaigns, now);
+  const merged = acMergePresence(prevRows, campaigns, now)
+    .map(row => acApplyBrandOverride(row, overrides));
   const mergedPortfolios = acMergePresence(prevPortfolios?.rows || [], portfolios, now, 'portfolioId');
 
   // First run emits no per-field records. Diffing 142 new campaigns field by
@@ -595,6 +717,7 @@ function acMapCampaign(raw, adProduct, hits) {
   const targeting = acStr(acPick(raw, AC_CAMPAIGN_KEYS.targetingType, scope, 'targetingType'));
   const type = acCampaignType(name, targeting);
   const placements = acReadPlacements(raw, scope);
+  const prefixBrand = acBrandFromPrefix(name);
 
   return {
     campaignId:      acStr(acPick(raw, AC_CAMPAIGN_KEYS.campaignId, scope, 'campaignId')),
@@ -609,8 +732,12 @@ function acMapCampaign(raw, adProduct, hits) {
     portfolioId:     acStr(acPick(raw, AC_CAMPAIGN_KEYS.portfolioId, scope, 'portfolioId')) || null,
     startDate:       acDate(acPick(raw, AC_CAMPAIGN_KEYS.startDate, scope, 'startDate')),
     endDate:         acDate(acPick(raw, AC_CAMPAIGN_KEYS.endDate, scope, 'endDate')),
-    brand:           acBrandFromPrefix(name),
-    brandSource:     acBrandFromPrefix(name) ? 'prefix' : 'none',
+    // brand is the EFFECTIVE brand and may be replaced by an override in
+    // acApplyBrandOverride; brandFromPrefix always shows what the name implies,
+    // so the two can be compared in the UI.
+    brand:           prefixBrand,
+    brandFromPrefix: prefixBrand,
+    brandSource:     prefixBrand ? 'prefix' : 'none',
     campaignType:    type.type,
     typeSource:      type.source,
     // null means UNKNOWN, [] means genuinely none. Never conflate them: writing
@@ -717,6 +844,27 @@ function acCampaignType(name, targetingType) {
   if (tt === 'AUTO' && named !== 'Auto') return { type: named, source: 'conflict' };
   if (tt === 'MANUAL' && named === 'Auto') return { type: named, source: 'conflict' };
   return { type: named, source: 'name' };
+}
+
+// The distinct brands the prefix table can produce. An override is validated
+// against these — free text would create a phantom brand that then pollutes the
+// Brand filter dropdown permanently.
+function acKnownBrands() {
+  return [...new Set(AC_BRAND_PREFIXES.map(e => e.brand))].sort();
+}
+
+// Applies a stored override on top of the prefix-derived brand. Called from
+// exactly two places: acRunSync after mapping, and the update action for the
+// row it just edited.
+function acApplyBrandOverride(row, overrides) {
+  const o = overrides && overrides[String(row.campaignId || '')];
+  if (!o || !o.brand) return row;
+  return { ...row, brand: o.brand, brandSource: 'override' };
+}
+
+async function acLoadOverrides() {
+  const stored = await kv.get('adcampaigns:overrides');
+  return (stored && typeof stored === 'object') ? stored : {};
 }
 
 function acBrandFromPrefix(name) {
@@ -1032,4 +1180,4 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
-         acPlacementsSummary, AC_CONFIG };
+         acPlacementsSummary, acApplyBrandOverride, acKnownBrands, AC_CONFIG };

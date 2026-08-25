@@ -91,6 +91,18 @@
     let acoCollapsed = new Set();
     let acoBusy = false;
 
+    // ── EDITOR STATE ─────────────────────────────────────────────────────────
+    // acoRenderTable replaces the whole table on every keystroke, filter change
+    // and collapse toggle, so the editor cannot hold state in the DOM. Inputs
+    // write into acoEditDraft and the panel renders FROM the draft — a
+    // re-render mid-edit then restores what was typed instead of discarding it.
+    let acoEditingId = null;
+    let acoEditDraft = null;
+    let acoEditStage = 'form';   // 'form' | 'confirm'
+    let acoEditBusy = false;
+    let acoEditError = null;
+    let acoFlash = null;
+
     function loadAdCampaigns() {
       const container = document.getElementById('adcampaigns-content');
       if (!container) return;
@@ -104,11 +116,14 @@
 
       fetch('/api/adcampaigns?action=get', { headers: { Authorization: `Bearer ${accessToken}` } })
         .then(async res => {
-          const data = await res.json();
+          // Parse defensively: an error page is HTML, and res.json() throwing
+          // first would surface "Unexpected token '<'" instead of the status.
+          const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || `Failed to load (${res.status})`);
           acoData = {
             campaigns: data.campaigns || [], portfolios: data.portfolios || [],
-            changes: data.changes || [], meta: data.meta || null, syncedAt: data.syncedAt || null
+            changes: data.changes || [], meta: data.meta || null, syncedAt: data.syncedAt || null,
+            knownBrands: data.knownBrands || []
           };
           acoRender();
         })
@@ -192,12 +207,24 @@
       );
 
       container.innerHTML =
-        acoStats() + acoCoverageNotes() + acoCoverageBanner() + acoToolbar() +
+        acoFlashBlock() + acoStats() + acoCoverageNotes() + acoCoverageBanner() + acoToolbar() +
         '<div id="aco-table-wrap"></div>' +
         acoChangesCard() + acoCoverageDetails() + '<div id="aco-diagnostic"></div>';
 
       acoRenderTable();
       acoBindControls();
+    }
+
+    // acoRender rebuilds the container, so a success message has to be rendered
+    // by it and then cleared — otherwise a successful save looks like nothing
+    // happened at all.
+    function acoFlashBlock() {
+      if (!acoFlash) return '';
+      const msg = acoFlash;
+      acoFlash = null;
+      return `<div class="card" style="margin-bottom: 1.5rem; border-left: 3px solid var(--success);">
+        <div style="color: var(--success);">${escapeHtml(msg)}</div>
+      </div>`;
     }
 
     function acoStats() {
@@ -333,6 +360,9 @@
     function acoFiltered() {
       const q = acoSearch.trim().toLowerCase();
       return acoData.campaigns.filter(c => {
+        // An open editor outranks every filter. Otherwise typing in the search
+        // box makes an in-progress edit vanish along with its unsaved draft.
+        if (acoEditingId && c.campaignId === acoEditingId) return true;
         if (acoOnlyEnabled && c.state !== 'ENABLED') return false;
         for (const [field, val] of Object.entries(acoFilters)) {
           if (val && c[field] !== val) return false;
@@ -445,6 +475,7 @@
     }
 
     function acoCampaignRow(c, pfId, collapsed) {
+      const editIcon = `<span class="aco-edit-affordance" data-aco-edit="${escapeHtml(c.campaignId)}" title="Edit this campaign">&#9998;</span>`;
       const cells = ACO_VISIBLE.map(col => {
         const align = col.align === 'right' ? 'text-align: right;' : '';
         const mono = col.mono ? "font-family: 'Roboto Mono', monospace;" : '';
@@ -470,8 +501,13 @@
           value = c.typeSource === 'conflict'
             ? `<span style="color: var(--warning);" title="Campaign name and Amazon's targetingType disagree">${escapeHtml(c.campaignType || '—')} ⚠</span>`
             : escapeHtml(c.campaignType || '—');
-        } else if (col.field === 'brand' && !c.brand) {
-          value = '<span style="color: var(--warning);">unmapped</span>';
+        } else if (col.field === 'brand') {
+          const label = c.brand
+            ? escapeHtml(c.brand)
+            : '<span style="color: var(--warning);">unmapped</span>';
+          value = c.brandSource === 'override'
+            ? `${label} <span title="Set in the dashboard, not derived from the campaign name" style="color: var(--text-secondary); font-size: 0.7rem;">·set</span>`
+            : label;
         } else if (ACO_LABELS[col.field]) {
           // Raw enum kept on hover — the label is for reading, the enum is what
           // Amazon actually returned.
@@ -479,12 +515,172 @@
         } else {
           value = escapeHtml(c[col.field] === null || c[col.field] === undefined ? '—' : c[col.field]);
         }
+        if (col.field === 'name') value += editIcon;
         return `<td style="${align} ${mono}">${value}</td>`;
       }).join('');
 
       const archived = c.presumedArchived ? ' title="Absent from recent syncs — presumed archived"' : '';
-      return `<tr class="aco-campaign-row" data-aco-pf="${escapeHtml(pfId)}"${archived}
-                  style="display: ${collapsed ? 'none' : 'table-row'};${c.presumedArchived ? ' opacity: 0.5;' : ''}">${cells}</tr>`;
+      // A collapsed group must not hide the row being edited.
+      const editing = c.campaignId === acoEditingId;
+      const hidden = collapsed && !editing;
+      const row = `<tr class="aco-campaign-row" data-aco-pf="${escapeHtml(pfId)}" data-aco-id="${escapeHtml(c.campaignId)}"${archived}
+                  style="display: ${hidden ? 'none' : 'table-row'};${c.presumedArchived ? ' opacity: 0.5;' : ''}">${cells}</tr>`;
+      return editing ? row + acoEditRow(c) : row;
+    }
+
+    // ── EDITOR ───────────────────────────────────────────────────────────────
+
+    function acoEditRow(c) {
+      const body = acoEditStage === 'confirm' ? acoEditConfirm(c) : acoEditForm(c);
+      return `<tr class="aco-edit-row"><td colspan="${ACO_VISIBLE.length}">${body}</td></tr>`;
+    }
+
+    function acoEditForm(c) {
+      const brands = acoBrandOptions();
+      const draft = acoEditDraft || {};
+      const selected = draft.brand === null || draft.brand === undefined ? '' : draft.brand;
+
+      return `
+        <div class="aco-edit-panel">
+          <div class="aco-edit-title">Editing <strong>${escapeHtml(c.name)}</strong></div>
+          <div class="aco-edit-grid">
+            <label class="aco-edit-field">
+              <span>Brand
+                <em title="Stored in the dashboard only — Amazon has no brand field">dashboard only</em>
+              </span>
+              <select data-aco-input="brand">
+                <option value=""${selected === '' ? ' selected' : ''}>Use name prefix${c.brandFromPrefix ? ` (${escapeHtml(c.brandFromPrefix)})` : ' — no match'}</option>
+                ${brands.map(b => `<option value="${escapeHtml(b)}"${selected === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          ${acoEditErrorBlock()}
+          <div class="aco-edit-actions">
+            <button class="btn btn-primary" data-aco-action="review"${acoEditDiffs(c).length ? '' : ' disabled'}>Review change</button>
+            <button class="btn btn-secondary" data-aco-action="cancel">Cancel</button>
+          </div>
+        </div>`;
+    }
+
+    function acoEditConfirm(c) {
+      const diffs = acoEditDiffs(c);
+      const local = diffs.filter(d => d.scope === 'local');
+      const amazon = diffs.filter(d => d.scope === 'amazon');
+
+      // Two headings, always. Five of the six editable fields go to Amazon and
+      // one does not; a single undifferentiated list invites the wrong
+      // conclusion about where the change landed.
+      const section = (title, list, note) => list.length ? `
+        <div class="aco-edit-section">
+          <div class="aco-edit-section-title">${escapeHtml(title)}</div>
+          ${note ? `<div class="aco-edit-note">${escapeHtml(note)}</div>` : ''}
+          ${list.map(d => `
+            <div class="aco-edit-diff">
+              <span>${escapeHtml(d.label)}</span>
+              <span class="aco-edit-from">${escapeHtml(d.from ?? '—')}</span>
+              <span>&rarr;</span>
+              <strong>${escapeHtml(d.to ?? '—')}</strong>
+            </div>`).join('')}
+        </div>` : '';
+
+      return `
+        <div class="aco-edit-panel aco-edit-confirming">
+          <div class="aco-edit-title">Confirm change to <strong>${escapeHtml(c.name)}</strong></div>
+          ${section('Sent to Amazon', amazon)}
+          ${section('Dashboard only', local, 'Stored here; nothing is sent to Amazon.')}
+          ${acoEditErrorBlock()}
+          <div class="aco-edit-actions">
+            <button class="btn btn-primary" data-aco-action="save"${acoEditBusy ? ' disabled' : ''}>${acoEditBusy ? 'Saving<span class="loading"></span>' : 'Confirm'}</button>
+            <button class="btn btn-secondary" data-aco-action="back"${acoEditBusy ? ' disabled' : ''}>Back</button>
+          </div>
+        </div>`;
+    }
+
+    function acoEditErrorBlock() {
+      if (!acoEditError) return '';
+      return `<div class="aco-edit-error">${escapeHtml(acoEditError)}</div>`;
+    }
+
+    function acoBrandOptions() {
+      // Server-supplied, so the options always match what the update action
+      // accepts. Falling back to the loaded data would silently offer fewer
+      // brands whenever a filter or a sparse account hid one.
+      if (Array.isArray(acoData.knownBrands) && acoData.knownBrands.length) return acoData.knownBrands;
+      return [...new Set(acoData.campaigns.map(c => c.brandFromPrefix).filter(Boolean))].sort();
+    }
+
+    function acoEditDiffs(c) {
+      const draft = acoEditDraft || {};
+      const out = [];
+      const wanted = draft.brand === '' ? null : draft.brand;
+      const effective = wanted === null ? (c.brandFromPrefix || null) : wanted;
+      if ((effective || null) !== (c.brand || null)) {
+        out.push({ field: 'brand', label: 'Brand', scope: 'local', from: c.brand, to: effective });
+      }
+      return out;
+    }
+
+    function acoStartEdit(campaignId) {
+      const c = acoData.campaigns.find(x => x.campaignId === campaignId);
+      if (!c) return;
+      acoEditingId = campaignId;
+      acoEditStage = 'form';
+      acoEditError = null;
+      acoEditDraft = { brand: c.brandSource === 'override' ? c.brand : '' };
+      acoCollapsed.delete(c.portfolioId || '(none)');
+      acoRenderTable();
+    }
+
+    function acoCancelEdit() {
+      acoEditingId = null;
+      acoEditDraft = null;
+      acoEditStage = 'form';
+      acoEditError = null;
+      acoRenderTable();
+    }
+
+    async function acoSaveEdit() {
+      if (acoEditBusy || !accessToken) return;
+      const c = acoData.campaigns.find(x => x.campaignId === acoEditingId);
+      if (!c) return;
+      const diffs = acoEditDiffs(c);
+      if (!diffs.length) return;
+
+      acoEditBusy = true;
+      acoEditError = null;
+      acoRenderTable();
+
+      try {
+        const brandDiff = diffs.find(d => d.field === 'brand');
+        const res = await fetch('/api/adcampaigns?action=update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({
+            campaignId: c.campaignId,
+            adProduct: c.adProduct,
+            local: brandDiff ? { brand: brandDiff.to } : {},
+            amazon: {}
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || `Save failed (${res.status})`);
+
+        acoFlash = `Updated ${c.name}: ${diffs.map(d => `${d.label} ${d.from ?? '—'} → ${d.to ?? '—'}`).join(', ')}`;
+        acoEditingId = null;
+        acoEditDraft = null;
+        acoEditStage = 'form';
+        // No optimistic update — the row's new values come back from the server.
+        loadAdCampaigns();
+      } catch (err) {
+        console.error('[ACO] save failed:', err);
+        acoEditError = err.message;
+      } finally {
+        // Clear busy BEFORE re-rendering, or the failed save leaves the Confirm
+        // button disabled for good and the only way to retry is to cancel and
+        // start the edit again.
+        acoEditBusy = false;
+        if (acoEditingId) acoRenderTable();
+      }
     }
 
     function acoStateCell(state) {
@@ -548,7 +744,33 @@
 
       // Delegated so it survives every re-render of the table.
       const wrap = document.getElementById('aco-table-wrap');
+      if (wrap) wrap.addEventListener('input', e => {
+        const key = e.target && e.target.dataset && e.target.dataset.acoInput;
+        // Draft-backed, so a re-render triggered by anything else does not
+        // discard what was typed.
+        if (key && acoEditDraft) acoEditDraft[key] = e.target.value;
+      });
+      if (wrap) wrap.addEventListener('change', e => {
+        const key = e.target && e.target.dataset && e.target.dataset.acoInput;
+        if (!key || !acoEditDraft) return;
+        acoEditDraft[key] = e.target.value;
+        acoRenderTable();   // re-enables "Review change" once something differs
+      });
+
       if (wrap) wrap.addEventListener('click', e => {
+        const editBtn = e.target.closest('[data-aco-edit]');
+        if (editBtn) { acoStartEdit(editBtn.dataset.acoEdit); return; }
+
+        const action = e.target.closest('[data-aco-action]');
+        if (action) {
+          const what = action.dataset.acoAction;
+          if (what === 'cancel') acoCancelEdit();
+          else if (what === 'review') { acoEditStage = 'confirm'; acoEditError = null; acoRenderTable(); }
+          else if (what === 'back')   { acoEditStage = 'form';    acoEditError = null; acoRenderTable(); }
+          else if (what === 'save')   acoSaveEdit();
+          return;
+        }
+
         const row = e.target.closest('.aco-portfolio-row');
         if (!row) return;
         const pfId = row.dataset.acoPf;
