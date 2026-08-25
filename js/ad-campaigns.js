@@ -28,6 +28,36 @@
       { field: 'campaignId',      label: 'Campaign ID',   hidden: true }
     ];
 
+    // Amazon's API enums translated to the wording Campaign Manager shows.
+    // Strings verified against the console's own SP Campaign Report export.
+    // LEGACY_FOR_SALES is "legacy" only in the sense that down-only bidding
+    // predates up-and-down — the enum was kept for backwards compatibility and
+    // says nothing about the campaign being outdated.
+    const ACO_LABELS = {
+      biddingStrategy: {
+        LEGACY_FOR_SALES: 'Dynamic bids - down only',
+        AUTO_FOR_SALES:   'Dynamic bids - up and down',
+        MANUAL:           'Fixed bids'
+      },
+      targetingType: {
+        AUTO:   'Automatic targeting',
+        MANUAL: 'Manual targeting'
+      },
+      state: {
+        ENABLED:  'Enabled',
+        PAUSED:   'Paused',
+        ARCHIVED: 'Archived'
+      }
+    };
+
+    // Unknown values fall through to the raw string rather than rendering
+    // blank — a new Amazon enum should look unfamiliar, not disappear.
+    function acoLabel(field, value) {
+      if (value === null || value === undefined || value === '') return '';
+      const map = ACO_LABELS[field];
+      return (map && map[String(value).toUpperCase()]) || String(value);
+    }
+
     const ACO_VISIBLE = ACO_COLUMNS.filter(c => !c.hidden);
 
     let acoData = { campaigns: [], portfolios: [], changes: [], meta: null, syncedAt: null };
@@ -196,7 +226,7 @@
         return `
           <select class="catalog-filter-select" data-aco-filter="${col.field}">
             <option value="">${escapeHtml(col.label)}: all</option>
-            ${values.map(v => `<option value="${escapeHtml(v)}"${acoFilters[col.field] === v ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+            ${values.map(v => `<option value="${escapeHtml(v)}"${acoFilters[col.field] === v ? ' selected' : ''}>${escapeHtml(acoLabel(col.field, v))}</option>`).join('')}
           </select>`;
       }).join('');
 
@@ -348,6 +378,10 @@
             : escapeHtml(c.campaignType || '—');
         } else if (col.field === 'brand' && !c.brand) {
           value = '<span style="color: var(--warning);">unmapped</span>';
+        } else if (ACO_LABELS[col.field]) {
+          // Raw enum kept on hover — the label is for reading, the enum is what
+          // Amazon actually returned.
+          value = `<span title="${escapeHtml(c[col.field] || '')}">${escapeHtml(acoLabel(col.field, c[col.field]) || '—')}</span>`;
         } else {
           value = escapeHtml(c[col.field] === null || c[col.field] === undefined ? '—' : c[col.field]);
         }
@@ -363,7 +397,7 @@
       const color = state === 'ENABLED' ? 'var(--success)'
                   : state === 'PAUSED' ? 'var(--warning)'
                   : 'var(--text-secondary)';
-      return `<span style="color: ${color};">${escapeHtml(state || '—')}</span>`;
+      return `<span style="color: ${color};" title="${escapeHtml(state || '')}">${escapeHtml(acoLabel('state', state) || '—')}</span>`;
     }
 
     function acoChangesCard() {
@@ -435,7 +469,11 @@
       const fields = ACO_COLUMNS.map(c => c.field);
       const rows = acoFiltered().map(c => {
         const enriched = { ...c, portfolio: pfById.get(c.portfolioId)?.name || '' };
-        return fields.map(f => csvEscape(enriched[f] === null || enriched[f] === undefined ? '' : enriched[f])).join(',');
+        return fields.map(f => {
+          const v = enriched[f];
+          if (v === null || v === undefined) return csvEscape('');
+          return csvEscape(ACO_LABELS[f] ? acoLabel(f, v) : v);
+        }).join(',');
       });
       const csv = [ACO_COLUMNS.map(c => csvEscape(c.label)).join(','), ...rows].join('\r\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
