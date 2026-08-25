@@ -316,9 +316,8 @@ async function acRunSync({ dry = false, force = false } = {}) {
 
   for (const [field, c] of Object.entries(coverage.campaigns.fields)) {
     if (acCoverageLooksWrong(c)) {
-      const keys = Object.keys(c.viaKey || {}).length;
       warnings.push(`campaigns.${field}: resolved ${c.resolved} of ${c.applicable} enabled` +
-                    (keys > 1 ? ` via ${keys} different keys` : ''));
+                    (c.multiKeyWithinProduct ? ' via inconsistent keys within one ad product' : ''));
     }
   }
 
@@ -507,8 +506,15 @@ function acMapCampaign(raw, adProduct, hits) {
   // measured over that same population or the two numbers disagree.
   const stateHits = {};
   const state = acStr(acPick(raw, AC_CAMPAIGN_KEYS.state, stateHits, 'state')).toUpperCase() || null;
-  const bucket = state === 'ENABLED' ? 'enabled' : 'other';
-  const scope = hits[bucket] = hits[bucket] || {};
+  // A campaign with no state counts as enabled in acFieldCoverage, so it has to
+  // bucket the same way here or viaKey would disagree with the resolved count.
+  const bucket = (!state || state === 'ENABLED') ? 'enabled' : 'other';
+  hits[bucket] = hits[bucket] || {};
+  // Also bucketed by ad product: SP v3 nests the budget as { budget: { budget,
+  // budgetType } } while SB v4 returns it flat, so one field legitimately
+  // resolves through different keys for different products. That is the
+  // candidate-key list doing its job, not an ambiguity worth warning about.
+  const scope = hits[bucket][adProduct] = hits[bucket][adProduct] || {};
   acMergeHits(scope, stateHits);
 
   const name = acStr(acPick(raw, AC_CAMPAIGN_KEYS.name, scope, 'name'));
@@ -542,7 +548,8 @@ function acMapPortfolio(raw, hits) {
   const stateHits = {};
   const state = acStr(acPick(raw, AC_PORTFOLIO_KEYS.state, stateHits, 'state'));
   const bucket = (String(state).toUpperCase() === 'ENABLED' || state === '') ? 'enabled' : 'other';
-  const scope = hits[bucket] = hits[bucket] || {};
+  hits[bucket] = hits[bucket] || {};
+  const scope = hits[bucket].PF = hits[bucket].PF || {};
   acMergeHits(scope, stateHits);
   return {
     portfolioId:  acStr(acPick(raw, AC_PORTFOLIO_KEYS.portfolioId, scope, 'portfolioId')),
@@ -600,7 +607,7 @@ function acFieldCoverage(rows, keySpec, hits, rules) {
   // wrong key would fail across every state anyway - so enabled is a valid
   // sample and a far quieter one.
   const enabled = rows.filter(r => !r.state || String(r.state).toUpperCase() === 'ENABLED');
-  const enabledHits = (hits && hits.enabled) || {};
+  const byProduct = (hits && hits.enabled) || {};
 
   const fields = {};
   for (const field of Object.keys(keySpec)) {
@@ -611,10 +618,26 @@ function acFieldCoverage(rows, keySpec, hits, rules) {
     const resolved = applicableRows.filter(
       r => r[field] !== null && r[field] !== undefined && r[field] !== ''
     ).length;
+    // Per product, then merged for display. A field resolving through two keys
+    // where each product uses exactly one of them is two API shapes; two keys
+    // WITHIN a product means at least one guess is wrong.
+    const viaKeyByProduct = {};
+    const viaKey = {};
+    let multiKeyWithinProduct = false;
+    for (const [product, scope] of Object.entries(byProduct)) {
+      const forField = (scope && scope[field]) || {};
+      if (!Object.keys(forField).length) continue;
+      viaKeyByProduct[product] = forField;
+      if (Object.keys(forField).length > 1) multiKeyWithinProduct = true;
+      for (const [k, n] of Object.entries(forField)) viaKey[k] = (viaKey[k] || 0) + n;
+    }
+
     fields[field] = {
       resolved,
       applicable: applicableRows.length,
-      viaKey: enabledHits[field] || {},
+      viaKey,
+      viaKeyByProduct,
+      multiKeyWithinProduct,
       optional: !!rule.optional,
       informational: !!rule.informational,
       appliesTo: rule.appliesTo || null
@@ -628,12 +651,12 @@ function acFieldCoverage(rows, keySpec, hits, rules) {
 }
 
 // A wrong key looks like: a required field missing on a tenth or more of the
-// campaigns it applies to, or one field resolving through several different
-// keys - which means the shape varies between campaigns and at least one of
-// the guesses is wrong.
+// campaigns it applies to, or one field resolving through several keys WITHIN
+// a single ad product. Different keys across different products is just SP and
+// SB returning different shapes, which the candidate-key list exists to absorb.
 function acCoverageLooksWrong(c) {
   if (c.optional || c.informational) return false;
-  if (Object.keys(c.viaKey || {}).length > 1) return true;
+  if (c.multiKeyWithinProduct) return true;
   return c.applicable > 0 && c.resolved < c.applicable * 0.9;
 }
 

@@ -212,11 +212,22 @@
           </div>
           <div style="font-family: monospace; font-size: 0.75rem; line-height: 1.7;">
             ${wrong.map(([f, v]) => {
-              const via = Object.entries(v.viaKey || {}).map(([k, n]) => `${escapeHtml(k)}×${n}`).join(', ');
-              return `<div>${escapeHtml(f)}: ${v.resolved} of ${v.applicable}${v.appliesTo ? ` ${escapeHtml(v.appliesTo)}` : ''} enabled${via ? ` — via ${via}` : ''}</div>`;
+              return `<div>${escapeHtml(f)}: ${v.resolved} of ${v.applicable}${v.appliesTo ? ` ${escapeHtml(v.appliesTo)}` : ''} enabled — ${acoViaKeyText(v)}</div>`;
             }).join('')}
           </div>
         </div>`;
+    }
+
+    // Grouped by ad product, because "SP via one key, SB via another" is an
+    // explanation whereas a bare merged list reads as ambiguity.
+    function acoViaKeyText(v) {
+      const byProduct = v.viaKeyByProduct || {};
+      const products = Object.keys(byProduct);
+      if (!products.length) return 'no key resolved';
+      return products.map(p => {
+        const keys = Object.entries(byProduct[p]).map(([k, n]) => `${k}×${n}`).join(', ');
+        return products.length > 1 ? `${p} via ${keys}` : `via ${keys}`;
+      }).join(' · ');
     }
 
     function acoCoverage() {
@@ -247,7 +258,7 @@
       const rows = Object.entries(cov.fields).map(([f, v]) => {
         const note = v.optional ? 'optional' : v.informational ? 'informational'
                    : v.appliesTo ? `${v.appliesTo} only` : '';
-        const via = Object.entries(v.viaKey || {}).map(([k, n]) => `${k}×${n}`).join(', ');
+        const via = acoViaKeyText(v);
         const colour = v.looksWrong ? 'var(--error)'
                      : v.resolved === v.applicable ? 'var(--success)' : 'var(--text-secondary)';
         return `<tr>
