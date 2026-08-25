@@ -557,8 +557,12 @@
         return `<select class="aco-cell-input${dirty ? ' aco-dirty' : ''}" data-aco-input="brand"
                         data-aco-id="${escapeHtml(c.campaignId)}"
                         title="Stored in the dashboard only — Amazon has no brand field">
-          <option value=""${value === '' ? ' selected' : ''}>${c.brandFromPrefix ? escapeHtml(c.brandFromPrefix) + ' (from name)' : 'unmapped'}</option>
-          ${acoBrandOptions().map(b => `<option value="${escapeHtml(b)}"${value === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+          <option value=""${value === '' ? ' selected' : ''}>${c.brandFromPrefix ? escapeHtml(c.brandFromPrefix) : 'unmapped'}</option>
+          ${acoBrandOptions()
+            // The prefix-derived brand is already the first option; listing it
+            // again would be two identical labels doing the same thing.
+            .filter(b => b !== c.brandFromPrefix)
+            .map(b => `<option value="${escapeHtml(b)}"${value === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
         </select>`;
       }
       return '';
