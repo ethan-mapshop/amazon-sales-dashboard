@@ -92,14 +92,18 @@
     let acoBusy = false;
 
     // ── EDITOR STATE ─────────────────────────────────────────────────────────
-    // acoRenderTable replaces the whole table on every keystroke, filter change
-    // and collapse toggle, so the editor cannot hold state in the DOM. Inputs
-    // write into acoEditDraft and the panel renders FROM the draft — a
-    // re-render mid-edit then restores what was typed instead of discarding it.
-    let acoEditingId = null;
-    let acoEditDraft = null;
-    let acoEditBusy = false;
-    let acoEditError = null;
+    // Every editable cell is a live control; there is no edit mode to enter.
+    // Changes accumulate in acoPending and are committed together from the save
+    // bar. acoRenderTable replaces the whole table on every keystroke, filter
+    // change and collapse toggle, so pending edits cannot live in the DOM —
+    // controls render FROM acoPending, which is what makes them survive.
+    //
+    //   acoPending = { [campaignId]: { brand: 'Hubbard Scientific' } }
+    // A field is only present here when it DIFFERS from the stored row, so
+    // "is anything pending" is just a key count.
+    let acoPending = {};
+    let acoSaveBusy = false;
+    let acoRowErrors = {};   // { [campaignId]: message }
     let acoFlash = null;
 
     function loadAdCampaigns() {
@@ -208,9 +212,11 @@
       container.innerHTML =
         acoFlashBlock() + acoStats() + acoCoverageNotes() + acoCoverageBanner() + acoToolbar() +
         '<div id="aco-table-wrap"></div>' +
+        '<div id="aco-save-bar" style="display: none;"></div>' +
         acoChangesCard() + acoCoverageDetails() + '<div id="aco-diagnostic"></div>';
 
       acoRenderTable();
+      acoRenderSaveBar();
       acoBindControls();
     }
 
@@ -359,9 +365,9 @@
     function acoFiltered() {
       const q = acoSearch.trim().toLowerCase();
       return acoData.campaigns.filter(c => {
-        // An open editor outranks every filter. Otherwise typing in the search
-        // box makes an in-progress edit vanish along with its unsaved draft.
-        if (acoEditingId && c.campaignId === acoEditingId) return true;
+        // A row with unsaved changes outranks every filter, or a search
+        // keystroke would hide edits the save bar still says are pending.
+        if (acoPending[c.campaignId]) return true;
         if (acoOnlyEnabled && c.state !== 'ENABLED') return false;
         for (const [field, val] of Object.entries(acoFilters)) {
           if (val && c[field] !== val) return false;
@@ -416,6 +422,7 @@
       }).join('');
 
       wrap.innerHTML = `<div class="aco-table-wrapper"><table class="aco-table">${head}${body}</table></div>`;
+      acoRenderSaveBar();
 
       // Sticky group rows pin below the real thead, whose height is only known
       // after layout.
@@ -474,13 +481,11 @@
     }
 
     function acoCampaignRow(c, pfId, collapsed) {
-      const editing = c.campaignId === acoEditingId;
-      const editIcon = editing
-        ? acoRowActions(c)
-        : `<span class="aco-edit-affordance" data-aco-edit="${escapeHtml(c.campaignId)}" title="Edit this campaign">&#9998;</span>`;
+      const dirty = !!acoPending[c.campaignId];
+      const rowError = acoRowErrors[c.campaignId];
       const cells = ACO_VISIBLE.map(col => {
-        // An editable column swaps its display value for a control in place.
-        if (editing && col.editable) {
+        // Editable columns are always controls — there is no edit mode.
+        if (col.editable) {
           return `<td class="aco-cell-editing">${acoEditCell(col, c)}</td>`;
         }
         const align = col.align === 'right' ? 'text-align: right;' : '';
@@ -521,57 +526,42 @@
         } else {
           value = escapeHtml(c[col.field] === null || c[col.field] === undefined ? '—' : c[col.field]);
         }
-        if (col.field === 'name') {
-          value += editIcon;
+        if (col.field === 'name' && rowError) {
           // The failure message belongs next to the row that failed, not in a
           // banner somewhere else on the page.
-          if (editing && acoEditError) {
-            value += `<div class="aco-row-error">${escapeHtml(acoEditError)}</div>`;
-          }
+          value += `<div class="aco-row-error">${escapeHtml(rowError)}</div>`;
         }
         return `<td style="${align} ${mono}">${value}</td>`;
       }).join('');
 
       const archived = c.presumedArchived ? ' title="Absent from recent syncs — presumed archived"' : '';
-      // A collapsed group must not hide the row being edited.
-      const hidden = collapsed && !editing;
-      return `<tr class="aco-campaign-row${editing ? ' aco-row-editing' : ''}" data-aco-pf="${escapeHtml(pfId)}" data-aco-id="${escapeHtml(c.campaignId)}"${archived}
+      // A collapsed group must not hide a row with unsaved changes.
+      const hidden = collapsed && !dirty;
+      return `<tr class="aco-campaign-row${dirty ? ' aco-row-dirty' : ''}${rowError ? ' aco-row-failed' : ''}" data-aco-pf="${escapeHtml(pfId)}" data-aco-id="${escapeHtml(c.campaignId)}"${archived}
                   style="display: ${hidden ? 'none' : 'table-row'};${c.presumedArchived ? ' opacity: 0.5;' : ''}">${cells}</tr>`;
     }
 
     // ── EDITOR ───────────────────────────────────────────────────────────────
-    // Editing happens IN the row: the editable cells become controls in place
-    // and the ✎ is replaced by Save / Cancel, following the in-place pattern in
-    // js/credentials.js rather than opening a panel underneath.
+    // No edit mode: editable cells are always controls. Changing one records a
+    // pending edit and reveals the save bar.
 
-    // Renders the control for one editable cell, valued from the draft so an
-    // unrelated re-render (search keystroke, filter change) restores what was
-    // chosen rather than discarding it.
     function acoEditCell(col, c) {
-      const draft = acoEditDraft || {};
+      const pending = acoPending[c.campaignId] || {};
       if (col.editable === 'brand') {
-        const selected = draft.brand === null || draft.brand === undefined ? '' : draft.brand;
-        const opts = acoBrandOptions();
-        return `<select class="aco-cell-input" data-aco-input="brand"
+        // '' is the "use the name prefix" option, which is how an override is
+        // cleared. Distinct from a brand that happens to equal the prefix.
+        const value = 'brand' in pending
+          ? (pending.brand ?? '')
+          : (c.brandSource === 'override' ? c.brand : '');
+        const dirty = 'brand' in pending;
+        return `<select class="aco-cell-input${dirty ? ' aco-dirty' : ''}" data-aco-input="brand"
+                        data-aco-id="${escapeHtml(c.campaignId)}"
                         title="Stored in the dashboard only — Amazon has no brand field">
-          <option value=""${selected === '' ? ' selected' : ''}>${c.brandFromPrefix ? escapeHtml(c.brandFromPrefix) + ' (from name)' : 'unmapped'}</option>
-          ${opts.map(b => `<option value="${escapeHtml(b)}"${selected === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+          <option value=""${value === '' ? ' selected' : ''}>${c.brandFromPrefix ? escapeHtml(c.brandFromPrefix) + ' (from name)' : 'unmapped'}</option>
+          ${acoBrandOptions().map(b => `<option value="${escapeHtml(b)}"${value === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
         </select>`;
       }
       return '';
-    }
-
-    // Save / Cancel take the ✎'s place, so no extra column is needed.
-    function acoRowActions(c) {
-      const dirty = acoEditDiffs(c).length > 0;
-      if (acoEditBusy) {
-        return `<span class="aco-row-actions"><span class="loading"></span></span>`;
-      }
-      return `<span class="aco-row-actions">
-        <button class="aco-row-btn aco-row-save" data-aco-action="save"${dirty ? '' : ' disabled'}
-                title="${dirty ? 'Save changes' : 'Nothing changed yet'}">&#10003;</button>
-        <button class="aco-row-btn" data-aco-action="cancel" title="Cancel">&#10005;</button>
-      </span>`;
     }
 
     function acoBrandOptions() {
@@ -582,76 +572,152 @@
       return [...new Set(acoData.campaigns.map(c => c.brandFromPrefix).filter(Boolean))].sort();
     }
 
-    function acoEditDiffs(c) {
-      const draft = acoEditDraft || {};
-      const out = [];
-      if ('brand' in draft) {
-        const wanted = draft.brand === '' ? null : draft.brand;
-        const effective = wanted === null ? (c.brandFromPrefix || null) : wanted;
-        if ((effective || null) !== (c.brand || null)) {
-          out.push({ field: 'brand', label: 'Brand', scope: 'local', from: c.brand, to: effective });
-        }
-      }
-      return out;
-    }
-
-    function acoStartEdit(campaignId) {
+    // Records a change only when it differs from what is stored, so setting a
+    // field back to its original value clears the pending edit rather than
+    // queueing a no-op write.
+    function acoSetPending(campaignId, field, rawValue) {
       const c = acoData.campaigns.find(x => x.campaignId === campaignId);
       if (!c) return;
-      acoEditingId = campaignId;
-      acoEditError = null;
-      acoEditDraft = { brand: c.brandSource === 'override' ? c.brand : '' };
-      acoCollapsed.delete(c.portfolioId || '(none)');
-      acoRenderTable();
-    }
 
-    function acoCancelEdit() {
-      acoEditingId = null;
-      acoEditDraft = null;
-      acoEditError = null;
-      acoRenderTable();
-    }
-
-    async function acoSaveEdit() {
-      if (acoEditBusy || !accessToken) return;
-      const c = acoData.campaigns.find(x => x.campaignId === acoEditingId);
-      if (!c) return;
-      const diffs = acoEditDiffs(c);
-      if (!diffs.length) return;
-
-      acoEditBusy = true;
-      acoEditError = null;
-      acoRenderTable();
-
-      try {
-        const brandDiff = diffs.find(d => d.field === 'brand');
-        const res = await fetch('/api/adcampaigns?action=update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({
-            campaignId: c.campaignId,
-            adProduct: c.adProduct,
-            local: brandDiff ? { brand: brandDiff.to } : {},
-            amazon: {}
-          })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.success) throw new Error(data.error || `Save failed (${res.status})`);
-
-        acoFlash = `${c.name}: ${diffs.map(d => `${d.label} ${d.from ?? '—'} → ${d.to ?? '—'}`).join(', ')}`;
-        acoEditingId = null;
-        acoEditDraft = null;
-        // No optimistic update — the row's new values come back from the server.
-        loadAdCampaigns();
-      } catch (err) {
-        console.error('[ACO] save failed:', err);
-        acoEditError = err.message;
-      } finally {
-        // Clear busy BEFORE re-rendering, or a failed save leaves Save disabled
-        // for good and the only way to retry is to cancel and start again.
-        acoEditBusy = false;
-        if (acoEditingId) acoRenderTable();
+      let value = rawValue;
+      let current;
+      if (field === 'brand') {
+        value = rawValue === '' ? null : rawValue;
+        const effective = value === null ? (c.brandFromPrefix || null) : value;
+        current = c.brand || null;
+        if ((effective || null) === current) {
+          if (acoPending[campaignId]) delete acoPending[campaignId][field];
+        } else {
+          acoPending[campaignId] = acoPending[campaignId] || {};
+          acoPending[campaignId][field] = value;
+        }
       }
+
+      if (acoPending[campaignId] && !Object.keys(acoPending[campaignId]).length) {
+        delete acoPending[campaignId];
+      }
+      delete acoRowErrors[campaignId];
+      acoRenderTable();
+      acoRenderSaveBar();
+    }
+
+    function acoPendingList() {
+      return Object.entries(acoPending).map(([campaignId, fields]) => {
+        const c = acoData.campaigns.find(x => x.campaignId === campaignId);
+        const diffs = [];
+        if ('brand' in fields) {
+          const effective = fields.brand === null ? (c?.brandFromPrefix || null) : fields.brand;
+          diffs.push({ field: 'brand', label: 'Brand', scope: 'local', from: c?.brand || null, to: effective });
+        }
+        return { campaignId, name: c?.name || campaignId, fields, diffs };
+      });
+    }
+
+    function acoRenderSaveBar() {
+      const bar = document.getElementById('aco-save-bar');
+      if (!bar) return;
+      const list = acoPendingList();
+
+      if (!list.length) {
+        bar.innerHTML = '';
+        bar.style.display = 'none';
+        return;
+      }
+
+      const failed = list.filter(p => acoRowErrors[p.campaignId]);
+      const n = list.length;
+
+      bar.style.display = 'block';
+      bar.innerHTML = `
+        <div class="aco-save-bar-inner">
+          <div class="aco-save-bar-summary">
+            <strong>${n} unsaved change${n === 1 ? '' : 's'}</strong>
+            <span class="aco-save-bar-detail">${list.slice(0, 3).map(p =>
+              `${escapeHtml(p.name)}: ${p.diffs.map(d => `${d.label} → ${escapeHtml(d.to ?? 'from name')}`).join(', ')}`
+            ).join(' · ')}${n > 3 ? ` · and ${n - 3} more` : ''}</span>
+            ${failed.length ? `<span class="aco-save-bar-failed">${failed.length} failed — still unsaved</span>` : ''}
+          </div>
+          <div class="aco-save-bar-actions">
+            <button class="btn btn-secondary" data-aco-bar="discard"${acoSaveBusy ? ' disabled' : ''}>Discard</button>
+            <button class="btn btn-primary" data-aco-bar="save"${acoSaveBusy ? ' disabled' : ''}>${
+              acoSaveBusy ? 'Saving<span class="loading"></span>' : 'Save changes'}</button>
+          </div>
+        </div>`;
+    }
+
+    function acoDiscardPending() {
+      acoPending = {};
+      acoRowErrors = {};
+      acoRenderTable();
+      acoRenderSaveBar();
+    }
+
+    async function acoSavePending() {
+      if (acoSaveBusy || !accessToken) return;
+      const list = acoPendingList();
+      if (!list.length) return;
+
+      acoSaveBusy = true;
+      acoRowErrors = {};
+      acoRenderSaveBar();
+
+      const saved = [];
+      // Sequential, so a failure is attributable to one campaign and the ones
+      // that already succeeded are not re-sent on a retry.
+      for (const item of list) {
+        try {
+          const res = await fetch('/api/adcampaigns?action=update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+            body: JSON.stringify({
+              campaignId: item.campaignId,
+              adProduct: (acoData.campaigns.find(x => x.campaignId === item.campaignId) || {}).adProduct,
+              local: 'brand' in item.fields ? { brand: item.fields.brand } : {},
+              amazon: {}
+            })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.success) throw new Error(data.error || `Save failed (${res.status})`);
+          saved.push(item);
+          delete acoPending[item.campaignId];
+        } catch (err) {
+          console.error('[ACO] save failed for', item.campaignId, err);
+          acoRowErrors[item.campaignId] = err.message;
+        }
+      }
+
+      acoSaveBusy = false;
+
+      if (saved.length) {
+        acoFlash = saved.length === 1
+          ? `Saved ${saved[0].name}: ${saved[0].diffs.map(d => `${d.label} ${d.from ?? '—'} → ${d.to ?? '—'}`).join(', ')}`
+          : `Saved ${saved.length} changes.`;
+      }
+
+      if (Object.keys(acoPending).length) {
+        // Some failed: keep them pending so a retry is one click, and leave the
+        // successful ones out of the queue.
+        acoRenderTable();
+        acoRenderSaveBar();
+        if (saved.length) acoRenderFlashOnly();
+      } else {
+        // No optimistic update — the rows come back from the server.
+        loadAdCampaigns();
+      }
+    }
+
+    // Shows the flash without a full re-render, for the partial-failure case
+    // where the save bar and the failed rows must stay exactly as they are.
+    function acoRenderFlashOnly() {
+      const container = document.getElementById('adcampaigns-content');
+      if (!container || !acoFlash) return;
+      const msg = acoFlash;
+      acoFlash = null;
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.style.cssText = 'margin-bottom: 1.5rem; border-left: 3px solid var(--success);';
+      div.innerHTML = `<div style="color: var(--success);">${escapeHtml(msg)}</div>`;
+      container.insertBefore(div, container.firstChild);
     }
 
     function acoStateCell(state) {
@@ -715,31 +781,23 @@
 
       // Delegated so it survives every re-render of the table.
       const wrap = document.getElementById('aco-table-wrap');
-      if (wrap) wrap.addEventListener('input', e => {
-        const key = e.target && e.target.dataset && e.target.dataset.acoInput;
-        // Draft-backed, so a re-render triggered by anything else does not
-        // discard what was typed.
-        if (key && acoEditDraft) acoEditDraft[key] = e.target.value;
-      });
+      // Delegated, so controls survive every table re-render.
       if (wrap) wrap.addEventListener('change', e => {
-        const key = e.target && e.target.dataset && e.target.dataset.acoInput;
-        if (!key || !acoEditDraft) return;
-        acoEditDraft[key] = e.target.value;
-        acoRenderTable();   // re-evaluates whether Save should be enabled
+        const el = e.target;
+        const field = el && el.dataset && el.dataset.acoInput;
+        if (!field) return;
+        acoSetPending(el.dataset.acoId, field, el.value);
+      });
+
+      const bar = document.getElementById('aco-save-bar');
+      if (bar) bar.addEventListener('click', e => {
+        const btn = e.target.closest('[data-aco-bar]');
+        if (!btn) return;
+        if (btn.dataset.acoBar === 'save') acoSavePending();
+        else if (btn.dataset.acoBar === 'discard') acoDiscardPending();
       });
 
       if (wrap) wrap.addEventListener('click', e => {
-        const editBtn = e.target.closest('[data-aco-edit]');
-        if (editBtn) { acoStartEdit(editBtn.dataset.acoEdit); return; }
-
-        const action = e.target.closest('[data-aco-action]');
-        if (action) {
-          const what = action.dataset.acoAction;
-          if (what === 'cancel') acoCancelEdit();
-          else if (what === 'save') acoSaveEdit();
-          return;
-        }
-
         const row = e.target.closest('.aco-portfolio-row');
         if (!row) return;
         const pfId = row.dataset.acoPf;

@@ -1605,28 +1605,9 @@
       flex: 0 0 auto;
     }
 
-    /* Campaign Overview in-line editing: editable cells become controls in
-       place and the ✎ is replaced by Save / Cancel, so the row never grows a
-       panel underneath it. */
-    .aco-edit-affordance {
-      margin-left: 0.5rem;
-      cursor: pointer;
-      opacity: 0;
-      font-size: 0.8rem;
-      transition: opacity 0.12s ease;
-    }
-
-    .aco-campaign-row:hover .aco-edit-affordance { opacity: 0.55; }
-    .aco-edit-affordance:hover { opacity: 1 !important; }
-
-    .aco-campaign-row.aco-row-editing td {
-      background: var(--bg-secondary);
-    }
-
-    .aco-campaign-row.aco-row-editing td:first-child {
-      box-shadow: inset 3px 0 0 var(--accent-orange);
-    }
-
+    /* Campaign Overview editing: editable cells are always live controls, and
+       changes accumulate into a sticky save bar rather than being committed one
+       row at a time. */
     .aco-cell-editing { padding: 0.25rem 0.5rem !important; }
 
     .aco-cell-input {
@@ -1636,39 +1617,79 @@
       font-size: 0.8125rem;
       background: var(--bg-primary);
       color: var(--text-primary);
-      border: 1px solid var(--accent-orange);
-      border-radius: 4px;
-    }
-
-    .aco-row-actions {
-      display: inline-flex;
-      gap: 0.25rem;
-      margin-left: 0.5rem;
-      vertical-align: middle;
-    }
-
-    .aco-row-btn {
-      padding: 0.15rem 0.4rem;
-      font-size: 0.75rem;
-      line-height: 1.2;
-      background: var(--bg-primary);
-      color: var(--text-primary);
       border: 1px solid var(--border);
       border-radius: 4px;
-      cursor: pointer;
     }
 
-    .aco-row-btn:hover:not(:disabled) { border-color: var(--accent-orange); }
+    .aco-cell-input:hover { border-color: var(--text-secondary); }
+    .aco-cell-input:focus { outline: none; border-color: var(--accent-orange); }
 
-    .aco-row-btn:disabled { opacity: 0.35; cursor: default; }
+    /* A changed-but-unsaved control is visually distinct from a saved one, so
+       the save bar's count always has something to point at. */
+    .aco-cell-input.aco-dirty {
+      border-color: var(--accent-orange);
+      background: rgba(255, 107, 53, 0.08);
+    }
 
-    .aco-row-save:not(:disabled) {
-      color: var(--success);
-      border-color: var(--success);
+    .aco-campaign-row.aco-row-dirty td:first-child {
+      box-shadow: inset 3px 0 0 var(--accent-orange);
+    }
+
+    .aco-campaign-row.aco-row-failed td:first-child {
+      box-shadow: inset 3px 0 0 var(--error);
     }
 
     .aco-row-error {
       color: var(--error);
       font-size: 0.75rem;
       margin-top: 0.25rem;
+    }
+
+    /* Sticks to the bottom of the viewport while the page scrolls, so pending
+       changes are always one click from being saved or discarded. */
+    #aco-save-bar {
+      position: sticky;
+      bottom: 0;
+      z-index: 20;
+      margin-top: 1rem;
+    }
+
+    .aco-save-bar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding: 0.85rem 1.15rem;
+      background: var(--bg-card);
+      border: 1px solid var(--accent-orange);
+      border-radius: 8px;
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .aco-save-bar-summary {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      min-width: 0;
+    }
+
+    .aco-save-bar-detail {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 60vw;
+    }
+
+    .aco-save-bar-failed {
+      font-size: 0.75rem;
+      color: var(--error);
+    }
+
+    .aco-save-bar-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex: 0 0 auto;
     }
