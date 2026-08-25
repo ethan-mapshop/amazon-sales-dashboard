@@ -1724,3 +1724,22 @@
       font-size: 0.75rem;
       color: var(--warning);
     }
+
+    /* Name is the only field behind a click, so it needs an affordance the
+       other columns do not. Faint until the row is hovered, so a long table
+       is not a column of pencils. */
+    .aco-edit-affordance {
+      margin-left: 0.4rem;
+      cursor: pointer;
+      opacity: 0;
+      font-size: 0.8rem;
+      transition: opacity 0.12s ease;
+    }
+
+    .aco-campaign-row:hover .aco-edit-affordance { opacity: 0.55; }
+
+    .aco-edit-affordance:hover { opacity: 1 !important; }
+
+    /* Keyboard users never trigger :hover, so the icon would be invisible and
+       unreachable without this. */
+    .aco-edit-affordance:focus-visible { opacity: 1; outline: 1px solid var(--accent-orange); }

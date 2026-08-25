@@ -107,6 +107,11 @@
     let acoSaveBusy = false;
     let acoRowErrors = {};   // { [campaignId]: message }
     let acoFlash = null;
+    // Name is the one field behind a click. It is rarely the thing you came to
+    // change, a full-width text box in the first column crowds out everything
+    // else, and renaming orphans this campaign's row on the Campaign Mapping
+    // page — which keys by name. Every other field is live on sight.
+    let acoNameEditing = new Set();
 
     function loadAdCampaigns() {
       const container = document.getElementById('adcampaigns-content');
@@ -565,8 +570,15 @@
         : 'Sponsored Brands campaigns are read-only here';
 
       if (col.editable === 'text') {
-        const value = 'name' in pending ? pending.name : (c.name || '');
         if (sbLocked) return `${escapeHtml(c.name)}${acoLockNote(lockReason)}`;
+        // A pending rename keeps its box open regardless, so the unsaved value
+        // stays visible and correctable.
+        if (!acoNameEditing.has(c.campaignId) && !('name' in pending)) {
+          return `${escapeHtml(c.name)}<span class="aco-edit-affordance" role="button" tabindex="0"
+                    data-aco-editname="${escapeHtml(c.campaignId)}" title="Rename this campaign"
+                    aria-label="Rename ${escapeHtml(c.name)}">&#9998;</span>`;
+        }
+        const value = 'name' in pending ? pending.name : (c.name || '');
         return `<input type="text" class="${cls('name')}" data-aco-input="name" ${idAttr}
                        value="${escapeHtml(value)}" spellcheck="false">`;
       }
@@ -878,9 +890,41 @@
       return out;
     }
 
+    // Opening and closing the name box repaints only that cell. Re-rendering
+    // the table here would drop focus the instant it was granted, and on the
+    // way out would destroy whatever element is being tabbed to.
+    function acoOpenNameEdit(campaignId) {
+      acoNameEditing.add(campaignId);
+      acoRepaintNameCell(campaignId);
+      const el = document.querySelector(
+        `[data-aco-input="name"][data-aco-id="${CSS.escape(campaignId)}"]`);
+      if (el) { el.focus(); el.select(); }
+    }
+
+    function acoCloseNameEdit(campaignId) {
+      // An unsaved rename has nowhere else to live, so the box stays.
+      if (acoPending[campaignId] && 'name' in acoPending[campaignId]) return;
+      acoNameEditing.delete(campaignId);
+      acoRepaintNameCell(campaignId);
+    }
+
+    function acoRepaintNameCell(campaignId) {
+      const c = acoData.campaigns.find(x => x.campaignId === campaignId);
+      const row = document.querySelector(
+        `tr.aco-campaign-row[data-aco-id="${CSS.escape(campaignId)}"]`);
+      if (!c || !row) return;
+      const col = ACO_VISIBLE.find(x => x.field === 'name');
+      const td = row.cells[ACO_VISIBLE.indexOf(col)];
+      if (!td) return;
+      const err = acoRowErrors[campaignId]
+        ? `<div class="aco-row-error">${escapeHtml(acoRowErrors[campaignId])}</div>` : '';
+      td.innerHTML = acoEditCell(col, c) + err;
+    }
+
     function acoDiscardPending() {
       acoPending = {};
       acoRowErrors = {};
+      acoNameEditing.clear();
       acoRenderTable();
       acoRenderSaveBar();
     }
@@ -937,6 +981,7 @@
       }
 
       acoSaveBusy = false;
+      for (const item of saved) acoNameEditing.delete(item.campaignId);
 
       if (saved.length) {
         acoFlash = saved.length === 1
@@ -1059,6 +1104,37 @@
         acoSetPending(el.dataset.acoId, field, el.value);
       }));
 
+      // focusout, not blur: blur does not bubble, so a delegated handler on the
+      // wrapper would never see it.
+      if (wrap) wrap.addEventListener('focusout', e => {
+        const el = e.target;
+        if (!el.dataset || el.dataset.acoInput !== 'name') return;
+        acoCloseNameEdit(el.dataset.acoId);
+      });
+
+      if (wrap) wrap.addEventListener('keydown', e => {
+        const el = e.target;
+        if (!el.dataset) return;
+
+        // Tab lands on the pencil; Enter or Space opens it, the same as a click.
+        if (el.dataset.acoEditname && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          acoOpenNameEdit(el.dataset.acoEditname);
+          return;
+        }
+
+        if (el.dataset.acoInput !== 'name') return;
+        if (e.key === 'Enter') { el.blur(); }
+        else if (e.key === 'Escape') {
+          // Escape abandons the rename outright rather than leaving a pending
+          // edit that only Discard — which drops every other row too — clears.
+          const c = acoData.campaigns.find(x => x.campaignId === el.dataset.acoId);
+          el.value = c ? (c.name || '') : el.value;
+          acoSetPending(el.dataset.acoId, 'name', el.value);
+          acoCloseNameEdit(el.dataset.acoId);
+        }
+      });
+
       const bar = document.getElementById('aco-save-bar');
       if (bar) bar.addEventListener('click', e => {
         const btn = e.target.closest('[data-aco-bar]');
@@ -1068,6 +1144,9 @@
       });
 
       if (wrap) wrap.addEventListener('click', e => {
+        const pencil = e.target.closest('[data-aco-editname]');
+        if (pencil) { acoOpenNameEdit(pencil.dataset.acoEditname); return; }
+
         const row = e.target.closest('.aco-portfolio-row');
         if (!row) return;
         const pfId = row.dataset.acoPf;
