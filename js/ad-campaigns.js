@@ -21,7 +21,8 @@
       { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money' },
       { field: 'biddingStrategy', label: 'Bidding' },
       { field: 'placements',      label: 'Placements',    format: 'placements' },
-      { field: 'startDate',       label: 'Started',       mono: true },
+      // Hidden rather than deleted: gone from the table, still in the CSV.
+      { field: 'startDate',       label: 'Started',       hidden: true },
       // Present in the CSV, absent from the table. Without ids an export can't
       // be joined back to anything after the first rename.
       { field: 'portfolio',       label: 'Portfolio',     hidden: true },
