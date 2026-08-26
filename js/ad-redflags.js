@@ -373,8 +373,8 @@
     function arfFooter(data) {
       const c = data.coverage || {};
       const bits = [
-        `${c.evaluated} of ${c.enabled} enabled campaigns evaluated`,
-        c.belowFloor ? `${c.belowFloor} below the $${(data.config || {}).MIN_WEEKLY_SPEND} weekly spend floor` : null,
+        `all ${c.enabled} enabled campaigns evaluated`,
+        typeof c.withSpend === 'number' ? `${c.withSpend} spent anything this week` : null,
         c.unmapped && c.unmapped.length ? `${c.unmapped.length} unmapped to a brand` : null,
         c.noBudget && c.noBudget.length ? `${c.noBudget.length} with no daily budget` : null,
         c.orphanRows ? `${c.orphanRows} report rows for campaigns not in the snapshot` : null

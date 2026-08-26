@@ -863,7 +863,6 @@ function previousMonthISO() {
 // own words are "do not adjust for feel or context". Returned with each run so
 // the output can be checked against the spec without reading this file.
 const RF_CONFIG = {
-  MIN_WEEKLY_SPEND:      5,     // "does not evaluate campaigns with less than $5 in weekly spend"
   CAP_RATIO:             0.95,  // 1 — 7-day spend ≥ 95% of (daily budget × 7)
   CAP_RETENTION_MIN:     0.50,  // 1 — ... and profit retention ≥ 50%
   RUNAWAY_MULTIPLE:      2,     // 2 — 7-day spend > 2× trailing 28-day weekly average
@@ -881,7 +880,10 @@ const RF_CONFIG = {
 // under the bar. Portfolio is one-per-SKU in this account.
 const RF_SPEC_DEVIATIONS = [
   'Check 3 (stalled) runs at portfolio level with a 15-click threshold; ' +
-  'the cadence doc specifies campaign level with 10 clicks.'
+  'the cadence doc specifies campaign level with 10 clicks.',
+  'Every enabled campaign is evaluated; the cadence doc excludes campaigns ' +
+  'under $5 of weekly spend. The data is pulled either way, so the exclusion ' +
+  'only hid campaigns rather than saving anything.'
 ];
 
 // Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
@@ -1233,13 +1235,12 @@ function evaluateWeek({ census, rows, window }) {
   }
 
   const flags = { budgetCap: [], runaway: [], stalled: [], brandPacing: [] };
-  let evaluated = 0;
 
-  // ── checks 1 and 2, campaign level, above the $5 floor ──
+  // ── checks 1 and 2, every enabled campaign ──
+  // No spend floor: the reports are pulled in full regardless, so excluding
+  // small campaigns bought nothing and hid real flags. Check 2 keeps its own
+  // $50 floor, which is a threshold in the doc rather than a coverage rule.
   for (const c of campaigns.values()) {
-    if (c.spend7 < RF_CONFIG.MIN_WEEKLY_SPEND) continue;
-    evaluated++;
-
     if (c.capRatio !== null && c.capRatio >= RF_CONFIG.CAP_RATIO &&
         c.retention !== null && c.retention >= RF_CONFIG.CAP_RETENTION_MIN) {
       flags.budgetCap.push({
@@ -1264,9 +1265,8 @@ function evaluateWeek({ census, rows, window }) {
   }
 
   // ── check 3, portfolio level ──
-  // Spans every campaign regardless of the $5 floor: the products this exists
-  // to catch are ones where several small campaigns each sit under the bar
-  // while the product as a whole clearly stopped converting.
+  // The 15-click threshold is the noise filter here; a portfolio that took
+  // real clicks and returned nothing is worth seeing whatever it cost.
   const portfolios = new Map();
   for (const c of campaigns.values()) {
     // A campaign with no portfolio stands alone rather than being pooled with
@@ -1285,7 +1285,6 @@ function evaluateWeek({ census, rows, window }) {
                        clicks7: c.clicks7, spend7: r2(c.spend7) });
   }
   for (const p of portfolios.values()) {
-    if (p.spend7 < RF_CONFIG.MIN_WEEKLY_SPEND) continue;
     // Clicks and orders are per-day integers, so the sums are exact — but
     // round anyway, so a portfolio sitting on the threshold cannot turn on
     // float dust.
@@ -1335,23 +1334,32 @@ function evaluateWeek({ census, rows, window }) {
   // The run's own receipt. Not a report of healthy campaigns — one line saying
   // what the denominator was, so a run that silently covers half the account
   // cannot look identical to a clean week.
-  const enabled = campaigns.size;
-  const unmapped = [...campaigns.values()]
-    .filter(c => c.spend7 >= RF_CONFIG.MIN_WEEKLY_SPEND && !c.brand)
+  const all = [...campaigns.values()];
+  const enabled = all.length;
+  // Every enabled campaign is now evaluated, so the interesting number is how
+  // many of them Amazon reported any activity for. A campaign with no rows
+  // spent nothing — which is a fact about the week, not a gap in the run.
+  const withSpend = all.filter(c => c.spend7 > 0).length;
+
+  // Lists are limited to campaigns that actually spent: a dormant campaign
+  // with no brand cannot affect any check, and naming it is just noise.
+  const unmapped = all
+    .filter(c => c.spend7 > 0 && !c.brand)
     .map(c => ({ campaign: c.name, adProduct: c.adProduct, spend7: r2(c.spend7) }))
     .sort((a, b) => b.spend7 - a.spend7);
   // Campaigns check 1 could not look at: no daily budget in the snapshot, or a
   // lifetime budget, which has no daily ceiling to be capped against.
-  const noBudget = [...campaigns.values()]
-    .filter(c => c.spend7 >= RF_CONFIG.MIN_WEEKLY_SPEND && c.capRatio === null)
+  const noBudget = all
+    .filter(c => c.spend7 > 0 && c.capRatio === null)
     .map(c => ({ campaign: c.name, adProduct: c.adProduct, spend7: r2(c.spend7),
-                 reason: /LIFETIME/i.test(c.budgetType) ? 'lifetime budget' : 'no daily budget' }));
+                 reason: /LIFETIME/i.test(c.budgetType) ? 'lifetime budget' : 'no daily budget' }))
+    .sort((a, b) => b.spend7 - a.spend7);
 
   return {
     flags,
     flagCount,
     clean: flagCount === 0,
-    coverage: { enabled, evaluated, belowFloor: enabled - evaluated, orphanRows, unmapped, noBudget }
+    coverage: { enabled, evaluated: enabled, withSpend, orphanRows, unmapped, noBudget }
   };
 }
 
