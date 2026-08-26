@@ -101,7 +101,13 @@
           headers: { Authorization: `Bearer ${accessToken}` }
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        if (!res.ok) {
+          // The reason Amazon gave is in `failures`; throwing only `error`
+          // reduces a specific answer to a generic sentence.
+          const detail = (data.failures || [])
+            .map(f => `${f.key}${f.window ? ` (${f.window})` : ''}: ${f.error}`).join(' | ');
+          throw new Error(detail || data.error || `Request failed (${res.status})`);
+        }
 
         const good = (data.reports || []).filter(r => r.reportId);
         if (!good.length) {

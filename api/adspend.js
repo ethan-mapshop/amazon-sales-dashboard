@@ -836,10 +836,10 @@ function previousMonthISO() {
 //                   portfolios never worked.
 //
 //   PERFORMANCE   — cost, clicks, impressions, orders and sales per campaign
-//                   per day. One report per ad product covering 35 CONTIGUOUS
-//                   days: the 7-day week window plus the 28-day trailing
-//                   baseline immediately before it. They abut, so one request
-//                   serves both and nothing needs storing between runs.
+//                   per day. The 7-day week window and the 28-day trailing
+//                   baseline abut, but v3 caps a report at MAX_REPORT_DAYS,
+//                   and 35 is over it — so they go as separate requests, two
+//                   per ad product. Nothing is stored between runs.
 //
 // The snapshot is the spine. Every enabled campaign in it is evaluated whether
 // or not the report mentions it — a campaign with no report rows spent nothing
@@ -922,7 +922,22 @@ const RF_COLUMNS = {
   sb: ['date', 'campaignId', 'cost', 'clicks', 'impressions', 'purchases', 'sales']
 };
 
-const REPORT_KEYS = ['sp', 'sb'];
+// Amazon's v3 reporting API rejects a request whose date range exceeds this.
+// It is the entire reason the week and the baseline cannot be one report: they
+// are contiguous and total 35 days.
+const MAX_REPORT_DAYS = 31;
+
+// Two windows x two ad products. Rows from all four are pooled and binned by
+// their own `date`, so the split is a transport detail rather than something
+// the evaluation has to know about.
+const REPORT_KEYS = ['spWeek', 'spBase', 'sbWeek', 'sbBase'];
+
+function reportSpec(key, window) {
+  const product = key.startsWith('sp') ? 'sp' : 'sb';
+  return key.endsWith('Week')
+    ? { product, start: window.weekStart, end: window.weekEnd }
+    : { product, start: window.baseStart, end: window.baseEnd };
+}
 const REPORT_ID_RE = /^[A-Za-z0-9._-]{8,80}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -945,22 +960,30 @@ async function handleWeeklyRequest(req, res) {
     const reports = [];
     const failures = [];
 
-    for (const product of REPORT_KEYS) {
+    for (const key of REPORT_KEYS) {
+      const spec = reportSpec(key, window);
       try {
-        // One request spanning baseline start → week end: 35 contiguous days.
-        const r = await requestCampaignReport(accessToken, {
-          product, start: window.baseStart, end: window.weekEnd
-        });
-        reports.push({ key: product, ...r });
+        const r = await requestCampaignReport(accessToken, spec);
+        reports.push({ key, ...r });
       } catch (err) {
-        console.error(`[REDFLAGS REQUEST] ${product} failed:`, err.message);
-        failures.push({ key: product, error: err.message, invalidColumns: rfInvalidColumns(err.message) });
+        console.error(`[REDFLAGS REQUEST] ${key} failed:`, err.message);
+        failures.push({
+          key, error: err.message,
+          window: `${spec.start}..${spec.end}`,
+          invalidColumns: rfInvalidColumns(err.message)
+        });
       }
       await sleep(600);
     }
 
     if (!reports.length) {
-      return res.status(502).json({ error: 'Neither report could be requested.', failures });
+      // Amazon's reason goes in `error` as well as `failures`. A client that
+      // reads only `error` on a non-2xx — which is the normal thing to do —
+      // would otherwise show a generic sentence and drop the actual answer.
+      return res.status(502).json({
+        error: 'No report could be requested. ' + (failures[0] ? failures[0].error : ''),
+        failures
+      });
     }
 
     return res.status(200).json({
@@ -1043,7 +1066,7 @@ async function handleWeeklyCollect(req, res) {
           continue;
         }
         const raw = await withAdsRetry(() => downloadReport(url));
-        rows.push(...rfNormalizeRows(raw, key === 'sp' ? 'SP' : 'SB'));
+        rows.push(...rfNormalizeRows(raw, key.startsWith('sp') ? 'SP' : 'SB'));
       } catch (err) {
         console.error(`[REDFLAGS COLLECT] ${key} failed:`, err.message);
         notes.push({ key, note: 'download failed: ' + err.message });
@@ -1366,6 +1389,11 @@ function missingAdsCredentials() {
 }
 
 function buildReportBody(product, start, end) {
+  if (daySpan(start, end) > MAX_REPORT_DAYS) {
+    // Caught here rather than at Amazon, where it surfaces as an opaque 4xx.
+    throw new Error(`report window ${start}..${end} is ${daySpan(start, end)} days, ` +
+                    `over Amazon's ${MAX_REPORT_DAYS}-day limit`);
+  }
   return {
     name: `RedFlags ${product.toUpperCase()} ${start}..${end}`,
     startDate: start,
@@ -1482,4 +1510,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Exported for the offline cadence tests. Vercel only invokes the default
 // export, so these are inert in production.
 export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
-         RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, MARGINS };
+         reportSpec, buildReportBody, daySpan,
+         RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS };
