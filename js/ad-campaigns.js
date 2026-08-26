@@ -229,7 +229,7 @@
       );
 
       container.innerHTML =
-        acoFlashBlock() + acoStats() + acoCoverageNotes() + acoCoverageBanner() + acoToolbar() +
+        acoFlashBlock() + acoStats() + acoSyncProblems() + acoCoverageNotes() + acoCoverageBanner() + acoToolbar() +
         '<div id="aco-table-wrap"></div>' +
         '<div id="aco-save-bar" style="display: none;"></div>' +
         acoChangesCard() + acoCoverageDetails() + '<div id="aco-diagnostic"></div>';
@@ -310,6 +310,34 @@
       // Snapshots written before coverage gained its rules have the old flat
       // shape; skip rather than render nonsense until the next refresh.
       return cov && cov.fields ? cov : null;
+    }
+
+    // Every sync records warnings and errors into adcampaigns:meta, and until
+    // now nothing displayed them — so a whole endpoint could fail on the normal
+    // refresh path and the only symptom was a field quietly staying empty.
+    // acoRefresh only opens the diagnostic panel on abort, dry run or throw,
+    // which are the three cases where the sync did NOT quietly half-succeed.
+    function acoSyncProblems() {
+      const meta = acoData.meta;
+      if (!meta) return '';
+      const errors = meta.errors || [];
+      const warnings = meta.warnings || [];
+      if (!errors.length && !warnings.length) return '';
+
+      return `
+        <div class="card" style="margin-bottom: 1.5rem; border-left: 3px solid var(--${errors.length ? 'error' : 'warning'});">
+          <div style="font-weight: 600; color: var(--${errors.length ? 'error' : 'warning'}); margin-bottom: 0.5rem;">
+            Last sync reported ${errors.length ? `${errors.length} error${errors.length === 1 ? '' : 's'}` : ''}${
+              errors.length && warnings.length ? ' and ' : ''}${
+              warnings.length ? `${warnings.length} warning${warnings.length === 1 ? '' : 's'}` : ''}
+          </div>
+          ${errors.map(e => `<div style="font-size: 0.75rem; font-family: monospace; word-break: break-word; margin-bottom: 0.4rem;">
+            ${escapeHtml(e.endpoint || '')} (${escapeHtml(String(e.status ?? ''))}): ${escapeHtml(String(e.body || '').slice(0, 300))}
+          </div>`).join('')}
+          ${warnings.map(w => `<div style="font-size: 0.8125rem; color: var(--text-secondary);">
+            ${escapeHtml(String(w))}
+          </div>`).join('')}
+        </div>`;
     }
 
     // Absences that are facts about the account rather than mapping errors.

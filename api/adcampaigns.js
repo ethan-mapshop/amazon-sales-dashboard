@@ -456,8 +456,33 @@ async function handleUpdate(req, res) {
       changeRecords.push(acEditRecord(campaignId, row, 'brand', before, updatedRow.brand || null));
     }
 
+    // ── ad group default bid ─────────────────────────────────────────────────
+    // A different endpoint and a different id, so it travels separately rather
+    // than being smuggled into the campaign payload.
+    let bidStage = null;
+    if (hasBid) {
+      const bidResult = await acWriteAdGroupBid({
+        row, adGroupId: acStr(req.body?.adGroupId) || row.adGroupId,
+        defaultBid: adGroup.defaultBid,
+        expected: (req.body?.expected || {}).defaultBid
+      });
+      bidStage = bidResult.stage;
+      if (!bidResult.ok) {
+        // The brand override may still be valid; persist it rather than
+        // discarding a change the user made.
+        if (writes.length) await Promise.all(writes);
+        return res.status(200).json({
+          success: false, stage: bidResult.stage, campaignId,
+          error: bidResult.error, conflicts: bidResult.conflicts || []
+        });
+      }
+      result.applied.defaultBid = { from: bidResult.from, to: bidResult.to };
+      updatedRow = { ...updatedRow, defaultBid: bidResult.to };
+      changeRecords.push(acEditRecord(campaignId, row, 'defaultBid', bidResult.from, bidResult.to));
+    }
+
     // ── Amazon fields ───────────────────────────────────────────────────────
-    let stage = 'store';
+    let stage = bidStage || 'store';
     if (hasAmazon) {
       const amazonResult = await acWriteAmazonFields({ campaignId, row, amazon, expected: req.body?.expected || {} });
       stage = amazonResult.stage;
@@ -532,6 +557,78 @@ function acEditRecord(campaignId, row, field, from, to) {
 
 // Read → conflict-check → write → verify, for one campaign.
 //
+// The bid write. Same read-check-write-verify shape as acWriteAmazonFields, but
+// against the ad group: the campaign object has no bid, and there is nothing on
+// the ad group that can be clobbered by a partial write, so this is the simpler
+// of the two.
+//
+// The 1:1 ad-group assumption is enforced rather than trusted — if the snapshot
+// has no adGroupId, the sync found zero or several and refuses to guess which
+// one the bid belongs to.
+async function acWriteAdGroupBid({ row, adGroupId, defaultBid, expected }) {
+  if (row.adProduct !== 'SP') {
+    return { ok: false, stage: 'validate', error: 'Only Sponsored Products bids can be edited here.' };
+  }
+  if (!adGroupId) {
+    return { ok: false, stage: 'validate',
+             error: 'No single ad group is on record for this campaign, so there is no bid to change. ' +
+                    'Refresh Campaign Overview; if it still says this, the campaign has more than one ad group.' };
+  }
+  const bid = acNum(defaultBid);
+  // Amazon's floor is $0.02. The ceiling is a fat-finger guard, not an API limit.
+  if (!Number.isFinite(bid) || bid < 0.02 || bid > 100) {
+    return { ok: false, stage: 'validate', error: 'Bid must be between $0.02 and $100.' };
+  }
+
+  const accessToken = await getAdsAccessToken();
+
+  const read = await acAdsList(accessToken, AC_ENDPOINTS.spAdGroupsV3, {
+    probeOnly: true,
+    bodyExtra: { adGroupIdFilter: { include: [adGroupId] } }
+  });
+  if (!read.ok) {
+    return { ok: false, stage: 'read',
+             error: `Could not read the ad group from Amazon (${read.status}): ${String(read.bodyText || '').slice(0, 300)}` };
+  }
+  const live = (read.items || []).find(g => String(g.adGroupId) === String(adGroupId));
+  if (!live) {
+    return { ok: false, stage: 'read',
+             error: 'Amazon no longer returns this ad group. Refresh Campaign Overview.' };
+  }
+
+  const liveBid = acNum(live.defaultBid);
+  // acSame, not ===, or 0.75 vs 0.750 from a JSON round-trip false-conflicts.
+  if (expected !== undefined && expected !== null && !acSame(expected, liveBid)) {
+    return { ok: false, stage: 'conflict',
+             conflicts: [{ field: 'defaultBid', youSaw: expected, amazonHasNow: liveBid }],
+             error: 'The bid has changed since this page loaded — refresh and try again.' };
+  }
+
+  const put = await acAdsWrite(accessToken, AC_ENDPOINTS.spAdGroupsV3, {
+    adGroups: [{ adGroupId: acStr(adGroupId), defaultBid: bid }]
+  });
+  if (!put.ok) {
+    return { ok: false, stage: 'write',
+             error: `Amazon rejected the bid change (${put.status}): ${String(put.bodyText || '').slice(0, 300)}` };
+  }
+
+  // Verify by re-reading. A 200 does not prove it applied.
+  const after = await acAdsList(accessToken, AC_ENDPOINTS.spAdGroupsV3, {
+    probeOnly: true,
+    bodyExtra: { adGroupIdFilter: { include: [adGroupId] } }
+  });
+  const confirmed = after.ok
+    ? acNum((after.items || []).find(g => String(g.adGroupId) === String(adGroupId))?.defaultBid)
+    : null;
+  if (after.ok && Number.isFinite(confirmed) && !acSame(confirmed, bid)) {
+    return { ok: false, stage: 'verify',
+             error: `Amazon accepted the change but still reports $${confirmed}.` };
+  }
+
+  // Store what Amazon confirms, never what was requested.
+  return { ok: true, stage: 'verify', from: liveBid, to: Number.isFinite(confirmed) ? confirmed : bid };
+}
+
 // The whole shape of this function is dictated by one hazard: dynamicBidding
 // holds BOTH the bidding strategy and the placement percentages. A partial
 // write of one can clear the other, so the live object is always read first and
@@ -1510,4 +1607,5 @@ export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acField
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
          acPlacementsSummary, acApplyBrandOverride, acKnownBrands,
          acValidateAmazonFields, acCollectItemErrors, acAdsWrite, acJoinDefaultBids,
+         acWriteAdGroupBid,
          AC_ENDPOINTS, AC_CONFIG };

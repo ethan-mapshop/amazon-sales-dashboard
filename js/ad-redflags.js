@@ -310,8 +310,9 @@
           arfSilentRow),
 
         arfSection('3 · Spend collapse', f.spendCollapse,
-          'Still serving, but spending at or below half its own normal rate. Usually lost ' +
-          'Buy Box, a stock issue, or bids falling out of the auction.',
+          'Still serving, but spending at or below half its own normal rate. Spend is ' +
+          'impressions × click-through × cost per click, so each row names which of the ' +
+          'three fell — and therefore whether the fix is in the ad account or on the listing.',
           [C('Campaign'), C('Ad'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
            R('Change')],
           arfSpendCollapseRow),
@@ -326,16 +327,17 @@
 
         arfSection('5 · CPC spike', f.cpcSpike,
           'Paying at least half again as much per click as usual: competitive pressure, or ' +
-          'bid automation reaching. This is the leading indicator for the two checks above ' +
-          'and for budget caps — it appears before it becomes a spend problem.',
+          'bid automation reaching. The suggested cut is a step — 10% at the flagging ' +
+          'threshold rising to 25% at twice it — because what a lower bid actually costs ' +
+          'per click is an auction outcome, not arithmetic. Applying it writes to Amazon.',
           [C('Campaign'), C('Ad'), C('Brand'), R('Clicks'), R('7-day spend'),
-           R('CPC'), R('Typical CPC'), R('Change')],
+           R('CPC'), R('Typical CPC'), R('Change'), R('Bid'), R('Lower to')],
           arfCpcRow),
 
         arfSection('6 · Brand pacing', f.brandPacing,
           'Brand spend against its trailing weekly average — the account-level sanity ' +
-          'check. Above baseline, look for a bid or budget increase, a portfolio cap ' +
-          'lifting, or seasonal demand; below, a paused campaign or lost impression share.',
+          'check. Each row names the campaigns that account for the move, so a brand-level ' +
+          'deviation resolves to specific campaigns rather than a prompt to go looking.',
           [C('Brand'), R('7-day spend'), R('Trailing avg'), R('Change')],
           arfPacingRow)
       ].join('');
@@ -370,10 +372,10 @@
 
     // The first three cells are the same on every check, so they are written
     // once rather than five times. `explain` is the optional second argument:
-    // a config change that plausibly caused this flag, sitting under the name
-    // as prose rather than taking a column it could never fill consistently.
+    // the row's own diagnosis, sitting under the name as prose rather than
+    // taking a column it could never fill consistently.
     function arfWho(r, explain) {
-      const note = explain === undefined ? arfChangeNote(r) : explain;
+      const note = explain || '';
       return `<td class="arf-name">${escapeHtml(r.campaign)}
           ${note ? `<div class="arf-sub">${note}</div>` : ''}
         </td>
@@ -381,66 +383,36 @@
         <td>${escapeHtml(r.brand || '—')}</td>`;
     }
 
-    // Amazon's own wording for the fields, so the note reads like the console
-    // rather than like our schema.
-    const ARF_CHANGE_LABELS = {
-      dailyBudget:       'Budget',
-      defaultBid:        'Default bid',
-      biddingStrategy:   'Bidding',
-      placementsSummary: 'Placements',
-      targetingType:     'Targeting',
-      budgetType:        'Budget type',
-      endDate:           'End date',
-      state:             'State'
+    // spend = impressions x CTR x CPC. Naming which factor fell is the whole
+    // action item: it says whether the fix is in the ad account or on the
+    // listing, which is the difference between a click and an afternoon.
+    const ARF_CAUSE = {
+      impressions: { label: 'Impressions', fix: 'not serving as often — check Buy Box, stock, or whether you are being outbid' },
+      ctr:         { label: 'Click-through', fix: 'being shown and ignored — check price, main image, reviews' },
+      cpc:         { label: 'Cost per click', fix: 'bids fell — Badger most likely cut them' }
     };
 
-    const ARF_MONEY_FIELDS = ['dailyBudget', 'defaultBid'];
-
-    function arfChangeNote(r) {
-      const list = r.changes || [];
-      if (!list.length) return '';
-      return list.map(ch => {
-        const label = ARF_CHANGE_LABELS[ch.field] || ch.field;
-        const fmt = ARF_MONEY_FIELDS.includes(ch.field)
-          ? (v) => (typeof v === 'number' ? arfMoney(v) : '—')
-          : (v) => escapeHtml(arfChangeValue(ch.field, v));
-        return `${escapeHtml(label)} ${fmt(ch.from)} &rarr; ${fmt(ch.to)} on ${arfShortDate(ch.ptDate)}`;
-      }).join(' &middot; ');
+    function arfCauseNote(cause) {
+      if (!cause || !ARF_CAUSE[cause.driver]) return '';
+      const c = ARF_CAUSE[cause.driver];
+      const drop = Math.round((1 - cause.ratio) * 100);
+      return `${escapeHtml(c.label)} down ${drop}% — ${escapeHtml(c.fix)}`;
     }
 
-    function arfChangeValue(field, v) {
-      if (v === null || v === undefined || v === '') return '—';
-      // Placements arrive as the compact summary string the census stores; the
-      // raw enums are unreadable in a one-line note.
-      if (field === 'placementsSummary') {
-        return String(v).split('|')
-          .map(part => {
-            const [place, pct] = part.split(':');
-            return `${ARF_PLACEMENT_SHORT[place] || place} ${pct}%`;
-          }).join(' ');
-      }
-      return String(v);
+    // The campaigns that account for a brand-level move. A deviation with no
+    // attribution is a prompt to go looking, which is what this page exists to
+    // avoid.
+    function arfDriversNote(drivers) {
+      if (!drivers || !drivers.length) return '';
+      return drivers.map(d =>
+        `${escapeHtml(d.campaign)} ${d.delta > 0 ? '+' : ''}${arfMoney(d.delta)}`).join(' · ');
     }
 
-    const ARF_PLACEMENT_SHORT = {
-      PLACEMENT_TOP: 'TOS',
-      PLACEMENT_PRODUCT_PAGE: 'PP',
-      PLACEMENT_REST_OF_SEARCH: 'ROS'
-    };
-
-    // 'Aug 19' — the year is always this one and the note is already long.
+    // 'Aug 19' — the year is always this one and the line is already long.
     function arfShortDate(ptDate) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ptDate || ''))) return escapeHtml(String(ptDate || ''));
       const d = new Date(ptDate + 'T00:00:00Z');
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-    }
-
-    // Only where a negative result is informative. On CPC spike and spend
-    // collapse the whole question is self-inflicted versus external, so ruling
-    // out our own configuration is worth a line. Everywhere else it is noise.
-    function arfWhoOrNothingChanged(r) {
-      return arfWho(r, arfChangeNote(r) ||
-        '<span class="arf-quiet">No campaign configuration changed</span>');
     }
 
     // "5 of 7" rather than a percentage: the column counts days, and a
@@ -469,7 +441,7 @@
     }
 
     function arfSpendCollapseRow(r) {
-      return `<tr>${arfWhoOrNothingChanged(r)}
+      return `<tr>${arfWho(r, arfCauseNote(r.cause))}
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
         <td class="arf-r arf-em arf-down">${arfPct(r.change)}</td>
@@ -487,19 +459,24 @@
     }
 
     function arfCpcRow(r) {
-      return `<tr>${arfWhoOrNothingChanged(r)}
+      return `<tr>${arfWho(r)}
         <td class="arf-r">${formatCount(r.clicks7)}</td>
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r arf-em">${arfMoney(r.cpc7)}</td>
         <td class="arf-r">${arfMoney(r.cpc28)}</td>
         <td class="arf-r arf-em arf-up">+${arfPct(r.change)}</td>
+        <td class="arf-r">${arfMoney(r.defaultBid)}</td>
+        <td class="arf-r arf-action">${arfRecommendCell(r, 'bid')}</td>
       </tr>`;
     }
 
     function arfPacingRow(r) {
       const up = r.deviation > 0;
+      const drivers = arfDriversNote(r.drivers);
       return `<tr>
-        <td class="arf-name">${escapeHtml(r.brand)}</td>
+        <td class="arf-name">${escapeHtml(r.brand)}
+          ${drivers ? `<div class="arf-sub">${drivers}</div>` : ''}
+        </td>
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
         <td class="arf-r arf-em ${up ? 'arf-up' : 'arf-down'}">${up ? '+' : ''}${arfPct(r.deviation)}</td>
@@ -569,29 +546,38 @@
     // The recommended budget and its button share a cell: the number is the
     // thing you are agreeing to, so putting it anywhere else invites agreeing
     // to something you did not read.
-    function arfRecommendCell(r) {
-      const st = arfApply[r.campaignId] || {};
-      const id = escapeHtml(r.campaignId);
+    // One control, two levers. `kind` is 'budget' (raise, on check 1) or 'bid'
+    // (lower, on check 5). They write to different Amazon endpoints, so the
+    // apply state is keyed by both to keep two flags on the same campaign from
+    // sharing a spinner.
+    function arfRecommendCell(r, kind = 'budget') {
+      const target = kind === 'bid' ? r.recommendedBid : r.recommendedBudget;
+      const key = `${r.campaignId}:${kind}`;
+      const st = arfApply[key] || {};
+      const id = escapeHtml(key);
+      const unit = kind === 'bid' ? '' : '/day';
 
       // Before the no-recommendation guard: applying CLEARS the recommendation,
       // so checking that first would report a successful raise as a dash.
       if (st.stage === 'done') {
-        return `<span class="arf-applied">&#10003; now $${escapeHtml(String(st.applied))}/day</span>`;
+        return `<span class="arf-applied">&#10003; now $${escapeHtml(String(st.applied))}${unit}</span>`;
       }
-      if (!r.recommendedBudget) return '<span class="arf-muted">—</span>';
+      if (!target) return '<span class="arf-muted">—</span>';
       if (st.stage === 'busy') {
         return `<span class="loading"></span>`;
       }
       if (st.stage === 'confirm') {
         return `<span class="arf-confirm">
-          <span>$${r.recommendedBudget}/day?</span>
+          <span>$${target}${unit}?</span>
           <button class="arf-btn arf-btn-go" data-arf-confirm="${id}">Confirm</button>
           <button class="arf-btn" data-arf-cancel="${id}">Cancel</button>
         </span>`;
       }
+      const verb = kind === 'bid' ? 'Lower the default bid on Amazon to'
+                                  : 'Raise the daily budget on Amazon to';
       return `<button class="arf-btn" data-arf-apply="${id}"
-                title="Raise this campaign's daily budget on Amazon to $${r.recommendedBudget}"
-              >$${r.recommendedBudget}/day</button>${
+                title="${verb} $${target}"
+              >$${target}${unit}</button>${
         st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message)}</div>` : ''}`;
     }
 
@@ -619,13 +605,15 @@
       if (cached) arfRender(cached);
     }
 
-    async function arfApplyBudget(campaignId) {
+    async function arfApplyBudget(key) {
+      const [campaignId, kind] = String(key).split(':');
       const cached = arfCacheLoad();
-      const row = ((cached && cached.flags && cached.flags.budgetCap) || [])
+      const bucket = kind === 'bid' ? 'cpcSpike' : 'budgetCap';
+      const row = ((cached && cached.flags && cached.flags[bucket]) || [])
         .find(r => String(r.campaignId) === String(campaignId));
       if (!row || !accessToken) return;
 
-      arfSetApplyStage(campaignId, 'busy');
+      arfSetApplyStage(key, 'busy');
       try {
         // The Campaign Overview write path, unchanged: it re-reads the campaign
         // from Amazon, refuses if the budget has moved since this page loaded,
@@ -633,15 +621,16 @@
         const res = await fetch('/api/adcampaigns?action=update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({
-            campaignId: row.campaignId,
-            adProduct: row.adProduct,
-            local: {},
-            amazon: { dailyBudget: row.recommendedBudget },
-            // What this page displayed. Reports take minutes to generate, so
-            // the budget really can move between the run and the button.
-            expected: { dailyBudget: row.dailyBudget }
-          })
+          // What this page displayed goes in `expected`. Reports take minutes
+          // to generate, so the value really can move between run and button.
+          body: JSON.stringify(kind === 'bid'
+            ? { campaignId: row.campaignId, adProduct: row.adProduct, local: {},
+                adGroupId: row.adGroupId,
+                adGroup: { defaultBid: row.recommendedBid },
+                expected: { defaultBid: row.defaultBid } }
+            : { campaignId: row.campaignId, adProduct: row.adProduct, local: {},
+                amazon: { dailyBudget: row.recommendedBudget },
+                expected: { dailyBudget: row.dailyBudget } })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) {
@@ -653,16 +642,22 @@
           throw new Error(data.error || `Failed (${res.status})`);
         }
 
-        // Keep the cached run truthful: the budget on screen is now stale, and
+        // Keep the cached run truthful: the value on screen is now stale, and
         // this row's own recommendation no longer applies to it.
-        row.dailyBudget = row.recommendedBudget;
-        row.recommendedBudget = null;
+        let applied;
+        if (kind === 'bid') {
+          applied = row.defaultBid = row.recommendedBid;
+          row.recommendedBid = null;
+        } else {
+          applied = row.dailyBudget = row.recommendedBudget;
+          row.recommendedBudget = null;
+        }
         arfCacheSave(cached);
-        arfApply[campaignId] = { stage: 'done', applied: row.dailyBudget };
+        arfApply[key] = { stage: 'done', applied };
         arfRender(cached);
       } catch (err) {
-        console.error('[ARF] budget raise failed:', err);
-        arfSetApplyStage(campaignId, 'error', { message: err.message });
+        console.error('[ARF] apply failed:', err);
+        arfSetApplyStage(key, 'error', { message: err.message });
       }
     }
 

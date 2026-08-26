@@ -878,6 +878,8 @@ const RF_CONFIG = {
   // 5 — CPC spike
   CPC_SPIKE_MULTIPLE:    1.50,  // week CPC at or above 1.5× the baseline
   CPC_MIN_CLICKS:        20,    // ... on enough clicks in both windows
+  CUT_MIN:               0.10,  // suggested bid cut at the flagging threshold
+  CUT_MAX:               0.25,  // ... rising to this at twice the threshold
   // 6 — brand pacing
   PACING_DEVIATION:      0.30   // brand spend ±30% of trailing weekly average
 };
@@ -1139,38 +1141,6 @@ async function loadCensus() {
   };
 }
 
-// ─── CONFIG CHANGE ANNOTATION ────────────────────────────────────────
-// Which configuration fields could plausibly explain which flag. Deliberately
-// narrow: a budget change does not explain a CTR collapse, and listing it would
-// train you to ignore the annotation.
-const RF_CHANGE_FIELDS = {
-  budgetCap:     ['dailyBudget', 'state'],
-  silent:        ['state', 'endDate', 'budgetType'],
-  spendCollapse: ['dailyBudget', 'defaultBid', 'biddingStrategy', 'state'],
-  ctrCollapse:   ['placementsSummary', 'targetingType', 'defaultBid'],
-  cpcSpike:      ['defaultBid', 'biddingStrategy', 'placementsSummary']
-  // brandPacing is deliberately absent: it is an aggregate over 30-40 campaigns,
-  // and a per-campaign change belongs on that campaign's row.
-};
-
-// Two is enough to explain a row. More turns an annotation into a changelog.
-const RF_CHANGES_PER_ROW = 2;
-
-// A change during the BASELINE is as relevant as one during the week: it is
-// what makes the week differ from the average it is compared against. So the
-// search window is the whole 35 days, not the 7.
-function rfChangesFor(changes, campaignId, check, window) {
-  const fields = RF_CHANGE_FIELDS[check];
-  if (!fields || !Array.isArray(changes)) return [];
-  const id = String(campaignId);
-  return changes
-    .filter(r => r && String(r.campaignId) === id && fields.includes(r.field) &&
-                 String(r.ptDate || '') >= window.baseStart)
-    .sort((a, b) => String(b.ptDate).localeCompare(String(a.ptDate)))
-    .slice(0, RF_CHANGES_PER_ROW)
-    .map(r => ({ field: r.field, from: r.from ?? null, to: r.to ?? null, ptDate: r.ptDate }));
-}
-
 // ─── WINDOW ──────────────────────────────────────────────────────────────────
 
 // Most recent COMPLETE Monday–Sunday week in Pacific time, plus the 28 days
@@ -1247,6 +1217,10 @@ function evaluateWeek({ census, rows, window }) {
       // Only used to explain silence: an enabled campaign past its end date
       // serves nothing, and that is the whole answer rather than a lead.
       endDate: row.endDate || null,
+      // The bid lever. adGroupId travels with it because the write goes to the
+      // ad group, not the campaign.
+      defaultBid: typeof row.defaultBid === 'number' ? row.defaultBid : null,
+      adGroupId: row.adGroupId || null,
       brand,
       segment,
       grossMargin: segment ? MARGINS[segment] : null,
@@ -1341,11 +1315,9 @@ function evaluateWeek({ census, rows, window }) {
     ctrCollapse: [], cpcSpike: [], brandPacing: []
   };
 
-  const changeLog = census.changes || [];
-  const base = (c, check) => ({
+  const base = (c) => ({
     campaignId: c.campaignId, campaign: c.name,
-    adProduct: c.adProduct, brand: c.brand,
-    changes: rfChangesFor(changeLog, c.campaignId, check, window)
+    adProduct: c.adProduct, brand: c.brand
   });
 
   for (const c of campaigns.values()) {
@@ -1356,7 +1328,7 @@ function evaluateWeek({ census, rows, window }) {
     if (c.cappedDays !== null && c.cappedDays >= RF_CONFIG.CAP_DAYS_MIN &&
         c.retention28 !== null && c.retention28 >= RF_CONFIG.CAP_RETENTION_MIN) {
       flags.budgetCap.push({
-        ...base(c, 'budgetCap'),
+        ...base(c),
         dailyBudget: c.dailyBudget,
         cappedDays: c.cappedDays, weekDays,
         maxDaySpend: c.maxDaySpend,
@@ -1378,7 +1350,7 @@ function evaluateWeek({ census, rows, window }) {
     const silent = c.dailyBudget > 0 && c.impressions7 === 0 && wasActive;
     if (silent) {
       flags.silent.push({
-        ...base(c, 'silent'),
+        ...base(c),
         dailyBudget: c.dailyBudget,
         // An enabled campaign past its end date explains its own silence.
         endedBefore: (c.endDate && c.endDate < window.weekStart) ? c.endDate : null,
@@ -1394,10 +1366,12 @@ function evaluateWeek({ census, rows, window }) {
     if (!silent && c.baselineWeekly >= RF_CONFIG.COLLAPSE_MIN_BASELINE &&
         c.spend7 <= c.baselineWeekly * RF_CONFIG.COLLAPSE_RATIO) {
       flags.spendCollapse.push({
-        ...base(c, 'spendCollapse'),
+        ...base(c),
         spend7: r2(c.spend7),
         baselineWeekly: c.baselineWeekly,
-        change: r4((c.spend7 - c.baselineWeekly) / c.baselineWeekly)
+        change: r4((c.spend7 - c.baselineWeekly) / c.baselineWeekly),
+        // Names its own cause, and therefore where the fix is.
+        cause: rfDecomposeSpend(c)
       });
     }
 
@@ -1411,7 +1385,7 @@ function evaluateWeek({ census, rows, window }) {
         c.ctr28 > 0 && c.ctr7 !== null &&
         c.ctr7 <= c.ctr28 * RF_CONFIG.CTR_COLLAPSE_RATIO) {
       flags.ctrCollapse.push({
-        ...base(c, 'ctrCollapse'),
+        ...base(c),
         impressions7: Math.round(c.impressions7),
         clicks7: Math.round(c.clicks7),
         ctr7: c.ctr7, ctr28: c.ctr28,
@@ -1428,11 +1402,14 @@ function evaluateWeek({ census, rows, window }) {
         c.cpc28 > 0 && c.cpc7 !== null &&
         c.cpc7 >= c.cpc28 * RF_CONFIG.CPC_SPIKE_MULTIPLE) {
       flags.cpcSpike.push({
-        ...base(c, 'cpcSpike'),
+        ...base(c),
         clicks7: Math.round(c.clicks7),
         spend7: r2(c.spend7),
         cpc7: c.cpc7, cpc28: c.cpc28,
-        change: r4((c.cpc7 - c.cpc28) / c.cpc28)
+        change: r4((c.cpc7 - c.cpc28) / c.cpc28),
+        defaultBid: c.defaultBid,
+        adGroupId: c.adGroupId,
+        recommendedBid: rfRecommendBid({ defaultBid: c.defaultBid, cpc7: c.cpc7, cpc28: c.cpc28 })
       });
     }
   }
@@ -1444,9 +1421,14 @@ function evaluateWeek({ census, rows, window }) {
   for (const c of campaigns.values()) {
     if (!c.brand) continue;
     let b = brands.get(c.brand);
-    if (!b) { b = { brand: c.brand, spend7: 0, spend28: 0 }; brands.set(c.brand, b); }
+    if (!b) { b = { brand: c.brand, spend7: 0, spend28: 0, members: [] }; brands.set(c.brand, b); }
     b.spend7 += c.spend7;
     b.spend28 += c.spend28;
+    // Kept so a brand-level move can name the campaigns that caused it. A
+    // deviation with no attribution is a prompt to go looking, which is the
+    // thing this page exists to avoid.
+    b.members.push({ campaign: c.name, adProduct: c.adProduct,
+                     delta: c.spend7 - c.baselineWeekly });
   }
   for (const b of brands.values()) {
     const baselineWeekly = r2(b.spend28 / 4);
@@ -1455,8 +1437,15 @@ function evaluateWeek({ census, rows, window }) {
     if (baselineWeekly <= 0) continue;
     const deviation = r4((b.spend7 - baselineWeekly) / baselineWeekly);
     if (Math.abs(deviation) > RF_CONFIG.PACING_DEVIATION) {
+      // The campaigns that account for the move, largest first, in the same
+      // direction as the move. Three is enough to explain a brand.
+      const drivers = b.members
+        .filter(m => (deviation > 0 ? m.delta > 0 : m.delta < 0))
+        .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta))
+        .slice(0, 3)
+        .map(m => ({ campaign: m.campaign, adProduct: m.adProduct, delta: r2(m.delta) }));
       flags.brandPacing.push({
-        brand: b.brand, spend7: r2(b.spend7), baselineWeekly, deviation
+        brand: b.brand, spend7: r2(b.spend7), baselineWeekly, deviation, drivers
       });
     }
   }
@@ -1526,6 +1515,48 @@ function rfRecommendBudget({ dailyBudget, cappedDays, weekDays, maxDaySpend }) {
   // Never return the budget it already has — an "apply" that changes nothing
   // is worse than no button.
   return rounded > dailyBudget ? rounded : null;
+}
+
+// The mirror of rfRecommendBudget, and a step for the same reason: what a lower
+// bid will actually cost per click is an auction outcome, not arithmetic. Bids
+// and CPC are not even the same quantity — dynamic bidding and placement
+// modifiers let the effective bid exceed the base one, so a campaign can pay
+// more per click than its bid.
+//
+// Cutting by the full overshoot would be the naive move and would usually
+// overshoot in the other direction, dropping the campaign out of the auction
+// entirely. So: 10% at the flagging threshold, rising to 25% at twice it.
+//
+// Returns cents. Amazon's floor is $0.02, and a recommendation equal to the
+// current bid is a no-op write, which is worse than no button.
+function rfRecommendBid({ defaultBid, cpc7, cpc28 }) {
+  if (!(defaultBid > 0) || !(cpc28 > 0) || !(cpc7 > 0)) return null;
+  const overshoot = cpc7 / cpc28;
+  if (overshoot < RF_CONFIG.CPC_SPIKE_MULTIPLE) return null;
+  const span = RF_CONFIG.CPC_SPIKE_MULTIPLE;   // threshold → twice threshold
+  const over = Math.min(overshoot - RF_CONFIG.CPC_SPIKE_MULTIPLE, span);
+  const cut = RF_CONFIG.CUT_MIN + (RF_CONFIG.CUT_MAX - RF_CONFIG.CUT_MIN) * (over / span);
+  const bid = Math.max(0.02, Math.round(defaultBid * (1 - cut) * 100) / 100);
+  return bid < defaultBid ? bid : null;
+}
+
+// spend = impressions × CTR × CPC. All three are attribution-free and we hold
+// both windows, so a collapse can name its own cause instead of sending you to
+// look. Which factor moved decides WHERE the fix is — an impressions drop is a
+// listing or Buy Box problem, a CPC drop is a bidding one.
+function rfDecomposeSpend(c) {
+  const weekly = (n) => n / 4;   // baseline is 28 days
+  const ratio = (now, before) => (before > 0 ? r4(now / before) : null);
+  const factors = [
+    { factor: 'impressions', ratio: ratio(c.impressions7, weekly(c.impressions28)) },
+    { factor: 'ctr',         ratio: ratio(c.ctr7, c.ctr28) },
+    { factor: 'cpc',         ratio: ratio(c.cpc7, c.cpc28) }
+  ].filter(f => f.ratio !== null);
+  if (!factors.length) return null;
+  // The biggest proportional fall is the driver. Ties do not matter: any of
+  // them being this low is the thing worth looking at.
+  const driver = factors.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+  return { driver: driver.factor, ratio: driver.ratio, factors };
 }
 
 // ─── ROW NORMALIZATION ───────────────────────────────────────────────────────
@@ -1696,5 +1727,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // export, so these are inert in production.
 export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
-         rfChangesFor, RF_CHANGE_FIELDS, RF_CHANGES_PER_ROW,
+         rfRecommendBid, rfDecomposeSpend,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS };
