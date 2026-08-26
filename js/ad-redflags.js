@@ -369,11 +369,78 @@
     }
 
     // The first three cells are the same on every check, so they are written
-    // once rather than five times.
-    function arfWho(r) {
-      return `<td class="arf-name">${escapeHtml(r.campaign)}</td>
+    // once rather than five times. `explain` is the optional second argument:
+    // a config change that plausibly caused this flag, sitting under the name
+    // as prose rather than taking a column it could never fill consistently.
+    function arfWho(r, explain) {
+      const note = explain === undefined ? arfChangeNote(r) : explain;
+      return `<td class="arf-name">${escapeHtml(r.campaign)}
+          ${note ? `<div class="arf-sub">${note}</div>` : ''}
+        </td>
         <td>${escapeHtml(r.adProduct || '')}</td>
         <td>${escapeHtml(r.brand || '—')}</td>`;
+    }
+
+    // Amazon's own wording for the fields, so the note reads like the console
+    // rather than like our schema.
+    const ARF_CHANGE_LABELS = {
+      dailyBudget:       'Budget',
+      defaultBid:        'Default bid',
+      biddingStrategy:   'Bidding',
+      placementsSummary: 'Placements',
+      targetingType:     'Targeting',
+      budgetType:        'Budget type',
+      endDate:           'End date',
+      state:             'State'
+    };
+
+    const ARF_MONEY_FIELDS = ['dailyBudget', 'defaultBid'];
+
+    function arfChangeNote(r) {
+      const list = r.changes || [];
+      if (!list.length) return '';
+      return list.map(ch => {
+        const label = ARF_CHANGE_LABELS[ch.field] || ch.field;
+        const fmt = ARF_MONEY_FIELDS.includes(ch.field)
+          ? (v) => (typeof v === 'number' ? arfMoney(v) : '—')
+          : (v) => escapeHtml(arfChangeValue(ch.field, v));
+        return `${escapeHtml(label)} ${fmt(ch.from)} &rarr; ${fmt(ch.to)} on ${arfShortDate(ch.ptDate)}`;
+      }).join(' &middot; ');
+    }
+
+    function arfChangeValue(field, v) {
+      if (v === null || v === undefined || v === '') return '—';
+      // Placements arrive as the compact summary string the census stores; the
+      // raw enums are unreadable in a one-line note.
+      if (field === 'placementsSummary') {
+        return String(v).split('|')
+          .map(part => {
+            const [place, pct] = part.split(':');
+            return `${ARF_PLACEMENT_SHORT[place] || place} ${pct}%`;
+          }).join(' ');
+      }
+      return String(v);
+    }
+
+    const ARF_PLACEMENT_SHORT = {
+      PLACEMENT_TOP: 'TOS',
+      PLACEMENT_PRODUCT_PAGE: 'PP',
+      PLACEMENT_REST_OF_SEARCH: 'ROS'
+    };
+
+    // 'Aug 19' — the year is always this one and the note is already long.
+    function arfShortDate(ptDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ptDate || ''))) return escapeHtml(String(ptDate || ''));
+      const d = new Date(ptDate + 'T00:00:00Z');
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    }
+
+    // Only where a negative result is informative. On CPC spike and spend
+    // collapse the whole question is self-inflicted versus external, so ruling
+    // out our own configuration is worth a line. Everywhere else it is noise.
+    function arfWhoOrNothingChanged(r) {
+      return arfWho(r, arfChangeNote(r) ||
+        '<span class="arf-quiet">No campaign configuration changed</span>');
     }
 
     // "5 of 7" rather than a percentage: the column counts days, and a
@@ -390,7 +457,11 @@
     }
 
     function arfSilentRow(r) {
-      return `<tr>${arfWho(r)}
+      // An expired campaign is the complete answer, not a lead to follow.
+      const explain = r.endedBefore
+        ? `<span class="arf-quiet">Campaign ended ${arfShortDate(r.endedBefore)}</span>`
+        : undefined;
+      return `<tr>${arfWho(r, explain === undefined ? undefined : explain)}
         <td class="arf-r">${arfMoney(r.dailyBudget)}</td>
         <td class="arf-r arf-em">${arfMoney(r.baselineWeekly)}</td>
         <td class="arf-r">${formatCount(r.baselineImpressions)}</td>
@@ -398,7 +469,7 @@
     }
 
     function arfSpendCollapseRow(r) {
-      return `<tr>${arfWho(r)}
+      return `<tr>${arfWhoOrNothingChanged(r)}
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
         <td class="arf-r arf-em arf-down">${arfPct(r.change)}</td>
@@ -416,7 +487,7 @@
     }
 
     function arfCpcRow(r) {
-      return `<tr>${arfWho(r)}
+      return `<tr>${arfWhoOrNothingChanged(r)}
         <td class="arf-r">${formatCount(r.clicks7)}</td>
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r arf-em">${arfMoney(r.cpc7)}</td>

@@ -65,7 +65,11 @@ const AC_CONFIG = {
 // deep-equal helper needed or wanted.
 const AC_TRACKED_FIELDS = [
   'name', 'state', 'dailyBudget', 'budgetType', 'targetingType',
-  'biddingStrategy', 'portfolioId', 'startDate', 'endDate', 'placementsSummary'
+  'biddingStrategy', 'portfolioId', 'startDate', 'endDate', 'placementsSummary',
+  // Joined from the ad group rather than picked out of the campaign object, so
+  // it is deliberately absent from AC_CAMPAIGN_KEYS and AC_FIELD_RULES — the
+  // coverage tallies count key hits, and this field has none to count.
+  'defaultBid'
 ];
 
 const AC_PORTFOLIO_TRACKED = ['name', 'state', 'budgetAmount', 'budgetPolicy', 'budgetEnd'];
@@ -160,6 +164,16 @@ const AC_ENDPOINTS = {
     contentType: 'application/vnd.spCampaign.v3+json',
     accept: 'application/vnd.spCampaign.v3+json',
     listField: 'campaigns', paging: 'token'
+  },
+  // Ad groups exist only to carry defaultBid, which is the one bid control the
+  // campaign object does not hold. This account runs one ad group per campaign,
+  // so it joins 1:1 — see acJoinDefaultBids for what happens when it does not.
+  spAdGroupsV3: {
+    label: 'sp-adgroups-v3', adProduct: 'SP', version: 'v3',
+    url: `${ADS_HOST}/sp/adGroups/list`, method: 'POST',
+    contentType: 'application/vnd.spAdGroup.v3+json',
+    accept: 'application/vnd.spAdGroup.v3+json',
+    listField: 'adGroups', paging: 'token'
   },
   spV2: {
     label: 'sp-campaigns-v2', adProduct: 'SP', version: 'v2',
@@ -744,10 +758,13 @@ async function acRunSync({ dry = false, force = false } = {}) {
   const warnings = [];
   const errors = [];
 
-  const [sp, sb, pf] = [
+  const [sp, sb, pf, ag] = [
     await acFetchWithFallback(accessToken, AC_ENDPOINTS.spV3, AC_ENDPOINTS.spV2, warnings, errors),
     await acFetchWithFallback(accessToken, AC_ENDPOINTS.sbV4, null, warnings, errors),
-    await acFetchWithFallback(accessToken, AC_ENDPOINTS.pfV3, AC_ENDPOINTS.pfV2, warnings, errors)
+    await acFetchWithFallback(accessToken, AC_ENDPOINTS.pfV3, AC_ENDPOINTS.pfV2, warnings, errors),
+    // No fallback: there is no v2 shape worth reading here, and a failure costs
+    // one annotation rather than the sync.
+    await acFetchWithFallback(accessToken, AC_ENDPOINTS.spAdGroupsV3, null, warnings, errors)
   ];
 
   // Map, recording which key produced each field.
@@ -756,6 +773,17 @@ async function acRunSync({ dry = false, force = false } = {}) {
     ...sp.items.map(r => acMapCampaign(r, 'SP', hits)),
     ...sb.items.map(r => acMapCampaign(r, 'SB', hits))
   ].filter(c => c.campaignId);
+
+  // defaultBid is joined AFTER mapping, so it never enters the key-hit tallies.
+  const bidJoin = acJoinDefaultBids(campaigns, ag.items);
+  if (bidJoin.multiAdGroup.length) {
+    // The 1:1 assumption is the whole reason this is a campaign-level field.
+    // If it stops holding, say so rather than quietly reporting one ad group's
+    // bid as though it were the campaign's.
+    warnings.push(`defaultBid: ${bidJoin.multiAdGroup.length} campaigns have more than one ad group ` +
+                  `and were left unknown (${bidJoin.multiAdGroup.slice(0, 3).join(', ')}` +
+                  `${bidJoin.multiAdGroup.length > 3 ? '…' : ''})`);
+  }
 
   const pfHits = {};
   const portfolios = pf.items.map(r => acMapPortfolio(r, pfHits)).filter(p => p.portfolioId);
@@ -1239,6 +1267,46 @@ function acMergePresence(prevRows, nextRows, now, idField = 'campaignId') {
   return out;
 }
 
+// The one bid control the campaign object does not carry. This account runs one
+// ad group per campaign, which makes defaultBid a campaign attribute — but the
+// code does not assume it holds.
+//
+// null means UNKNOWN, never "no bid", exactly as with placements: a campaign
+// with two ad groups has two bids and neither is the campaign's, so reporting
+// either would be a fabrication. Sponsored Brands is never joined at all; its
+// ad groups have a different shape and there are two of them.
+//
+// Mutates the rows in place because it runs inside acRunSync between mapping
+// and the presence merge, where the rows are still local.
+function acJoinDefaultBids(campaigns, adGroups) {
+  const byCampaign = new Map();
+  for (const g of (adGroups || [])) {
+    const campaignId = acStr(g.campaignId);
+    if (!campaignId) continue;
+    // An archived ad group is not the live one; counting it would make a
+    // perfectly ordinary campaign look ambiguous.
+    if (String(g.state || '').toUpperCase() === 'ARCHIVED') continue;
+    if (!byCampaign.has(campaignId)) byCampaign.set(campaignId, []);
+    byCampaign.get(campaignId).push(g);
+  }
+
+  const multiAdGroup = [];
+  let resolved = 0;
+  for (const row of campaigns) {
+    if (row.adProduct !== 'SP') { row.defaultBid = null; continue; }
+    const groups = byCampaign.get(String(row.campaignId)) || [];
+    if (groups.length === 1) {
+      const bid = acNum(groups[0].defaultBid);
+      row.defaultBid = Number.isFinite(bid) && bid > 0 ? bid : null;
+      if (row.defaultBid !== null) resolved++;
+    } else {
+      row.defaultBid = null;
+      if (groups.length > 1) multiAdGroup.push(row.name || row.campaignId);
+    }
+  }
+  return { resolved, multiAdGroup };
+}
+
 // ─── DIFF ────────────────────────────────────────────────────────────────────
 function acDiffSnapshot(prevRows, nextRows, ptDate, now) {
   const prevById = new Map(prevRows.map(r => [r.campaignId, r]));
@@ -1441,5 +1509,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
          acPlacementsSummary, acApplyBrandOverride, acKnownBrands,
-         acValidateAmazonFields, acCollectItemErrors, acAdsWrite,
+         acValidateAmazonFields, acCollectItemErrors, acAdsWrite, acJoinDefaultBids,
          AC_ENDPOINTS, AC_CONFIG };

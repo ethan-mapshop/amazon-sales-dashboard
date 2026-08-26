@@ -1888,3 +1888,8 @@
       font-size: 0.7rem;
       color: var(--success);
     }
+
+    /* A negative result — "nothing changed" — is information on the two checks
+       where self-inflicted versus external is the whole question. Quieter than
+       a real change note so it never competes with one. */
+    .arf-quiet { opacity: 0.6; font-style: italic; }

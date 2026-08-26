@@ -59,6 +59,18 @@
 
     const ACO_PLACEMENT_TYPES = ['PLACEMENT_TOP', 'PLACEMENT_PRODUCT_PAGE', 'PLACEMENT_REST_OF_SEARCH'];
 
+    // The change log stores raw field names. Anything not listed prints as-is,
+    // which is the right default — a new tracked field should show up rather
+    // than silently render as blank.
+    const ACO_FIELD_LABELS = {
+      name: 'Name', state: 'State', dailyBudget: 'Daily budget',
+      budgetType: 'Budget type', targetingType: 'Targeting',
+      biddingStrategy: 'Bidding', portfolioId: 'Portfolio',
+      startDate: 'Start date', endDate: 'End date',
+      placementsSummary: 'Placements', defaultBid: 'Default bid',
+      _created: 'Created', _missing: 'Missing', _returned: 'Returned'
+    };
+
     // Short forms for the table cell; the full names go in the title.
     const ACO_PLACEMENT_SHORT = {
       PLACEMENT_TOP:            'TOS',
@@ -1054,7 +1066,7 @@
                   <tr>
                     <td>${escapeHtml(r.ptDate || '')}</td>
                     <td>${escapeHtml(r.name || r.campaignId)}</td>
-                    <td>${escapeHtml(r.field)}</td>
+                    <td>${escapeHtml(ACO_FIELD_LABELS[r.field] || r.field)}</td>
                     <td>${escapeHtml(r.from === null || r.from === undefined ? '—' : r.from)}</td>
                     <td>${escapeHtml(r.to === null || r.to === undefined ? '—' : r.to)}</td>
                   </tr>`).join('')}

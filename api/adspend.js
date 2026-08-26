@@ -1120,9 +1120,12 @@ async function handleWeeklyCollect(req, res) {
 // The campaign configuration snapshot written by the Campaign Overview page.
 // Read-only: nothing here writes an adcampaigns:* key.
 async function loadCensus() {
-  const [current, portfolios] = await Promise.all([
+  const [current, portfolios, changes] = await Promise.all([
     kv.get('adcampaigns:current'),
-    kv.get('adcampaigns:portfolios')
+    kv.get('adcampaigns:portfolios'),
+    // What changed and when. Five of the six checks say something moved without
+    // saying why, and the most common why is that we moved it ourselves.
+    kv.get('adcampaigns:changes')
   ]);
   const portfolioNames = {};
   for (const p of (portfolios?.rows || [])) {
@@ -1131,8 +1134,41 @@ async function loadCensus() {
   return {
     campaigns: current?.rows || [],
     portfolioNames,
+    changes: changes?.rows || [],
     syncedAt: current?.syncedAt || null
   };
+}
+
+// ─── CONFIG CHANGE ANNOTATION ────────────────────────────────────────
+// Which configuration fields could plausibly explain which flag. Deliberately
+// narrow: a budget change does not explain a CTR collapse, and listing it would
+// train you to ignore the annotation.
+const RF_CHANGE_FIELDS = {
+  budgetCap:     ['dailyBudget', 'state'],
+  silent:        ['state', 'endDate', 'budgetType'],
+  spendCollapse: ['dailyBudget', 'defaultBid', 'biddingStrategy', 'state'],
+  ctrCollapse:   ['placementsSummary', 'targetingType', 'defaultBid'],
+  cpcSpike:      ['defaultBid', 'biddingStrategy', 'placementsSummary']
+  // brandPacing is deliberately absent: it is an aggregate over 30-40 campaigns,
+  // and a per-campaign change belongs on that campaign's row.
+};
+
+// Two is enough to explain a row. More turns an annotation into a changelog.
+const RF_CHANGES_PER_ROW = 2;
+
+// A change during the BASELINE is as relevant as one during the week: it is
+// what makes the week differ from the average it is compared against. So the
+// search window is the whole 35 days, not the 7.
+function rfChangesFor(changes, campaignId, check, window) {
+  const fields = RF_CHANGE_FIELDS[check];
+  if (!fields || !Array.isArray(changes)) return [];
+  const id = String(campaignId);
+  return changes
+    .filter(r => r && String(r.campaignId) === id && fields.includes(r.field) &&
+                 String(r.ptDate || '') >= window.baseStart)
+    .sort((a, b) => String(b.ptDate).localeCompare(String(a.ptDate)))
+    .slice(0, RF_CHANGES_PER_ROW)
+    .map(r => ({ field: r.field, from: r.from ?? null, to: r.to ?? null, ptDate: r.ptDate }));
 }
 
 // ─── WINDOW ──────────────────────────────────────────────────────────────────
@@ -1208,6 +1244,9 @@ function evaluateWeek({ census, rows, window }) {
       budgetType: row.budgetType || '',
       portfolioId: row.portfolioId || null,
       portfolio: (row.portfolioId && census.portfolioNames[row.portfolioId]) || null,
+      // Only used to explain silence: an enabled campaign past its end date
+      // serves nothing, and that is the whole answer rather than a lead.
+      endDate: row.endDate || null,
       brand,
       segment,
       grossMargin: segment ? MARGINS[segment] : null,
@@ -1302,9 +1341,11 @@ function evaluateWeek({ census, rows, window }) {
     ctrCollapse: [], cpcSpike: [], brandPacing: []
   };
 
-  const base = (c) => ({
+  const changeLog = census.changes || [];
+  const base = (c, check) => ({
     campaignId: c.campaignId, campaign: c.name,
-    adProduct: c.adProduct, brand: c.brand
+    adProduct: c.adProduct, brand: c.brand,
+    changes: rfChangesFor(changeLog, c.campaignId, check, window)
   });
 
   for (const c of campaigns.values()) {
@@ -1315,7 +1356,7 @@ function evaluateWeek({ census, rows, window }) {
     if (c.cappedDays !== null && c.cappedDays >= RF_CONFIG.CAP_DAYS_MIN &&
         c.retention28 !== null && c.retention28 >= RF_CONFIG.CAP_RETENTION_MIN) {
       flags.budgetCap.push({
-        ...base(c),
+        ...base(c, 'budgetCap'),
         dailyBudget: c.dailyBudget,
         cappedDays: c.cappedDays, weekDays,
         maxDaySpend: c.maxDaySpend,
@@ -1337,8 +1378,10 @@ function evaluateWeek({ census, rows, window }) {
     const silent = c.dailyBudget > 0 && c.impressions7 === 0 && wasActive;
     if (silent) {
       flags.silent.push({
-        ...base(c),
+        ...base(c, 'silent'),
         dailyBudget: c.dailyBudget,
+        // An enabled campaign past its end date explains its own silence.
+        endedBefore: (c.endDate && c.endDate < window.weekStart) ? c.endDate : null,
         baselineWeekly: c.baselineWeekly,
         baselineImpressions: Math.round(c.impressions28)
       });
@@ -1351,7 +1394,7 @@ function evaluateWeek({ census, rows, window }) {
     if (!silent && c.baselineWeekly >= RF_CONFIG.COLLAPSE_MIN_BASELINE &&
         c.spend7 <= c.baselineWeekly * RF_CONFIG.COLLAPSE_RATIO) {
       flags.spendCollapse.push({
-        ...base(c),
+        ...base(c, 'spendCollapse'),
         spend7: r2(c.spend7),
         baselineWeekly: c.baselineWeekly,
         change: r4((c.spend7 - c.baselineWeekly) / c.baselineWeekly)
@@ -1368,7 +1411,7 @@ function evaluateWeek({ census, rows, window }) {
         c.ctr28 > 0 && c.ctr7 !== null &&
         c.ctr7 <= c.ctr28 * RF_CONFIG.CTR_COLLAPSE_RATIO) {
       flags.ctrCollapse.push({
-        ...base(c),
+        ...base(c, 'ctrCollapse'),
         impressions7: Math.round(c.impressions7),
         clicks7: Math.round(c.clicks7),
         ctr7: c.ctr7, ctr28: c.ctr28,
@@ -1385,7 +1428,7 @@ function evaluateWeek({ census, rows, window }) {
         c.cpc28 > 0 && c.cpc7 !== null &&
         c.cpc7 >= c.cpc28 * RF_CONFIG.CPC_SPIKE_MULTIPLE) {
       flags.cpcSpike.push({
-        ...base(c),
+        ...base(c, 'cpcSpike'),
         clicks7: Math.round(c.clicks7),
         spend7: r2(c.spend7),
         cpc7: c.cpc7, cpc28: c.cpc28,
@@ -1653,4 +1696,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // export, so these are inert in production.
 export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
+         rfChangesFor, RF_CHANGE_FIELDS, RF_CHANGES_PER_ROW,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS };
