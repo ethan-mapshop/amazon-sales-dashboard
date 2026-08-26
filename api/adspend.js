@@ -866,6 +866,8 @@ const RF_CONFIG = {
   CAP_DAY_RATIO:         0.95,  // 1 — a day counts as "at cap" at ≥ 95% of the daily budget
   CAP_DAYS_MIN:          4,     // 1 — ... on at least this many days of the week
   CAP_RETENTION_MIN:     0.50,  // 1 — ... and profit retention ≥ 50%
+  RAISE_MIN:             0.25,  // 1 — suggested raise at CAP_DAYS_MIN days at cap
+  RAISE_MAX:             0.50,  // 1 — ... rising to this when capped every day
   RUNAWAY_MULTIPLE:      2,     // 2 — 7-day spend > 2× trailing 28-day weekly average
   RUNAWAY_RETENTION_MAX: 0.25,  // 2 — ... and retention < 25%
   RUNAWAY_MIN_SPEND:     50,    // 2 — ... and 7-day spend > $50
@@ -1254,10 +1256,16 @@ function evaluateWeek({ census, rows, window }) {
     if (c.dailyBudget > 0 && !lifetime) {
       const atCap = c.dailyBudget * RF_CONFIG.CAP_DAY_RATIO;
       let days = 0;
-      for (const daySpend of c.spendByDate.values()) if (daySpend >= atCap) days++;
+      let peak = 0;
+      for (const daySpend of c.spendByDate.values()) {
+        if (daySpend >= atCap) days++;
+        if (daySpend > peak) peak = daySpend;
+      }
       c.cappedDays = days;
+      c.maxDaySpend = r2(peak);
     } else {
       c.cappedDays = null;
+      c.maxDaySpend = null;
     }
   }
 
@@ -1277,6 +1285,11 @@ function evaluateWeek({ census, rows, window }) {
         campaign: c.name, adProduct: c.adProduct, campaignId: c.campaignId,
         brand: c.brand, dailyBudget: c.dailyBudget,
         cappedDays: c.cappedDays, weekDays,
+        maxDaySpend: c.maxDaySpend,
+        recommendedBudget: rfRecommendBudget({
+          dailyBudget: c.dailyBudget, cappedDays: c.cappedDays,
+          weekDays, maxDaySpend: c.maxDaySpend
+        }),
         spend7: r2(c.spend7),
         acos: c.acos, retention: c.retention
       });
@@ -1391,6 +1404,30 @@ function evaluateWeek({ census, rows, window }) {
     clean: flagCount === 0,
     coverage: { enabled, evaluated: enabled, withSpend, orphanRows, unmapped, noBudget }
   };
+}
+
+// A capped campaign's real demand is unobservable — it was cut off before
+// spending it. So this is a STEP, not a calculation, and it says so: raise in
+// proportion to how often the budget bound, and never below a day the campaign
+// has already proven it can spend.
+//
+// The floor matters because Amazon averages the daily budget across the month.
+// A campaign that spent $28 on a $15 budget has demonstrated $28 of demand on
+// that day; recommending $19 would be provably too low.
+//
+// Returns whole dollars. A recommendation of $18.73 reads as a calculation
+// this cannot honestly claim to be.
+function rfRecommendBudget({ dailyBudget, cappedDays, weekDays, maxDaySpend }) {
+  if (!(dailyBudget > 0) || cappedDays === null || cappedDays === undefined) return null;
+  const span = Math.max(1, weekDays - RF_CONFIG.CAP_DAYS_MIN);
+  const over = Math.max(0, Math.min(cappedDays, weekDays) - RF_CONFIG.CAP_DAYS_MIN);
+  const step = RF_CONFIG.RAISE_MIN +
+               (RF_CONFIG.RAISE_MAX - RF_CONFIG.RAISE_MIN) * (over / span);
+  const raised = Math.max(dailyBudget * (1 + step), maxDaySpend || 0);
+  const rounded = Math.ceil(raised);
+  // Never return the budget it already has — an "apply" that changes nothing
+  // is worse than no button.
+  return rounded > dailyBudget ? rounded : null;
 }
 
 // ─── ROW NORMALIZATION ───────────────────────────────────────────────────────
@@ -1560,5 +1597,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Exported for the offline cadence tests. Vercel only invokes the default
 // export, so these are inert in production.
 export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
-         reportSpec, buildReportBody, daySpan, rfDuplicateReportId,
+         reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS };

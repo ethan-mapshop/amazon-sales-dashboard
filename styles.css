@@ -1852,3 +1852,39 @@
     }
 
     .arf-warn { color: var(--warning); margin-top: 0.3rem; }
+
+    /* The one place the weekly monitor acts rather than observes. Deliberately
+       small and quiet — it is an exception to an observational cadence. */
+    .arf-action { white-space: nowrap; }
+
+    .arf-btn {
+      padding: 0.15rem 0.45rem;
+      font-size: 0.7rem;
+      font-family: inherit;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .arf-btn:hover { border-color: var(--accent-orange); }
+
+    .arf-btn-go {
+      color: var(--success);
+      border-color: var(--success);
+    }
+
+    .arf-confirm {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-family: inherit;
+      font-size: 0.7rem;
+    }
+
+    .arf-applied {
+      font-family: inherit;
+      font-size: 0.7rem;
+      color: var(--success);
+    }

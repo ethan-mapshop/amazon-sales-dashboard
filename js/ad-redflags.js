@@ -275,6 +275,8 @@
           ${body}
           ${arfFooter(data)}
         </div>`;
+
+      arfBindActions();
     }
 
     // Each check is a table. Anything identical on every row — what to do
@@ -287,9 +289,11 @@
           'Profitable campaigns whose daily budget is routinely the binding constraint. ' +
           'A day counts as at cap when spend reaches 95% of the daily budget — including ' +
           'days over it, since Amazon averages across the month and an overshoot means ' +
-          'demand exceeded the budget. The fix is a budget increase at the next bi-weekly window.',
+          'demand exceeded the budget. The suggested raise is a step — 25% at four days at cap, ' +
+          'rising to 50% at seven, never below the best single day it already managed — because ' +
+          'real demand for a capped campaign cannot be measured. Applying it writes to Amazon.',
           [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('7-day spend'),
-           R('At cap'), R('ACoS'), R('Retention')],
+           R('At cap'), R('ACoS'), R('Retention'), R('Raise to')],
           arfBudgetCapRow),
 
         arfSection('2 · Runaway spenders', f.runaway,
@@ -357,6 +361,7 @@
         <td class="arf-r arf-em">${r.cappedDays} of ${r.weekDays}</td>
         <td class="arf-r">${arfPct(r.acos)}</td>
         <td class="arf-r arf-em">${arfPct(r.retention)}</td>
+        <td class="arf-r arf-action">${arfRecommendCell(r)}</td>
       </tr>`;
     }
 
@@ -452,6 +457,117 @@
             ? `<div class="arf-muted">Campaign configuration synced ${escapeHtml(_svTimeAgo(data.censusSyncedAt))}</div>`
             : ''}
         </div>`;
+    }
+
+    // ─── APPLY A RECOMMENDATION ──────────────────────────────────────────────
+    // The cadence is observational and stays that way — nothing here changes
+    // unless you press the button. It is a deliberate exception, not a drift
+    // into acting: one campaign, one field, one confirmation.
+    //
+    // State lives here rather than in the DOM because arfRender replaces the
+    // container wholesale; a confirm prompt or a result would otherwise vanish
+    // on the next render.
+    let arfApply = {};      // { [campaignId]: { stage, message, applied } }
+    let arfBound = false;
+
+    // The recommended budget and its button share a cell: the number is the
+    // thing you are agreeing to, so putting it anywhere else invites agreeing
+    // to something you did not read.
+    function arfRecommendCell(r) {
+      const st = arfApply[r.campaignId] || {};
+      const id = escapeHtml(r.campaignId);
+
+      // Before the no-recommendation guard: applying CLEARS the recommendation,
+      // so checking that first would report a successful raise as a dash.
+      if (st.stage === 'done') {
+        return `<span class="arf-applied">&#10003; now $${escapeHtml(String(st.applied))}/day</span>`;
+      }
+      if (!r.recommendedBudget) return '<span class="arf-muted">—</span>';
+      if (st.stage === 'busy') {
+        return `<span class="loading"></span>`;
+      }
+      if (st.stage === 'confirm') {
+        return `<span class="arf-confirm">
+          <span>$${r.recommendedBudget}/day?</span>
+          <button class="arf-btn arf-btn-go" data-arf-confirm="${id}">Confirm</button>
+          <button class="arf-btn" data-arf-cancel="${id}">Cancel</button>
+        </span>`;
+      }
+      return `<button class="arf-btn" data-arf-apply="${id}"
+                title="Raise this campaign's daily budget on Amazon to $${r.recommendedBudget}"
+              >$${r.recommendedBudget}/day</button>${
+        st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message)}</div>` : ''}`;
+    }
+
+    function arfBindActions() {
+      // The container element persists across renders — only its innerHTML is
+      // replaced — so binding on every render would stack duplicate handlers.
+      if (arfBound) return;
+      const c = document.getElementById('adredflags-content');
+      if (!c) return;
+      c.addEventListener('click', e => {
+        const btn = e.target.closest('[data-arf-apply], [data-arf-confirm], [data-arf-cancel]');
+        if (!btn) return;
+        const d = btn.dataset;
+        if (d.arfApply)        arfSetApplyStage(d.arfApply, 'confirm');
+        else if (d.arfCancel)  arfSetApplyStage(d.arfCancel, null);
+        else if (d.arfConfirm) arfApplyBudget(d.arfConfirm);
+      });
+      arfBound = true;
+    }
+
+    function arfSetApplyStage(campaignId, stage, extra) {
+      if (!stage) delete arfApply[campaignId];
+      else arfApply[campaignId] = { stage, ...(extra || {}) };
+      const cached = arfCacheLoad();
+      if (cached) arfRender(cached);
+    }
+
+    async function arfApplyBudget(campaignId) {
+      const cached = arfCacheLoad();
+      const row = ((cached && cached.flags && cached.flags.budgetCap) || [])
+        .find(r => String(r.campaignId) === String(campaignId));
+      if (!row || !accessToken) return;
+
+      arfSetApplyStage(campaignId, 'busy');
+      try {
+        // The Campaign Overview write path, unchanged: it re-reads the campaign
+        // from Amazon, refuses if the budget has moved since this page loaded,
+        // and verifies the change by reading it back.
+        const res = await fetch('/api/adcampaigns?action=update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({
+            campaignId: row.campaignId,
+            adProduct: row.adProduct,
+            local: {},
+            amazon: { dailyBudget: row.recommendedBudget },
+            // What this page displayed. Reports take minutes to generate, so
+            // the budget really can move between the run and the button.
+            expected: { dailyBudget: row.dailyBudget }
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          if (data.conflicts && data.conflicts.length) {
+            const c0 = data.conflicts[0];
+            throw new Error(`Amazon now has ${c0.field} = ${c0.amazonHasNow ?? '—'} ` +
+                            `(this page saw ${c0.youSaw ?? '—'}). Re-run the check.`);
+          }
+          throw new Error(data.error || `Failed (${res.status})`);
+        }
+
+        // Keep the cached run truthful: the budget on screen is now stale, and
+        // this row's own recommendation no longer applies to it.
+        row.dailyBudget = row.recommendedBudget;
+        row.recommendedBudget = null;
+        arfCacheSave(cached);
+        arfApply[campaignId] = { stage: 'done', applied: row.dailyBudget };
+        arfRender(cached);
+      } catch (err) {
+        console.error('[ARF] budget raise failed:', err);
+        arfSetApplyStage(campaignId, 'error', { message: err.message });
+      }
     }
 
     function arfMoney(n) {
