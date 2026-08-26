@@ -80,9 +80,23 @@
       if (arfRunLoad()) return arfResume();
       arfBusy = true;
       arfSetBusy(true);
-      arfSetStatus('Requesting reports from Amazon…');
 
       try {
+        // Step 0 — freshen the campaign configuration snapshot. The checks read
+        // daily budget, brand and portfolio from it, and it decides WHICH
+        // campaigns get evaluated at all, so a stale census silently shrinks
+        // the run. It is a config call, not a report: a second or two.
+        arfSetStatus('Refreshing campaign configuration…');
+        const sync = await fetch('/api/adcampaigns?action=refresh', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const syncData = await sync.json().catch(() => ({}));
+        if (!sync.ok) {
+          throw new Error('Could not refresh campaign configuration: ' +
+                          (syncData.error || `HTTP ${sync.status}`));
+        }
+
+        arfSetStatus('Requesting reports from Amazon…');
         const res = await fetch('/api/adspend?action=weekly-request', {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
@@ -90,25 +104,19 @@
         if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
 
         const good = (data.reports || []).filter(r => r.reportId);
-        const duplicates = (data.reports || []).filter(r => r.duplicate);
-
         if (!good.length) {
-          if (duplicates.length) {
-            // Amazon rejects an identical report while the prior one is still
-            // running, and does not hand back the in-flight id — so there is
-            // nothing to poll. Waiting is the only correct move.
-            throw new Error('Amazon reports these are already being generated. Wait a few minutes and run again.');
+          const first = (data.failures || [])[0];
+          if (first && (first.invalidColumns || []).length) {
+            throw new Error(`Amazon refused the column ${first.invalidColumns.join(', ')}. ${first.error}`);
           }
-          throw new Error((data.reports || []).map(r => r.error).filter(Boolean)[0] || 'No reports were accepted.');
+          throw new Error((first && first.error) || 'No reports were accepted.');
         }
 
         const state = {
           window: data.window,
           reports: good.map(r => ({ key: r.key, reportId: r.reportId })),
-          degraded: good.some(r => r.degraded),
-          hasBudgetColumns: good.some(r => r.hasBudgetColumns),
-          columnSets: good.map(r => ({ key: r.key, setIndex: r.columnSet })),
-          rejections: good.flatMap(r => (r.rejections || []).map(x => ({ key: r.key, ...x }))),
+          // Reported so a partial run is never mistaken for a complete one.
+          failures: data.failures || [],
           startedAt: new Date().toISOString(),
           pollUntil: Date.now() + ARF_MAX_WAIT_MS
         };
@@ -187,10 +195,10 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Collect failed (${res.status})`);
 
-        data.degraded = state.degraded;
-        data.hasBudgetColumns = state.hasBudgetColumns;
-        data.columnSets = state.columnSets;
-        data.rejections = state.rejections;
+        // A report that never got requested is a hole in the run, and only the
+        // request step knows about it.
+        data.notes = [...(data.notes || []),
+          ...(state.failures || []).map(f => ({ key: f.key, note: 'report not requested: ' + f.error }))];
         arfCacheSave(data);
         arfRunClear();
         arfSetStatus('');
@@ -211,6 +219,15 @@
     }
 
     // ─── RENDER ──────────────────────────────────────────────────────────────
+    // The cadence doc specifies the output precisely: "A single short note
+    // identifying any triggered red flags. No spreadsheets, no tables of
+    // healthy campaigns... organized as four sections — one per red flag check
+    // — with 'No flags' written for any check that did not trigger. A clean
+    // week produces a note one paragraph long."
+    //
+    // So this renders prose, not a dashboard. Each flagged item gets exactly
+    // the fields the doc's "Report format" line names for its check, and
+    // nothing else.
 
     function arfRenderIdle() {
       const container = document.getElementById('adredflags-content');
@@ -219,8 +236,9 @@
         <div class="card card-flat" style="text-align: center; padding: 4rem 2rem;">
           <div style="font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem;">🚩</div>
           <div style="color: var(--text-secondary); max-width: 44rem; margin: 0 auto; line-height: 1.6;">
-            Runs four checks over the most recent complete Monday&ndash;Sunday week:
+            Four checks over the most recent complete Monday&ndash;Sunday week:
             budget cap emergencies, runaway spenders, stalled campaigns, and brand pacing.
+            Observational only &mdash; adjustments belong to the bi-weekly cadence.
             Amazon generates the reports on request, which takes a few minutes.
           </div>
         </div>`;
@@ -231,257 +249,170 @@
       if (!container) return;
 
       const w = data.window || {};
-      arfSetBlurb(`Week of ${_formatMDY(w.weekStart)}–${_formatMDY(w.weekEnd)} · computed ${_svTimeAgo(data.generatedAt)}`);
+      arfSetBlurb(`Week of ${w.weekStart} to ${w.weekEnd} · generated ${
+        data.generatedAt ? _svTimeAgo(data.generatedAt) : 'just now'}`);
 
-      const cov = data.coverage || {};
-      const stats = `
-        <div class="stats-bar" style="margin-bottom: 1.5rem;">
-          <div class="stat-item"><span class="stat-label">Flags</span>
-            <span class="stat-value" style="color: ${data.flagCount ? 'var(--error)' : 'var(--success)'};">${data.flagCount}</span></div>
-          <div class="stat-item"><span class="stat-label">Evaluated</span>
-            <span class="stat-value">${cov.evaluated} / ${cov.campaignsSeen}</span></div>
-          <div class="stat-item"><span class="stat-label">Spend covered</span>
-            <span class="stat-value">$${formatNumber(cov.evaluatedSpend7 || 0)} of $${formatNumber(cov.totalSpend7 || 0)}</span></div>
-          ${cov.unmapped && cov.unmapped.length
-            ? `<div class="stat-item"><span class="stat-label">Unmapped</span><span class="stat-value warning">${cov.unmapped.length}</span></div>`
-            : ''}
-        </div>`;
+      // "If no check triggers anywhere, write a single sentence."
+      const body = data.clean
+        ? `<p class="arf-clean">No flags this week &mdash; all brands and campaigns within normal range.</p>`
+        : arfSections(data);
 
-      const rejected = data.rejections || [];
-      const banner = rejected.length ? `
-        <div class="card" style="margin-bottom: 1.5rem; border-left: 3px solid var(--warning);">
-          <div style="font-weight: 600; color: var(--warning); margin-bottom: 0.5rem;">
-            Amazon rejected ${rejected.length} column set${rejected.length === 1 ? '' : 's'} on this run
-          </div>
-          <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 0.75rem;">
-            The report fell back to fewer columns, so some checks ran on less data than intended.
-            Amazon's reason is below and it names the column it refused.
-          </div>
-          ${rejected.map(r => `
-            <div style="margin-bottom: 0.75rem; font-size: 0.75rem;">
-              <div style="font-weight: 600;">${escapeHtml(r.key)} — column set ${r.setIndex}</div>
-              <div style="color: var(--text-secondary); font-family: monospace; word-break: break-word;">
-                ${escapeHtml(r.error)}
-              </div>
-            </div>`).join('')}
-        </div>` : '';
-
-      if (data.clean) {
-        container.innerHTML = stats + banner + `
-          <div class="card" style="border-left: 3px solid var(--success);">
-            <div style="padding: 0.5rem 0; font-size: 1rem;">
-              No flags this week — all brands and campaigns within normal range.
+      container.innerHTML = `
+        <div class="card arf-note">
+          <div class="arf-note-head">
+            <h3>Red Flag Monitor</h3>
+            <div class="arf-note-window">
+              Week of ${escapeHtml(w.weekStart)} &ndash; ${escapeHtml(w.weekEnd)}
+              · baseline ${escapeHtml(w.baseStart)} &ndash; ${escapeHtml(w.baseEnd)}
             </div>
-          </div>` + arfRenderNotEvaluated(data);
-        return;
+          </div>
+          ${body}
+          ${arfFooter(data)}
+        </div>`;
+    }
+
+    function arfSections(data) {
+      const f = data.flags || {};
+      return [
+        arfSection('1 · Budget cap emergencies', f.budgetCap, arfBudgetCapLine,
+          'Profitable campaigns losing sales to their daily cap.'),
+        arfSection('2 · Runaway spenders', f.runaway, arfRunawayLine,
+          'Spend well above trailing average with poor profit retention.'),
+        arfSection('3 · Stalled', f.stalled, arfStalledLine,
+          'Clicks without orders &mdash; usually a listing problem, not an ad problem.'),
+        arfSection('4 · Brand pacing', f.brandPacing, arfPacingLine,
+          'Account-level sanity check against each brand&rsquo;s trailing average.')
+      ].join('');
+    }
+
+    // "with 'No flags' written for any check that did not trigger"
+    function arfSection(title, rows, lineFn, blurb) {
+      const list = rows || [];
+      return `
+        <section class="arf-section">
+          <h4>${title}</h4>
+          ${list.length
+            ? `<p class="arf-blurb">${blurb}</p><ul class="arf-list">${list.map(lineFn).join('')}</ul>`
+            : `<p class="arf-none">No flags this week.</p>`}
+        </section>`;
+    }
+
+    // Doc's report format: campaign name, current daily budget, 7-day spend vs
+    // implied cap, ACoS, profit retention. Amazon's estimated missed-sales
+    // range is console-only and has no API field, so it cannot appear here.
+    function arfBudgetCapLine(r) {
+      return `<li>
+        <span class="arf-subject">${escapeHtml(r.campaign)}</span>${arfTag(r)}
+        spent <strong>${arfMoney(r.spend7)}</strong> against an implied weekly cap of
+        ${arfMoney(r.impliedWeeklyCap)} (${arfMoney(r.dailyBudget)}/day) &mdash;
+        <strong>${arfPct(r.capRatio)}</strong> of cap, at ${arfPct(r.acos)} ACoS
+        and <strong>${arfPct(r.retention)}</strong> profit retention.
+      </li>`;
+    }
+
+    // Doc's report format: campaign name, 7-day spend, trailing average,
+    // multiplier, current profit retention.
+    function arfRunawayLine(r) {
+      return `<li>
+        <span class="arf-subject">${escapeHtml(r.campaign)}</span>${arfTag(r)}
+        spent <strong>${arfMoney(r.spend7)}</strong> against a trailing weekly average of
+        ${arfMoney(r.baselineWeekly)} &mdash; <strong>${r.spendMultiple}&times;</strong>,
+        at ${arfPct(r.acos)} ACoS and <strong>${arfPct(r.retention)}</strong> profit retention.
+      </li>`;
+    }
+
+    // Doc's report format: campaign name, 7-day clicks, spend, associated
+    // SKU(s), and a suggested first area to check. SKUs are not in the
+    // campaign report; the portfolio is one-per-SKU in this account, so the
+    // portfolio name identifies the product.
+    function arfStalledLine(r) {
+      const names = r.campaigns.map(c => c.campaign).join(', ');
+      return `<li>
+        <span class="arf-subject">${escapeHtml(r.portfolio)}</span>
+        ${r.brand ? `<span class="arf-tag">${escapeHtml(r.brand)}</span>` : ''}
+        took <strong>${r.clicks7} clicks</strong> and <strong>${arfMoney(r.spend7)}</strong>
+        with <strong>zero orders</strong>, across ${r.campaignCount}
+        campaign${r.campaignCount === 1 ? '' : 's'}.
+        <div class="arf-detail">Check inventory, Buy Box, reviews and pricing before touching the ads.</div>
+        <div class="arf-detail arf-muted">${escapeHtml(names)}</div>
+      </li>`;
+    }
+
+    // Doc's report format: brand name, 7-day spend, trailing average, %
+    // change, and a brief likely-cause hypothesis. The hypothesis is a
+    // judgement call, so the direction is stated and the reading is left to
+    // you rather than invented here.
+    function arfPacingLine(r) {
+      const up = r.deviation > 0;
+      return `<li>
+        <span class="arf-subject">${escapeHtml(r.brand)}</span>
+        spent <strong>${arfMoney(r.spend7)}</strong> against a trailing weekly average of
+        ${arfMoney(r.baselineWeekly)} &mdash;
+        <strong class="${up ? 'arf-up' : 'arf-down'}">${up ? '+' : ''}${arfPct(r.deviation)}</strong>.
+        <div class="arf-detail">${up
+          ? 'Look for a bid or budget increase, a portfolio cap lifting, or seasonal demand.'
+          : 'Look for a portfolio budget cap, a paused campaign, or lost impression share.'}</div>
+      </li>`;
+    }
+
+    function arfTag(r) {
+      const bits = [];
+      if (r.brand) bits.push(r.brand);
+      if (r.adProduct === 'SB') bits.push('SB');
+      return bits.length ? `<span class="arf-tag">${escapeHtml(bits.join(' · '))}</span>` : '';
+    }
+
+    // The run's own receipt — one line, so a run that covered half the account
+    // cannot look identical to a clean week. Not a report of healthy campaigns.
+    function arfFooter(data) {
+      const c = data.coverage || {};
+      const bits = [
+        `${c.evaluated} of ${c.enabled} enabled campaigns evaluated`,
+        c.belowFloor ? `${c.belowFloor} below the $${(data.config || {}).MIN_WEEKLY_SPEND} weekly spend floor` : null,
+        c.unmapped && c.unmapped.length ? `${c.unmapped.length} unmapped to a brand` : null,
+        c.noBudget && c.noBudget.length ? `${c.noBudget.length} with no daily budget` : null,
+        c.orphanRows ? `${c.orphanRows} report rows for campaigns not in the snapshot` : null
+      ].filter(Boolean);
+
+      const warn = [];
+      // An unmapped campaign has no margin, so it has no profit retention and
+      // silently cannot trip checks 1 or 2. Saying so is the difference between
+      // "nothing wrong" and "not looked at".
+      if (c.unmapped && c.unmapped.length) {
+        warn.push(`Not evaluated for retention (no brand, so no margin): ${
+          c.unmapped.map(x => `${escapeHtml(x.campaign)} (${arfMoney(x.spend7)})`).join(', ')}`);
+      }
+      if (c.noBudget && c.noBudget.length) {
+        warn.push(`Not evaluated for budget cap (no daily budget in the snapshot): ${
+          c.noBudget.map(x => escapeHtml(x.campaign)).join(', ')}`);
+      }
+      if (c.orphanRows) {
+        warn.push('Some report rows belong to campaigns missing from the snapshot — refresh Campaign Overview.');
       }
 
-      const f = data.flags || {};
-      container.innerHTML = stats + banner +
-        arfSection('1 · Budget cap emergencies', f.budgetCap, arfCampaignTable, {
-          blurb: 'Profitable campaigns hitting their daily budget. Fix is fast; the cost of waiting is measurable.',
-          cols: ['Campaign', 'Brand', 'Spend', 'Budget/day', 'Capped days', 'ACoS', 'Retention'],
-          // "No flags" would be a lie if no campaign had usable budget data.
-          emptyMessage: cov.cappedEvaluableCount === 0
-            ? 'Could not be evaluated — Amazon returned no usable daily-budget data for any campaign in this run. See "Not evaluated" below.'
-            : null
-        }) +
-        arfSection('2 · Runaway spenders', f.runaway, arfCampaignTable, {
-          blurb: 'Spend more than doubled against the 4-week baseline while retention is poor.',
-          cols: ['Campaign', 'Brand', 'Spend', 'Baseline/wk', 'Multiple', 'ACoS', 'Retention']
-        }) +
-        arfSection('3 · Stalled products', f.stalled, arfPortfolioTable, {
-          blurb: 'Fifteen or more clicks and zero orders across the whole portfolio. Usually a listing problem — inventory, Buy Box, reviews, pricing — rather than an ads problem. Expand a row for the campaign breakdown.',
-          cols: ['Portfolio', 'Brand', 'Clicks', 'Spend', 'Campaigns']
-        }) +
-        arfSection('4 · Brand pacing', f.brandPacing, arfBrandTable, {
-          blurb: 'Brand-level spend more than 30% off its 4-week weekly average, in either direction.',
-          cols: ['Brand', 'Spend', 'Baseline/wk', 'Change']
-        }) +
-        arfRenderNotEvaluated(data);
-    }
-
-    function arfSection(title, rows, renderer, opts) {
-      const list = rows || [];
-      const body = list.length
-        ? renderer(list, opts.cols, title)
-        : `<div style="color: ${opts.emptyMessage ? 'var(--warning)' : 'var(--text-secondary)'}; padding: 0.5rem 0;">` +
-          `${escapeHtml(opts.emptyMessage || 'No flags this week.')}</div>`;
       return `
-        <div class="card" style="margin-bottom: 1.5rem; ${list.length ? 'border-left: 3px solid var(--error);' : ''}">
-          <h3 class="section-title" style="margin-bottom: 0.5rem;">${escapeHtml(title)}</h3>
-          <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 1rem;">${escapeHtml(opts.blurb)}</div>
-          ${body}
+        <div class="arf-footer">
+          <div>${escapeHtml(bits.join(' · '))}</div>
+          ${warn.map(w => `<div class="arf-warn">${w}</div>`).join('')}
+          ${(data.notes || []).map(n =>
+            `<div class="arf-warn">${escapeHtml(n.key)}: ${escapeHtml(n.note)}</div>`).join('')}
+          ${(data.deviations || []).map(d =>
+            `<div class="arf-muted">Deviation from the cadence doc: ${escapeHtml(d)}</div>`).join('')}
+          ${data.censusSyncedAt
+            ? `<div class="arf-muted">Campaign configuration synced ${escapeHtml(_svTimeAgo(data.censusSyncedAt))}</div>`
+            : ''}
         </div>`;
-    }
-
-    function arfCampaignTable(rows, cols, title) {
-      const isCap = title.startsWith('1');
-      const isRun = title.startsWith('2');
-      const cells = (r) => {
-        if (isCap) return [
-          arfName(r), arfBrand(r), arfMoney(r.spend7), arfMoney(r.dailyBudget),
-          `${r.cappedDays} of 7`, arfPct(r.acos), arfRetention(r.retention)
-        ];
-        if (isRun) return [
-          arfName(r), arfBrand(r), arfMoney(r.spend7), arfMoney(r.baselineWeekly),
-          r.spendMultiple ? `${r.spendMultiple.toFixed(1)}×` : '—',
-          arfPct(r.acos), arfRetention(r.retention)
-        ];
-        return [arfName(r), arfBrand(r), arfMoney(r.spend7)];
-      };
-      return arfTable(cols, rows.map(cells));
-    }
-
-    // Stalled rows are portfolios, not campaigns. The per-campaign breakdown is
-    // kept as expandable detail: when a product's campaigns disagree — some
-    // still converting, some not — that points at targeting rather than the
-    // listing, and it's the case worth looking at closely.
-    function arfPortfolioTable(rows, cols) {
-      const detail = (r) => r.campaigns.map(c =>
-        `${escapeHtml(c.campaign)} — ${c.clicks7} clicks, $${formatNumber(c.spend7)}`
-      ).join('<br>');
-      return `
-        <div style="overflow-x: auto;">
-          <table>
-            <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
-            <tbody>${rows.map(r => `
-              <tr>
-                <td>
-                  <details>
-                    <summary style="cursor: pointer;">${escapeHtml(r.portfolio || '—')}</summary>
-                    <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.6;">
-                      ${detail(r)}
-                    </div>
-                  </details>
-                </td>
-                <td>${arfBrand(r)}</td>
-                <td>${r.clicks7}</td>
-                <td>${arfMoney(r.spend7)}</td>
-                <td>${r.campaignCount}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>`;
-    }
-
-    function arfBrandTable(rows, cols) {
-      return arfTable(cols, rows.map(r => [
-        escapeHtml(r.brand),
-        arfMoney(r.spend7),
-        arfMoney(r.baselineWeekly),
-        `<span style="color: ${r.direction === 'up' ? 'var(--warning)' : 'var(--accent-orange)'};">${r.deviation > 0 ? '+' : ''}${(r.deviation * 100).toFixed(0)}%</span>`
-      ]));
-    }
-
-    function arfTable(cols, rows) {
-      return `
-        <div style="overflow-x: auto;">
-          <table>
-            <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
-            <tbody>${rows.map(cells => `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
-          </table>
-        </div>`;
-    }
-
-    // Everything the checks deliberately did not evaluate. Kept visible so an
-    // incomplete run never reads as a clean one.
-    function arfRenderNotEvaluated(data) {
-      const cov = data.coverage || {};
-      const groups = [
-        ['Capped but not converting', cov.cappedNoSales, 'Hitting their budget with no sales at all. Not a scale-up opportunity — the opposite.'],
-        ['Capped, retention too low', cov.cappedLowRetention, 'Hitting their budget, but keeping too little profit to be worth feeding.'],
-        ['Unmapped campaigns', cov.unmapped, 'No brand could be resolved, so margin-based checks could not run. Map these on the Campaign Mapping page.'],
-        ['Under $5 for the week', cov.excludedUnderMin, 'Excluded by the cadence — too little signal to interpret.'],
-        ['No usable baseline', cov.newNoBaseline, 'Too few active days in the prior 4 weeks to compare against.'],
-        ['No budget data from Amazon', (cov.notEvaluable || []).filter(r => r.reason === 'no-budget-data'),
-         'Amazon returned no daily budget for these campaigns, so there is nothing to measure spend against.'],
-        ['Lifetime budgets', (cov.notEvaluable || []).filter(r => r.reason === 'lifetime-budget'),
-         'Budgeted for the whole campaign rather than per day, so a daily cap check does not apply.']
-      ].filter(g => g[1] && g[1].length);
-
-      const conflicts = cov.mappingConflicts || [];
-      const notes = data.notes || [];
-      if (!groups.length && !conflicts.length && !notes.length && !data.degraded &&
-          cov.budgetSource !== 'campaigns-api') return '';
-
-      const sections = groups.map(([label, rows, blurb, extraLabel, extraFn]) => `
-        <div style="margin-bottom: 1.25rem;">
-          <div style="font-weight: 600; margin-bottom: 0.25rem;">${escapeHtml(label)} (${rows.length})</div>
-          <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 0.5rem;">${escapeHtml(blurb)}</div>
-          ${arfTable(['Campaign', 'Brand', 'Spend', 'Clicks', 'Orders'].concat(extraLabel ? [extraLabel] : []),
-            rows.slice(0, 25).map(r => [arfName(r), arfBrand(r), arfMoney(r.spend7),
-              String(Math.round(r.clicks7)), String(Math.round(r.orders7))]
-              .concat(extraFn ? [extraFn(r)] : [])))}
-          ${rows.length > 25 ? `<div style="color: var(--text-secondary); font-size: 0.8125rem; margin-top: 0.5rem;">…and ${rows.length - 25} more.</div>` : ''}
-        </div>`).join('');
-
-      const conflictBlock = conflicts.length ? `
-        <div style="margin-bottom: 1.25rem;">
-          <div style="font-weight: 600; margin-bottom: 0.25rem; color: var(--warning);">Mapping disagreements (${conflicts.length})</div>
-          <div style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 0.5rem;">
-            The Campaign Mapping page and the campaign name disagree about the brand. The saved mapping was used. Usually means a stale mapping.
-          </div>
-          ${arfTable(['Campaign', 'Mapped to', 'Name suggests'],
-            conflicts.map(c => [escapeHtml(c.campaign), escapeHtml(c.mapped), escapeHtml(c.byPrefix)]))}
-        </div>` : '';
-
-      const srcBlock = cov.budgetSource === 'campaigns-api' ? `
-        <div style="margin-bottom: 1.25rem; color: var(--text-secondary); font-size: 0.8125rem;">
-          Daily budgets were read from the campaign settings, not the report — the report did not
-          include them. These are budgets as they stand now, so a budget changed mid-week is
-          measured against its current value.
-        </div>` : '';
-
-      const bt = cov.budgetTypesSeen || {};
-      const btBlock = Object.keys(bt).length ? `
-        <div style="margin-bottom: 1.25rem; color: var(--text-secondary); font-size: 0.8125rem;">
-          <span style="font-weight: 600;">Budget types Amazon returned:</span>
-          ${Object.entries(bt).map(([k, v]) => `${escapeHtml(k)} × ${v}`).join(' · ')}
-        </div>` : '';
-
-      const noteBlock = (notes.length || data.degraded) ? `
-        <div style="color: var(--text-secondary); font-size: 0.8125rem;">
-          ${data.degraded ? '<div>Amazon rejected some report columns, so this run used a reduced column set.</div>' : ''}
-          ${notes.map(n => `<div>${escapeHtml(n.key)}: ${escapeHtml(n.note)}</div>`).join('')}
-        </div>` : '';
-
-      return `
-        <div class="card card-flat" style="margin-top: 0.5rem;">
-          <details>
-            <summary style="cursor: pointer; font-weight: 600;">Not evaluated / for reference</summary>
-            <div style="margin-top: 1.25rem;">${sections}${srcBlock}${btBlock}${conflictBlock}${noteBlock}</div>
-          </details>
-        </div>`;
-    }
-
-    // ─── SMALL RENDER HELPERS ────────────────────────────────────────────────
-
-    function arfName(r) {
-      const tag = r.adProduct === 'SB'
-        ? ' <span style="color: var(--text-secondary); font-size: 0.75rem;">SB</span>' : '';
-      return escapeHtml(r.campaign || '') + tag;
-    }
-
-    function arfBrand(r) {
-      if (!r.brand) return '<span style="color: var(--warning);">unmapped</span>';
-      return escapeHtml(r.brand);
     }
 
     function arfMoney(n) {
-      return (n === null || n === undefined) ? '—' : '$' + formatNumber(n);
+      if (typeof n !== 'number' || !isFinite(n)) return '—';
+      return '$' + formatNumber(Math.round(n * 100) / 100);
     }
 
+    // Ratios arrive as fractions; retention and deviation can both be negative.
     function arfPct(n) {
-      // null means no sales — ACoS is undefined, not zero. Rendering "0%"
-      // here is what made dead campaigns look perfect in the manual version.
-      return (n === null || n === undefined) ? 'no sales' : `${(n * 100).toFixed(1)}%`;
-    }
-
-    function arfRetention(n) {
-      if (n === null || n === undefined) return '<span style="color: var(--error);">no sales</span>';
-      const color = n >= 0.5 ? 'var(--success)' : n >= 0.25 ? 'var(--warning)' : 'var(--error)';
-      return `<span style="color: ${color};">${(n * 100).toFixed(0)}%</span>`;
+      if (typeof n !== 'number' || !isFinite(n)) return '—';
+      return Math.round(n * 100) + '%';
     }
 
     function arfSetStatus(message, error, details) {

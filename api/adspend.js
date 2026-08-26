@@ -17,7 +17,7 @@ const gunzipAsync = promisify(gunzip);
 //   sync-status   → inspect pending state.
 //
 // This file also hosts the Weekly Red Flag Monitor (weekly-request /
-// weekly-status / weekly-collect / probe-columns) at the bottom. It shares the
+// weekly-status / weekly-collect) at the bottom. It shares the
 // Advertising API client below but none of the KV layout described here — see
 // that section's own banner. It is here only because Vercel's Hobby plan caps a
 // deployment at 12 serverless functions.
@@ -58,7 +58,6 @@ export default async function handler(req, res) {
     if (action === 'weekly-request')      return handleWeeklyRequest(req, res);
     if (action === 'weekly-status')       return handleWeeklyStatus(req, res);
     if (action === 'weekly-collect')      return handleWeeklyCollect(req, res);
-    if (action === 'probe-columns')       return handleProbeColumns(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
@@ -818,75 +817,78 @@ function previousMonthISO() {
   return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-
 // ═════════════════════════════════════════════════════════════════════════════
 // WEEKLY RED FLAG MONITOR
 // ═════════════════════════════════════════════════════════════════════════════
-// Four fixed threshold checks over the most recent COMPLETE Monday-Sunday week,
-// keyed on profit retention = (gross margin % - ACoS %) / gross margin %.
-// Ported from a manual spreadsheet cadence.
+// Implements Amazon_Ad_Management_Weekly.docx — the Tuesday cadence.
 //
-//   weekly-request  - resolve the window, POST 4 report requests
-//   weekly-status   - poll those report IDs
-//   weekly-collect  - download, compute the checks, return flags
-//   probe-columns   - throwaway 1-day reports to validate the column sets
+// OBSERVATIONAL ONLY. It reports; it never writes to Amazon and never adjusts
+// anything. Adjustments belong to the bi-weekly cadence, and the separation is
+// deliberate — do not add edit controls here.
+//
+// Two sources, and keeping them apart is the whole design:
+//
+//   CONFIGURATION — which campaigns exist, and their daily budget, state,
+//                   brand and portfolio. Read from the Campaign Overview
+//                   snapshot (adcampaigns:current). The reporting API has no
+//                   column for any of it; asking it for configuration is what
+//                   the previous implementation did, and it is why budgets and
+//                   portfolios never worked.
+//
+//   PERFORMANCE   — cost, clicks, impressions, orders and sales per campaign
+//                   per day. One report per ad product covering 35 CONTIGUOUS
+//                   days: the 7-day week window plus the 28-day trailing
+//                   baseline immediately before it. They abut, so one request
+//                   serves both and nothing needs storing between runs.
+//
+// The snapshot is the spine. Every enabled campaign in it is evaluated whether
+// or not the report mentions it — a campaign with no report rows spent nothing
+// that week, which is a fact rather than a gap. This is what makes the
+// denominator knowable.
+//
+// Flow, client-driven because report generation takes 1–5+ minutes:
+//   /api/adcampaigns?action=refresh  → freshen the census (step 0)
+//   weekly-request                   → 2 report requests, returns reportIds
+//   weekly-status                    → poll
+//   weekly-collect                   → download, evaluate, return the note
+//
+// Persists nothing of its own — it reads adcampaigns:* and writes no KV key.
 //
 // Lives in this file rather than its own because Vercel's Hobby plan caps a
-// deployment at 12 serverless functions. It shares this file's Advertising API
-// client (getAdsAccessToken / requestReport / getReportStatus / downloadReport)
-// but nothing else - it does not read or write any adspend:* KV key, and it
-// persists nothing at all. The browser holds report IDs across the async wait.
-//
-// Windows are Pacific: Vercel runs UTC and Ads report dates are marketplace
-// local, so a UTC-naive window sits a day ahead between 00:00 and 08:00 UTC.
-//
-// KNOWN LIMITATION - the capped signal is a proxy. Amazon exposes historical
-// "time in budget" only through the console Budget Report, not the API (the
-// Budget Usage API is real-time only). "Capped" here means the campaign spent
-// >= CAPPED_RATIO of its daily budget on >= CAPPED_DAYS_MIN days of the week.
-// Validated against the April 2026 console export: agrees with Amazon's
-// time-in-budget on 8 of 9 capped campaigns. Amazon's estimated-missed-sales
-// range is likewise console-only. Do not "fix" this by reaching for a
-// time-in-budget field - there isn't one.
+// deployment at 12 serverless functions. It shares the Advertising API client
+// above but none of the adspend:* KV layout.
 
-// ─── RF_CONFIG ──────────────────────────────────────────────────────────────────
-// Thresholds are fixed by the cadence spec and applied exactly — no adjusting
-// for feel or context. Returned in every response so the UI can render the
-// thresholds in effect and a run can be diffed against the spec without
-// reading this file.
+// ─── RF_CONFIG ───────────────────────────────────────────────────────────────
+// Every threshold is from the cadence doc and is applied exactly — the doc's
+// own words are "do not adjust for feel or context". Returned with each run so
+// the output can be checked against the spec without reading this file.
 const RF_CONFIG = {
-  MIN_WEEKLY_SPEND:     5,      // campaigns under $5/wk are not evaluated at all
-  RUNAWAY_MIN_SPEND:    50,     // floor so $15 → $35 doesn't trip check 2
-  RUNAWAY_MULTIPLE:     2,      // 7-day spend > 2x trailing weekly average
-  RETENTION_GOOD:       0.50,   // check 1 — worth feeding
-  RETENTION_BAD:        0.25,   // check 2 — not worth defending
-  STALLED_MIN_CLICKS:   15,     // check 3 — PORTFOLIO level, not campaign
-  PACING_DEVIATION:     0.30,   // check 4 — brand spend vs baseline, either way
-  CAPPED_RATIO:         0.95,   // day counts as capped at >= 95% of daily budget
-  CAPPED_DAYS_MIN:      3,      // ... on at least this many days of the week
-  BRAND_BASELINE_FLOOR: 50,     // below this weekly baseline, brand pacing is noise
-  BASELINE_MIN_DAYS:    14      // need this many active days to trust a baseline
+  MIN_WEEKLY_SPEND:      5,     // "does not evaluate campaigns with less than $5 in weekly spend"
+  CAP_RATIO:             0.95,  // 1 — 7-day spend ≥ 95% of (daily budget × 7)
+  CAP_RETENTION_MIN:     0.50,  // 1 — ... and profit retention ≥ 50%
+  RUNAWAY_MULTIPLE:      2,     // 2 — 7-day spend > 2× trailing 28-day weekly average
+  RUNAWAY_RETENTION_MAX: 0.25,  // 2 — ... and retention < 25%
+  RUNAWAY_MIN_SPEND:     50,    // 2 — ... and 7-day spend > $50
+  STALLED_MIN_CLICKS:    15,    // 3 — see the deviation note below
+  PACING_DEVIATION:      0.30   // 4 — brand spend ±30% of trailing weekly average
 };
 
-// Longest-first so "BW PACK" wins over "BW". Sorted at module load rather than
-// trusted to authoring order — and an array, because object key order is not a
-// contract. Brand strings MUST match the app's canonical labels (js/core.js
-// PRODUCT_BRAND_SHORT) or nothing joins to the rest of the dashboard.
-const BRAND_PREFIXES = [
-  { prefix: 'MAP PACKS', brand: 'BrightWay Educational', segment: 'BW_PACKS' },
-  { prefix: 'BW PACK',   brand: 'BrightWay Educational', segment: 'BW_PACKS' },
-  { prefix: 'BW SET',    brand: 'BrightWay Educational', segment: 'BW_SETS'  },
-  { prefix: 'BW',        brand: 'BrightWay Educational', segment: null       },
-  { prefix: 'SOK',       brand: 'South of Kings',        segment: 'SOK'      },
-  { prefix: 'RR',        brand: 'Hubbard Scientific',    segment: 'HUBBARD'  },
-  { prefix: 'STATE',     brand: 'MapShop State Maps',    segment: 'MAPSHOP'  }
-].sort((a, b) => b.prefix.length - a.prefix.length);
+// THE ONE DEVIATION FROM THE SPEC, recorded so it stays a decision rather than
+// drift: the doc puts check 3 at campaign level with a 10-click threshold. It
+// is run at PORTFOLIO level with 15 clicks instead, because a stalled listing
+// stops every campaign for that product at once — reporting it per campaign
+// stated one fact four times while missing products whose campaigns each sat
+// under the bar. Portfolio is one-per-SKU in this account.
+const RF_SPEC_DEVIATIONS = [
+  'Check 3 (stalled) runs at portfolio level with a 15-click threshold; ' +
+  'the cadence doc specifies campaign level with 10 clicks.'
+];
 
-// Gross margin per MARGIN SEGMENT, which is a separate axis from brand.
-// BrightWay Packs and Sets have materially different economics and their
-// campaign names distinguish them, so per-segment margin beats the blended
-// 45% figure. BW_BLENDED is the fallback for BrightWay campaigns whose name
-// says neither Pack nor Set.
+// Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
+// applies the prefix table AND any manual override set on the Campaign
+// Overview page — so there is no second brand table here. Only the BrightWay
+// split needs the campaign name: Packs and Sets have materially different
+// economics and nothing else distinguishes them.
 const MARGINS = {
   BW_PACKS:   0.38,
   BW_SETS:    0.51,
@@ -896,45 +898,38 @@ const MARGINS = {
   SOK:        0.39
 };
 
-const BRAND_DEFAULT_SEGMENT = {
+const BRAND_SEGMENT = {
   'BrightWay Educational': 'BW_BLENDED',
   'Hubbard Scientific':    'HUBBARD',
   'MapShop State Maps':    'MAPSHOP',
   'South of Kings':        'SOK'
 };
 
-const REPORT_KEYS = ['spWeek', 'spBase', 'sbWeek', 'sbBase'];
+function rfSegment(brand, campaignName) {
+  if (brand !== 'BrightWay Educational') return BRAND_SEGMENT[brand] || null;
+  const up = String(campaignName || '').trim().toUpperCase();
+  if (up.startsWith('MAP PACKS') || up.startsWith('BW PACK')) return 'BW_PACKS';
+  if (up.startsWith('BW SET')) return 'BW_SETS';
+  return 'BW_BLENDED';
+}
+
+// Metrics only. Name, status, budget, budget type and portfolio all come from
+// the census, so none of them are requested here — which is also why there is
+// no fallback ladder: a refused column now means a real problem worth stopping
+// for, not a cue to silently run on less data.
+const RF_COLUMNS = {
+  sp: ['date', 'campaignId', 'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d'],
+  sb: ['date', 'campaignId', 'cost', 'clicks', 'impressions', 'purchases', 'sales']
+};
+
+const REPORT_KEYS = ['sp', 'sb'];
 const REPORT_ID_RE = /^[A-Za-z0-9._-]{8,80}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-// Column sets, most-complete first. If Amazon 400s an invalid column the whole
-// request fails, so each report falls back to a narrower set and reports which
-// one it landed on. The narrowest SP/SB sets are the ones already proven in
-// production by adspend.js. Run ?action=probe-columns against the live account
-// to confirm the full sets rather than assuming them.
-const COLUMN_SETS = {
-  sp: [
-    ['date', 'portfolioId', 'campaignId', 'campaignName', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
-     'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d'],
-    ['date', 'campaignId', 'campaignName', 'campaignBudgetAmount', 'campaignBudgetType',
-     'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d'],
-    ['date', 'campaignId', 'campaignName', 'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d']
-  ],
-  sb: [
-    ['date', 'portfolioId', 'campaignId', 'campaignName', 'campaignStatus', 'campaignBudgetAmount', 'campaignBudgetType',
-     'cost', 'clicks', 'impressions', 'purchases', 'sales'],
-    ['date', 'campaignId', 'campaignName', 'campaignBudgetAmount', 'campaignBudgetType',
-     'cost', 'clicks', 'impressions', 'purchases', 'sales'],
-    ['date', 'campaignId', 'campaignName', 'cost', 'clicks', 'impressions', 'purchases', 'sales'],
-    ['date', 'campaignId', 'campaignName', 'cost', 'clicks', 'impressions']
-  ]
-};
-
 // ─── WEEKLY REQUEST ──────────────────────────────────────────────────────────
-// Resolves the window and fires the four report requests SEQUENTIALLY with a
-// small delay. v3 returns 425 for a duplicate createReport while an identical
-// one is still running, and has been reported to false-positive when similar
-// reports are fired in the same tick — so no Promise.all here.
+// Fires the two report requests SEQUENTIALLY. v3 returns 425 for a duplicate
+// createReport while an identical one is still running, and has been observed
+// to false-positive when similar reports go out in the same tick.
 async function handleWeeklyRequest(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
@@ -947,40 +942,33 @@ async function handleWeeklyRequest(req, res) {
 
     const window = resolveWindow(new Date());
     const accessToken = await getAdsAccessToken();
-
-    const specs = [
-      { key: 'spWeek', product: 'sp', start: window.weekStart, end: window.weekEnd },
-      { key: 'spBase', product: 'sp', start: window.baseStart, end: window.baseEnd },
-      { key: 'sbWeek', product: 'sb', start: window.weekStart, end: window.weekEnd },
-      { key: 'sbBase', product: 'sb', start: window.baseStart, end: window.baseEnd }
-    ];
-
     const reports = [];
-    for (const spec of specs) {
+    const failures = [];
+
+    for (const product of REPORT_KEYS) {
       try {
-        const out = await requestCampaignReport(accessToken, spec);
-        reports.push({ key: spec.key, ...out });
+        // One request spanning baseline start → week end: 35 contiguous days.
+        const r = await requestCampaignReport(accessToken, {
+          product, start: window.baseStart, end: window.weekEnd
+        });
+        reports.push({ key: product, ...r });
       } catch (err) {
-        // 425 means an identical report is already running. That is not a
-        // failure — but without the in-flight reportId there is nothing to
-        // poll, so surface it distinctly and let the client tell the user to
-        // wait rather than hammering the endpoint.
-        const duplicate = /\(425\)/.test(err.message);
-        console.error(`[ADREPORTS REQUEST] ${spec.key} failed:`, err.message);
-        reports.push({ key: spec.key, error: err.message, duplicate });
+        console.error(`[REDFLAGS REQUEST] ${product} failed:`, err.message);
+        failures.push({ key: product, error: err.message, invalidColumns: rfInvalidColumns(err.message) });
       }
-      await sleep(400);
+      await sleep(600);
+    }
+
+    if (!reports.length) {
+      return res.status(502).json({ error: 'Neither report could be requested.', failures });
     }
 
     return res.status(200).json({
-      success: true,
-      window,
-      reports,
-      config: RF_CONFIG,
+      success: true, window, reports, failures,
       requestedAt: new Date().toISOString()
     });
   } catch (error) {
-    console.error('[ADREPORTS REQUEST] Error:', error);
+    console.error('[REDFLAGS REQUEST] Error:', error);
     return res.status(500).json({ error: 'Weekly-request failed: ' + error.message });
   }
 }
@@ -1001,35 +989,28 @@ async function handleWeeklyStatus(req, res) {
         const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
         const norm = (status.status || '').toUpperCase();
         statuses.push({
-          key,
-          reportId,
-          status: norm,
+          key, reportId, status: norm,
           done: norm === 'COMPLETED' || norm === 'SUCCESS',
           failed: norm === 'FAILURE' || norm === 'FAILED' || norm === 'CANCELLED'
         });
       } catch (err) {
-        console.error(`[ADREPORTS STATUS] ${key} failed:`, err.message);
+        console.error(`[REDFLAGS STATUS] ${key} failed:`, err.message);
         statuses.push({ key, reportId, status: 'ERROR', done: false, failed: false, error: err.message });
       }
     }
 
     return res.status(200).json({
-      success: true,
-      statuses,
+      success: true, statuses,
       allDone: statuses.every(s => s.done || s.failed),
       checkedAt: new Date().toISOString()
     });
   } catch (error) {
-    console.error('[ADREPORTS STATUS] Error:', error);
+    console.error('[REDFLAGS STATUS] Error:', error);
     return res.status(500).json({ error: 'Weekly-status failed: ' + error.message });
   }
 }
 
 // ─── WEEKLY COLLECT ──────────────────────────────────────────────────────────
-// Downloads the completed reports and runs the checks. The window is ECHOED
-// BACK by the client and validated here rather than recomputed — a run that
-// straddles midnight Pacific would otherwise compute a different divisor than
-// the reports were built for.
 async function handleWeeklyCollect(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
@@ -1041,117 +1022,82 @@ async function handleWeeklyCollect(req, res) {
     const window = parseWindowParam(req.query);
     if (window.error) return res.status(400).json({ error: window.error });
 
-    const accessToken = await getAdsAccessToken();
-
-    const byKey = {};
-    const downloadNotes = [];
-    for (const { key, reportId } of parsed.reports) {
-      try {
-        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
-        const norm = (status.status || '').toUpperCase();
-        if (norm !== 'COMPLETED' && norm !== 'SUCCESS') {
-          downloadNotes.push({ key, note: `not ready (${norm || 'unknown'})` });
-          continue;
-        }
-        const url = status.url || status.location;
-        if (!url) {
-          downloadNotes.push({ key, note: 'completed but no download URL' });
-          continue;
-        }
-        const raw = await withAdsRetry(() => downloadReport(url));
-        byKey[key] = arfNormalizeRows(raw, key.startsWith('sp') ? 'SP' : 'SB');
-      } catch (err) {
-        console.error(`[ADREPORTS COLLECT] ${key} failed:`, err.message);
-        downloadNotes.push({ key, note: 'download failed: ' + err.message });
-      }
-    }
-
-    if (!byKey.spWeek && !byKey.sbWeek) {
-      return res.status(502).json({
-        error: 'No week-window report could be downloaded — nothing to evaluate.',
-        notes: downloadNotes
+    const census = await loadCensus();
+    if (!census.campaigns.length) {
+      return res.status(409).json({
+        error: 'No campaign snapshot stored. Refresh Campaign Overview first — ' +
+               'the weekly check reads campaign budgets, brands and portfolios from it.'
       });
     }
 
-    const weekRows = [...(byKey.spWeek || []), ...(byKey.sbWeek || [])];
-    const reportHasBudgets = weekRows.some(r => r.budgetAmount > 0);
+    const accessToken = await getAdsAccessToken();
+    const rows = [];
+    const notes = [];
 
-    const [mappings, portfolioNames, budgetFallback] = await Promise.all([
-      loadMappings(),
-      fetchPortfolios(accessToken),
-      reportHasBudgets ? Promise.resolve(null) : fetchCampaignBudgets(accessToken)
-    ]);
+    for (const { key, reportId } of parsed.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const url = status.url || status.location;
+        if (!url) {
+          notes.push({ key, note: `report not ready (${status.status || 'unknown'})` });
+          continue;
+        }
+        const raw = await withAdsRetry(() => downloadReport(url));
+        rows.push(...rfNormalizeRows(raw, key === 'sp' ? 'SP' : 'SB'));
+      } catch (err) {
+        console.error(`[REDFLAGS COLLECT] ${key} failed:`, err.message);
+        notes.push({ key, note: 'download failed: ' + err.message });
+      }
+    }
 
-    const result = computeRedFlags({
-      weekRows,
-      baselineRows: [...(byKey.spBase || []), ...(byKey.sbBase || [])],
-      window,
-      mappings,
-      portfolioNames,
-      budgetFallback
-    });
+    if (!rows.length) {
+      return res.status(502).json({ error: 'No report rows could be downloaded.', notes });
+    }
+
+    const result = evaluateWeek({ census, rows, window });
 
     return res.status(200).json({
       success: true,
       window,
       config: RF_CONFIG,
+      deviations: RF_SPEC_DEVIATIONS,
+      censusSyncedAt: census.syncedAt,
       ...result,
-      notes: downloadNotes,
+      notes,
       generatedAt: new Date().toISOString()
     });
   } catch (error) {
-    console.error('[ADREPORTS COLLECT] Error:', error);
+    console.error('[REDFLAGS COLLECT] Error:', error);
     return res.status(500).json({ error: 'Weekly-collect failed: ' + error.message });
   }
 }
 
-// ─── PROBE COLUMNS ───────────────────────────────────────────────────────────
-// Amazon's docs are a JS SPA and can't be read programmatically, so the
-// reliable way to validate a column set is to ask Amazon: fire a throwaway
-// 1-day report with the full candidate set and read the 400 body, which names
-// the invalid columns. Cheap, definitive, and worth re-running whenever
-// Amazon revs the report schema.
-async function handleProbeColumns(req, res) {
-  try {
-    const auth = await verifyGoogleToken(req);
-    if (!auth.ok) return res.status(401).json({ error: auth.error });
-
-    const missing = missingAdsCredentials();
-    if (missing.length) {
-      return res.status(500).json({ error: `Missing Advertising API credentials: ${missing.join(', ')}` });
-    }
-
-    const day = _addDays(_ptDate(new Date()), -3);
-    const accessToken = await getAdsAccessToken();
-    const results = [];
-
-    for (const product of ['sp', 'sb']) {
-      for (let i = 0; i < COLUMN_SETS[product].length; i++) {
-        const columns = COLUMN_SETS[product][i];
-        try {
-          const reportId = await requestReport(accessToken, buildReportBody(product, day, day, columns));
-          results.push({ product, setIndex: i, ok: true, reportId, columns });
-          break; // first set Amazon accepts is the one a real run would use
-        } catch (err) {
-          results.push({ product, setIndex: i, ok: false, error: err.message, columns });
-        }
-        await sleep(400);
-      }
-    }
-
-    return res.status(200).json({ success: true, probedDate: day, results });
-  } catch (error) {
-    console.error('[ADREPORTS PROBE] Error:', error);
-    return res.status(500).json({ error: 'Probe failed: ' + error.message });
+// ─── CENSUS ──────────────────────────────────────────────────────────────────
+// The campaign configuration snapshot written by the Campaign Overview page.
+// Read-only: nothing here writes an adcampaigns:* key.
+async function loadCensus() {
+  const [current, portfolios] = await Promise.all([
+    kv.get('adcampaigns:current'),
+    kv.get('adcampaigns:portfolios')
+  ]);
+  const portfolioNames = {};
+  for (const p of (portfolios?.rows || [])) {
+    if (p.portfolioId) portfolioNames[String(p.portfolioId)] = p.name;
   }
+  return {
+    campaigns: current?.rows || [],
+    portfolioNames,
+    syncedAt: current?.syncedAt || null
+  };
 }
 
 // ─── WINDOW ──────────────────────────────────────────────────────────────────
 
 // Most recent COMPLETE Monday–Sunday week in Pacific time, plus the 28 days
-// immediately before it. "Complete" means strictly before today, so a run on
-// Sunday evaluates the week that ended the previous Sunday, not the one still
-// in progress.
+// immediately before it. "Complete" means strictly before today, so the
+// Tuesday run evaluates the week that ended Sunday. Pacific because Vercel
+// runs UTC while Ads report dates are marketplace-local — a UTC-naive window
+// sits a day ahead between 00:00 and 08:00 UTC.
 function resolveWindow(nowInstant) {
   const today = _ptDate(nowInstant);
   const dow = new Date(today + 'T00:00:00Z').getUTCDay(); // 0=Sun … 6=Sat
@@ -1190,540 +1136,236 @@ function daySpan(start, end) {
   return Math.round(ms / 86400000) + 1;
 }
 
-// ─── COMPUTE ─────────────────────────────────────────────────────────────────
-// Pure function over normalized rows — no I/O — so it can be exercised
-// offline against saved console exports.
+// ─── EVALUATE ────────────────────────────────────────────────────────────────
+// Pure, so the whole cadence can be exercised offline against fixtures.
 //
-// Stage order matters: brand aggregates (stage 4) are computed BEFORE the
-// $5 eligibility filter (stage 5), or sub-$5 campaigns would silently drop out
-// of brand pacing totals.
-function computeRedFlags({ weekRows, baselineRows, window, mappings, portfolioNames, budgetFallback }) {
-  // Stage 2 — aggregate per campaign. Keyed by id, not name: a campaign
-  // renamed mid-window would otherwise split into two identities.
-  const camps = new Map();
-  const campKey = (r) => `${r.adProduct}:${r.campaignId || r.campaignName}`;
-  const touch = (r) => {
-    const key = campKey(r);
-    let c = camps.get(key);
-    if (!c) {
-      c = {
-        key, adProduct: r.adProduct, campaignId: r.campaignId, campaignName: r.campaignName,
-        campaignStatus: r.campaignStatus || '', portfolioId: r.portfolioId || '',
-        spend7: 0, clicks7: 0, impressions7: 0, orders7: 0, sales7: 0,
-        spend28: 0, days28: new Set(),
-        budgetByDate: new Map(), spendByDate: new Map(),
-        budgetType: r.budgetType || ''
-      };
-      camps.set(key, c);
+// Stage order matters: brand and portfolio rollups span EVERY campaign, while
+// the $5 floor applies only to the two campaign-level checks. The cadence doc
+// excludes sub-$5 campaigns from evaluation, not from their brand's totals.
+function evaluateWeek({ census, rows, window }) {
+  // ── the spine ──
+  const campaigns = new Map();
+  for (const row of census.campaigns) {
+    if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
+    const brand = row.brand || null;
+    const segment = brand ? rfSegment(brand, row.name) : null;
+    campaigns.set(String(row.campaignId), {
+      campaignId: String(row.campaignId),
+      name: row.name || '',
+      adProduct: row.adProduct || '',
+      dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
+      budgetType: row.budgetType || '',
+      portfolioId: row.portfolioId || null,
+      portfolio: (row.portfolioId && census.portfolioNames[row.portfolioId]) || null,
+      brand,
+      segment,
+      grossMargin: segment ? MARGINS[segment] : null,
+      spend7: 0, clicks7: 0, impressions7: 0, orders7: 0, sales7: 0,
+      spend28: 0
+    });
+  }
+
+  // ── metrics fold onto the spine ──
+  // A report row for a campaign the census does not list is counted rather
+  // than dropped: it means the snapshot is stale, and that is worth saying.
+  let orphanRows = 0;
+  for (const r of rows) {
+    const c = campaigns.get(r.campaignId);
+    if (!c) { orphanRows++; continue; }
+    if (r.date >= window.weekStart && r.date <= window.weekEnd) {
+      c.spend7 += r.cost;
+      c.clicks7 += r.clicks;
+      c.impressions7 += r.impressions;
+      c.orders7 += r.orders;
+      c.sales7 += r.sales;
+    } else if (r.date >= window.baseStart && r.date <= window.baseEnd) {
+      c.spend28 += r.cost;
     }
-    if (r.campaignName) c.campaignName = r.campaignName;
-    if (r.campaignStatus) c.campaignStatus = r.campaignStatus;
-    if (r.portfolioId) c.portfolioId = r.portfolioId;
-    if (r.budgetType) c.budgetType = r.budgetType;
-    return c;
-  };
-
-  for (const r of weekRows) {
-    const c = touch(r);
-    c.spend7 += r.cost;
-    c.clicks7 += r.clicks;
-    c.impressions7 += r.impressions;
-    c.orders7 += r.orders;
-    c.sales7 += r.sales;
-    c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
-    if (r.budgetAmount > 0) c.budgetByDate.set(r.date, r.budgetAmount);
-  }
-  for (const r of baselineRows) {
-    const c = touch(r);
-    c.spend28 += r.cost;
-    if (r.cost > 0) c.days28.add(r.date);
   }
 
-  // Stage 3 — attribution (brand for margin, portfolio for grouping).
-  const pfNames = portfolioNames || {};
-  const mappingConflicts = [];
-  for (const c of camps.values()) {
-    const pf = resolvePortfolio(c, pfNames);
-    c.portfolio = pf.name;
-    c.portfolioSource = pf.source;
-    const resolved = resolveBrand(c.campaignName, c.adProduct, mappings);
-    c.brand = resolved.brand;
-    c.brandSource = resolved.source;
-    c.marginSegment = resolved.segment;
-    c.grossMargin = resolved.segment ? MARGINS[resolved.segment] : null;
-    if (resolved.conflict) {
-      mappingConflicts.push({
-        campaign: c.campaignName, adProduct: c.adProduct,
-        mapped: resolved.conflict.mapped, byPrefix: resolved.conflict.byPrefix
+  // ── derived ──
+  for (const c of campaigns.values()) {
+    c.acos = c.sales7 > 0 ? r4(c.spend7 / c.sales7) : null;
+    // Profit retention — the cadence's primary decision metric.
+    //   (gross margin % − ACoS %) ÷ gross margin %
+    // null, never 0, when it cannot be computed: an unmapped brand has no
+    // margin, and a campaign with no sales has no ACoS. Treating either as
+    // zero retention would flag it as a runaway.
+    c.retention = (c.grossMargin && c.acos !== null)
+      ? r4((c.grossMargin - c.acos) / c.grossMargin)
+      : null;
+    c.baselineWeekly = r2(c.spend28 / 4);
+    c.spendMultiple = c.baselineWeekly > 0 ? r4(c.spend7 / c.baselineWeekly) : null;
+    // Check 1 needs time-in-budget, which Amazon exposes ONLY in the console
+    // Budget Report — there is no API field for it, and no amount of looking
+    // will produce one. The cadence doc's own SB proxy is used for both ad
+    // products: 7-day spend against the implied weekly cap.
+    //
+    // A LIFETIME budget has no daily cap, so budget x 7 is not a weekly
+    // ceiling and the ratio would be meaningless. Skipped rather than
+    // computed wrong. An absent budgetType is treated as daily, which is what
+    // Sponsored Products returns for effectively every campaign.
+    const lifetime = /LIFETIME/i.test(c.budgetType);
+    c.capRatio = (c.dailyBudget > 0 && !lifetime) ? r4(c.spend7 / (c.dailyBudget * 7)) : null;
+  }
+
+  const flags = { budgetCap: [], runaway: [], stalled: [], brandPacing: [] };
+  let evaluated = 0;
+
+  // ── checks 1 and 2, campaign level, above the $5 floor ──
+  for (const c of campaigns.values()) {
+    if (c.spend7 < RF_CONFIG.MIN_WEEKLY_SPEND) continue;
+    evaluated++;
+
+    if (c.capRatio !== null && c.capRatio >= RF_CONFIG.CAP_RATIO &&
+        c.retention !== null && c.retention >= RF_CONFIG.CAP_RETENTION_MIN) {
+      flags.budgetCap.push({
+        campaign: c.name, adProduct: c.adProduct, campaignId: c.campaignId,
+        brand: c.brand, dailyBudget: c.dailyBudget,
+        impliedWeeklyCap: r2(c.dailyBudget * 7),
+        spend7: r2(c.spend7), capRatio: c.capRatio,
+        acos: c.acos, retention: c.retention
+      });
+    }
+
+    if (c.spend7 > RF_CONFIG.RUNAWAY_MIN_SPEND &&
+        c.spendMultiple !== null && c.spendMultiple > RF_CONFIG.RUNAWAY_MULTIPLE &&
+        c.retention !== null && c.retention < RF_CONFIG.RUNAWAY_RETENTION_MAX) {
+      flags.runaway.push({
+        campaign: c.name, adProduct: c.adProduct, campaignId: c.campaignId,
+        brand: c.brand, spend7: r2(c.spend7),
+        baselineWeekly: c.baselineWeekly, spendMultiple: c.spendMultiple,
+        acos: c.acos, retention: c.retention
       });
     }
   }
 
-  // Stage 4 — brand aggregates, over ALL campaigns including sub-$5 ones.
-  const brands = new Map();
-  for (const c of camps.values()) {
-    if (!c.brand) continue;
-    let b = brands.get(c.brand);
-    if (!b) { b = { brand: c.brand, spend7: 0, spend28: 0, days28: new Set() }; brands.set(c.brand, b); }
-    b.spend7 += c.spend7;
-    b.spend28 += c.spend28;
-    for (const d of c.days28) b.days28.add(d);
-  }
-
-  // Stage 4b — portfolio aggregates for check 3. Deliberately spans every
-  // campaign regardless of the per-campaign spend floor: the products this
-  // check exists to find are ones where four campaigns each sit under the bar
+  // ── check 3, portfolio level ──
+  // Spans every campaign regardless of the $5 floor: the products this exists
+  // to catch are ones where several small campaigns each sit under the bar
   // while the product as a whole clearly stopped converting.
   const portfolios = new Map();
-  for (const c of camps.values()) {
-    let p = portfolios.get(c.portfolio);
+  for (const c of campaigns.values()) {
+    // A campaign with no portfolio stands alone rather than being pooled with
+    // every other unfiled campaign into one meaningless group.
+    const key = c.portfolioId || `campaign:${c.campaignId}`;
+    let p = portfolios.get(key);
     if (!p) {
-      p = {
-        portfolio: c.portfolio, portfolioSource: c.portfolioSource, brand: c.brand || null,
-        clicks7: 0, orders7: 0, spend7: 0, sales7: 0, impressions7: 0, campaigns: []
-      };
-      portfolios.set(c.portfolio, p);
+      p = { key, portfolio: c.portfolio || c.name, brand: c.brand,
+            clicks7: 0, orders7: 0, spend7: 0, campaigns: [] };
+      portfolios.set(key, p);
     }
     p.clicks7 += c.clicks7;
     p.orders7 += c.orders7;
     p.spend7 += c.spend7;
-    p.sales7 += c.sales7;
-    p.impressions7 += c.impressions7;
-    if (!p.brand && c.brand) p.brand = c.brand;
-    p.campaigns.push({
-      campaign: c.campaignName, adProduct: c.adProduct,
-      clicks7: Math.round(c.clicks7), orders7: Math.round(c.orders7),
-      spend7: r2(c.spend7), status: c.campaignStatus || null
-    });
+    p.campaigns.push({ campaign: c.name, adProduct: c.adProduct,
+                       clicks7: c.clicks7, spend7: r2(c.spend7) });
   }
-
-  // Stage 6 — per-campaign metrics.
-  for (const c of camps.values()) {
-    // ACoS is NULL, never 0, when there are no sales. The naive
-    // `sales ? cost/sales : 0` makes retention compute to 1.0 and a dead
-    // campaign look perfect — that bug shipped in the manual version.
-    c.acos = c.sales7 > 0 ? c.spend7 / c.sales7 : null;
-    c.retention = (c.acos === null || !(c.grossMargin > 0))
-      ? null
-      : r4((c.grossMargin - c.acos) / c.grossMargin);
-
-    // Report budgets win when present; otherwise apply the campaign object's
-    // current budget to every day of the week.
-    if (!c.budgetByDate.size && budgetFallback) {
-      const fb = budgetFallback[String(c.campaignId || '')];
-      if (fb && fb.amount > 0) {
-        for (const d of c.spendByDate.keys()) c.budgetByDate.set(d, fb.amount);
-        c.budgetSource = 'campaigns-api';
-        if (fb.type) c.budgetType = fb.type;
-      }
-    } else if (c.budgetByDate.size) {
-      c.budgetSource = 'report';
-    }
-
-    c.budgetDays = c.budgetByDate.size;
-    c.dailyBudget = c.budgetDays ? Math.max(...c.budgetByDate.values()) : null;
-    c.budgetTotal = 0;
-    for (const v of c.budgetByDate.values()) c.budgetTotal += v;
-    c.lifetimeBudget = /LIFETIME/i.test(String(c.budgetType || ''));
-    c.cappedEvaluable = c.budgetDays > 0 && !c.lifetimeBudget;
-
-    // Count of days the campaign actually ran out of budget. A weekly
-    // spend-to-budget ratio would miss the campaign that maxes out Mon–Wed
-    // and goes quiet — which is exactly the one this check exists to find.
-    c.cappedDays = 0;
-    if (c.cappedEvaluable) {
-      for (const [date, budget] of c.budgetByDate) {
-        if (budget > 0 && (c.spendByDate.get(date) || 0) >= RF_CONFIG.CAPPED_RATIO * budget) c.cappedDays++;
-      }
-    }
-    c.weeklyCapRatio = c.budgetTotal > 0 ? r4(c.spend7 / c.budgetTotal) : null;
-    c.capped = c.cappedEvaluable && c.cappedDays >= RF_CONFIG.CAPPED_DAYS_MIN;
-
-    c.baselineWeekly = c.spend28 / 4;
-    c.baselineUsable = c.days28.size >= RF_CONFIG.BASELINE_MIN_DAYS;
-    c.spendMultiple = (c.baselineUsable && c.baselineWeekly > 0)
-      ? r4(c.spend7 / c.baselineWeekly) : null;
-  }
-
-  // Stage 5 + 7 — eligibility, then the checks in spec order.
-  const flags = { budgetCap: [], runaway: [], stalled: [], brandPacing: [] };
-  const coverage = {
-    campaignsSeen: camps.size, evaluated: 0,
-    totalSpend7: 0, evaluatedSpend7: 0,
-    excludedUnderMin: [], unmapped: [], notEvaluable: [], cappedNoSales: [],
-    cappedLowRetention: [], newNoBaseline: [], mappingConflicts,
-    cappedEvaluableCount: 0, budgetTypesSeen: {}, budgetSource: null
-  };
-
-  for (const c of camps.values()) {
-    coverage.totalSpend7 += c.spend7;
-
-    if (c.spend7 < RF_CONFIG.MIN_WEEKLY_SPEND) {
-      // Spec: campaigns under $5/week carry too little signal to interpret.
-      if (c.spend7 > 0) coverage.excludedUnderMin.push(arfRow(c));
-      continue;
-    }
-    coverage.evaluated++;
-    coverage.evaluatedSpend7 += c.spend7;
-    if (c.cappedEvaluable) {
-      coverage.cappedEvaluableCount++;
-      if (!coverage.budgetSource) coverage.budgetSource = c.budgetSource || null;
-    }
-    // Raw budget-type values as Amazon returned them. If the capped check goes
-    // quiet again, this says why without another round trip.
-    const bt = c.budgetType || '(none)';
-    coverage.budgetTypesSeen[bt] = (coverage.budgetTypesSeen[bt] || 0) + 1;
-
-    if (!c.brand) coverage.unmapped.push(arfRow(c));
-    if (c.lifetimeBudget) coverage.notEvaluable.push({ ...arfRow(c), reason: 'lifetime-budget' });
-    else if (!c.budgetDays) coverage.notEvaluable.push({ ...arfRow(c), reason: 'no-budget-data' });
-    if (!c.baselineUsable) coverage.newNoBaseline.push(arfRow(c));
-
-    // 1 — Budget cap emergency. retention === null CANNOT satisfy this; a
-    // capped campaign with no sales is the opposite of an opportunity, so it
-    // goes to cappedNoSales instead of being flagged as one to feed.
-    if (c.capped && c.retention !== null && c.retention >= RF_CONFIG.RETENTION_GOOD) {
-      flags.budgetCap.push(arfRow(c));
-    } else if (c.capped && c.retention === null) {
-      coverage.cappedNoSales.push(arfRow(c));
-    } else if (c.capped) {
-      // Capped, but retention is below the bar. Not flagged — pushing budget
-      // at a campaign that can't convert it into profit is the mistake check 1
-      // exists to avoid. Surfaced anyway so "Amazon says this is capped, why
-      // isn't it here?" has a visible answer.
-      coverage.cappedLowRetention.push(arfRow(c));
-    }
-
-    // 2 — Runaway spender. Here retention === null DOES satisfy "< 25%":
-    // zero sales is retention below any threshold, and excluding the worst
-    // case would gut the check. The asymmetry with check 1 is deliberate —
-    // do not "fix" it into consistency.
-    if (c.spend7 > RF_CONFIG.RUNAWAY_MIN_SPEND &&
-        c.baselineUsable && c.baselineWeekly > 0 &&
-        c.spend7 > RF_CONFIG.RUNAWAY_MULTIPLE * c.baselineWeekly &&
-        (c.retention === null || c.retention < RF_CONFIG.RETENTION_BAD)) {
-      flags.runaway.push(arfRow(c));
-    }
-
-  }
-
-  // 3 — Stalled, at PORTFOLIO level. A stalled product is a listing problem —
-  // inventory, Buy Box, reviews, pricing — and those stop every campaign for
-  // the product at once, so reporting per campaign reported one fact four
-  // times while missing products whose campaigns were each under the old bar.
-  // Needs no margin, so unmapped portfolios are still evaluated.
   for (const p of portfolios.values()) {
     if (p.spend7 < RF_CONFIG.MIN_WEEKLY_SPEND) continue;
-    // Clicks and orders are integers per day, so the sums are exact — but round
-    // before comparing anyway, for the same reason the ratio checks do. A
-    // portfolio sitting exactly on the threshold shouldn't turn on float dust.
-    const pClicks = Math.round(p.clicks7);
-    if (pClicks >= RF_CONFIG.STALLED_MIN_CLICKS && Math.round(p.orders7) === 0) {
+    // Clicks and orders are per-day integers, so the sums are exact — but
+    // round anyway, so a portfolio sitting on the threshold cannot turn on
+    // float dust.
+    const clicks = Math.round(p.clicks7);
+    if (clicks >= RF_CONFIG.STALLED_MIN_CLICKS && Math.round(p.orders7) === 0) {
       flags.stalled.push({
-        portfolio: p.portfolio,
-        portfolioSource: p.portfolioSource,
-        brand: p.brand,
-        clicks7: pClicks,
-        impressions7: Math.round(p.impressions7),
-        spend7: r2(p.spend7),
+        portfolio: p.portfolio, brand: p.brand,
+        clicks7: clicks, spend7: r2(p.spend7),
         campaignCount: p.campaigns.length,
         campaigns: p.campaigns.sort((a, b) => b.spend7 - a.spend7)
       });
     }
   }
 
-  // 4 — Brand pacing.
+  // ── check 4, brand level ──
+  // No spend floor: the doc specifies none, and this is the account-level
+  // sanity check that is meant to catch what the campaign checks miss.
+  const brands = new Map();
+  for (const c of campaigns.values()) {
+    if (!c.brand) continue;
+    let b = brands.get(c.brand);
+    if (!b) { b = { brand: c.brand, spend7: 0, spend28: 0 }; brands.set(c.brand, b); }
+    b.spend7 += c.spend7;
+    b.spend28 += c.spend28;
+  }
   for (const b of brands.values()) {
-    const baselineWeekly = b.spend28 / 4;
-    const usable = b.days28.size >= RF_CONFIG.BASELINE_MIN_DAYS &&
-                   baselineWeekly >= RF_CONFIG.BRAND_BASELINE_FLOOR;
-    if (!usable) continue;
+    const baselineWeekly = r2(b.spend28 / 4);
+    // No baseline means no deviation to measure — a brand that spent nothing
+    // for 28 days and something this week is a launch, not a pacing problem.
+    if (baselineWeekly <= 0) continue;
     const deviation = r4((b.spend7 - baselineWeekly) / baselineWeekly);
     if (Math.abs(deviation) > RF_CONFIG.PACING_DEVIATION) {
       flags.brandPacing.push({
-        brand: b.brand,
-        spend7: r2(b.spend7),
-        baselineWeekly: r2(baselineWeekly),
-        deviation,
-        direction: deviation > 0 ? 'up' : 'down'
+        brand: b.brand, spend7: r2(b.spend7), baselineWeekly, deviation
       });
     }
   }
 
-  // Biggest exposure first in each list.
   flags.budgetCap.sort((a, b) => b.spend7 - a.spend7);
   flags.runaway.sort((a, b) => b.spend7 - a.spend7);
   flags.stalled.sort((a, b) => b.spend7 - a.spend7);
   flags.brandPacing.sort((a, b) => Math.abs(b.deviation) - Math.abs(a.deviation));
-  coverage.unmapped.sort((a, b) => b.spend7 - a.spend7);
-  coverage.excludedUnderMin.sort((a, b) => b.spend7 - a.spend7);
-  coverage.cappedNoSales.sort((a, b) => b.spend7 - a.spend7);
-  coverage.cappedLowRetention.sort((a, b) => b.spend7 - a.spend7);
-
-  coverage.totalSpend7 = r2(coverage.totalSpend7);
-  coverage.evaluatedSpend7 = r2(coverage.evaluatedSpend7);
 
   const flagCount = flags.budgetCap.length + flags.runaway.length +
                     flags.stalled.length + flags.brandPacing.length;
 
-  return { flags, coverage, flagCount, clean: flagCount === 0 };
-}
+  // The run's own receipt. Not a report of healthy campaigns — one line saying
+  // what the denominator was, so a run that silently covers half the account
+  // cannot look identical to a clean week.
+  const enabled = campaigns.size;
+  const unmapped = [...campaigns.values()]
+    .filter(c => c.spend7 >= RF_CONFIG.MIN_WEEKLY_SPEND && !c.brand)
+    .map(c => ({ campaign: c.name, adProduct: c.adProduct, spend7: r2(c.spend7) }))
+    .sort((a, b) => b.spend7 - a.spend7);
+  // Campaigns check 1 could not look at: no daily budget in the snapshot, or a
+  // lifetime budget, which has no daily ceiling to be capped against.
+  const noBudget = [...campaigns.values()]
+    .filter(c => c.spend7 >= RF_CONFIG.MIN_WEEKLY_SPEND && c.capRatio === null)
+    .map(c => ({ campaign: c.name, adProduct: c.adProduct, spend7: r2(c.spend7),
+                 reason: /LIFETIME/i.test(c.budgetType) ? 'lifetime budget' : 'no daily budget' }));
 
-// Flag/coverage row — carries the raw evidence so the UI never recomputes and
-// any flag can be audited against the console.
-function arfRow(c) {
   return {
-    campaign: c.campaignName,
-    adProduct: c.adProduct,
-    campaignId: c.campaignId,
-    brand: c.brand || null,
-    brandSource: c.brandSource,
-    marginSegment: c.marginSegment || null,
-    grossMargin: c.grossMargin,
-    status: c.campaignStatus || null,
-    spend7: r2(c.spend7),
-    clicks7: c.clicks7,
-    impressions7: c.impressions7,
-    orders7: c.orders7,
-    sales7: r2(c.sales7),
-    acos: c.acos === null ? null : r4(c.acos),
-    retention: c.retention,
-    dailyBudget: c.dailyBudget,
-    budgetType: c.budgetType || null,
-    cappedDays: c.cappedEvaluable ? c.cappedDays : null,
-    weeklyCapRatio: c.weeklyCapRatio,
-    baselineWeekly: r2(c.baselineWeekly),
-    baselineDays: c.days28.size,
-    spendMultiple: c.spendMultiple
+    flags,
+    flagCount,
+    clean: flagCount === 0,
+    coverage: { enabled, evaluated, belowFloor: enabled - evaluated, orphanRows, unmapped, noBudget }
   };
-}
-
-// ─── BRAND ATTRIBUTION ───────────────────────────────────────────────────────
-// The dashboard already keeps a curated campaign→brand mapping, editable on
-// the Campaign Mapping page. That wins when present so this page agrees with
-// Profitability Overview; the name prefixes fill gaps so new campaigns are
-// covered automatically. Disagreements are reported rather than silently
-// resolved — they usually mean a stale mapping.
-function resolveBrand(campaignName, adProduct, mappings) {
-  const name = String(campaignName || '').trim();
-  const mapped = adProduct === 'SB'
-    ? mappings.brand[name]
-    : (mappings.product[name] && mappings.product[name].brand);
-  const prefix = brandFromPrefix(name);
-
-  let conflict = null;
-  if (mapped && prefix.brand && mapped !== prefix.brand) {
-    conflict = { mapped, byPrefix: prefix.brand };
-  }
-
-  if (mapped) {
-    // Keep the prefix-derived segment when the two agree — it is finer
-    // grained than brand (Packs vs Sets) and the mapping has no segment
-    // concept of its own.
-    const segment = (prefix.brand === mapped && prefix.segment)
-      ? prefix.segment
-      : (BRAND_DEFAULT_SEGMENT[mapped] || null);
-    return { brand: mapped, segment, source: 'mapping', conflict };
-  }
-  if (prefix.brand) {
-    return {
-      brand: prefix.brand,
-      segment: prefix.segment || BRAND_DEFAULT_SEGMENT[prefix.brand] || null,
-      source: 'prefix',
-      conflict
-    };
-  }
-  return { brand: null, segment: null, source: 'unmapped', conflict };
-}
-
-// Portfolio is the grouping unit for the stalled check, and in this account it
-// is effectively the product: 140 campaigns across 42 portfolios, one per SKU.
-// When the report carries no portfolioId, fall back to the product implied by
-// the campaign name — "SOK World Blank (Auto)" becomes "SOK World Blank".
-// Checked against the April export, the two grouped identically.
-function resolvePortfolio(c, pfNames) {
-  const byId = c.portfolioId && pfNames[c.portfolioId];
-  if (byId) return { name: byId, source: 'portfolio' };
-  const derived = String(c.campaignName || '').replace(/\s*\([^)]*\)\s*$/, '').trim();
-  return { name: derived || c.campaignName || '(unknown)', source: 'name' };
-}
-
-// Longest prefix wins, and the prefix must be followed by a non-alphanumeric
-// character or end of string — otherwise "BWX Something" matches "BW".
-function brandFromPrefix(campaignName) {
-  const up = String(campaignName || '').trim().toUpperCase();
-  for (const entry of BRAND_PREFIXES) {
-    if (!up.startsWith(entry.prefix)) continue;
-    const next = up.charAt(entry.prefix.length);
-    if (next === '' || !/[A-Z0-9]/.test(next)) {
-      return { brand: entry.brand, segment: entry.segment };
-    }
-  }
-  return { brand: null, segment: null };
-}
-
-// Daily budgets read from the campaign objects. The v3 campaign report is
-// supposed to expose campaignBudgetAmount, but it comes back empty on this
-// account, which silently removed every campaign from the capped check. These
-// endpoints are synchronous and authoritative, so the check no longer depends
-// on that column being populated.
-//
-// Caveat worth keeping in mind: this is the budget as it stands NOW, not what
-// it was on each day of the week being evaluated. If a budget was raised
-// mid-week, the capped days for that week are computed against the new number.
-// Reported as budgetSource: 'campaigns-api' so the UI can say so.
-async function fetchCampaignBudgets(accessToken) {
-  const out = {};
-
-  const take = (list) => {
-    for (const c of list || []) {
-      const id = String(c.campaignId || '');
-      if (!id) continue;
-      const amount = Number(
-        (c.budget && (c.budget.budget ?? c.budget.amount)) ??
-        c.dailyBudget ?? (typeof c.budget === 'number' ? c.budget : undefined)
-      );
-      const type = String((c.budget && c.budget.budgetType) || c.budgetType || '');
-      if (Number.isFinite(amount) && amount > 0) out[id] = { amount, type };
-    }
-  };
-
-  // SP v3
-  try {
-    const res = await fetch('https://advertising-api.amazon.com/sp/campaigns/list', {
-      method: 'POST',
-      headers: adsAuthHeaders(accessToken, {
-        'Content-Type': 'application/vnd.spCampaign.v3+json',
-        'Accept': 'application/vnd.spCampaign.v3+json'
-      }),
-      body: JSON.stringify({ maxResults: 500 })
-    });
-    if (res.ok) take((await res.json().catch(() => ({}))).campaigns);
-  } catch (err) {
-    console.error('[ADREPORTS] sp campaigns v3 failed:', err.message);
-  }
-
-  // SP v2 — older shape, flat dailyBudget
-  if (!Object.keys(out).length) {
-    try {
-      const res = await fetch(
-        'https://advertising-api.amazon.com/v2/sp/campaigns?stateFilter=enabled,paused,archived&count=500',
-        { headers: adsAuthHeaders(accessToken) });
-      if (res.ok) take(await res.json().catch(() => []));
-    } catch (err) {
-      console.error('[ADREPORTS] sp campaigns v2 failed:', err.message);
-    }
-  }
-
-  // SB — only a couple of campaigns, so a failure here is not worth retrying.
-  try {
-    const res = await fetch('https://advertising-api.amazon.com/sb/v4/campaigns/list', {
-      method: 'POST',
-      headers: adsAuthHeaders(accessToken, {
-        'Content-Type': 'application/vnd.sbcampaignresource.v4+json',
-        'Accept': 'application/vnd.sbcampaignresource.v4+json'
-      }),
-      body: JSON.stringify({ maxResults: 100 })
-    });
-    if (res.ok) take((await res.json().catch(() => ({}))).campaigns);
-  } catch (err) {
-    console.error('[ADREPORTS] sb campaigns v4 failed:', err.message);
-  }
-
-  return out;
-}
-
-// Portfolio names for the stalled check's grouping. Tries the v3 list
-// endpoint, then v2. Returns {} on any failure — the caller falls back to the
-// product implied by the campaign name, which grouped identically across all
-// 140 campaigns when this was checked against the April export.
-async function fetchPortfolios(accessToken) {
-  try {
-    const res = await fetch('https://advertising-api.amazon.com/portfolios/list', {
-      method: 'POST',
-      headers: adsAuthHeaders(accessToken, {
-        'Content-Type': 'application/vnd.portfolio.v3+json',
-        'Accept': 'application/vnd.portfolio.v3+json'
-      }),
-      body: JSON.stringify({ maxResults: 100 })
-    });
-    if (res.ok) {
-      const body = await res.json().catch(() => ({}));
-      const list = body.portfolios || [];
-      if (list.length) {
-        return Object.fromEntries(list.map(p => [String(p.portfolioId), p.name]));
-      }
-    }
-  } catch (err) {
-    console.error('[ADREPORTS] portfolios v3 failed:', err.message);
-  }
-  try {
-    const res = await fetch('https://advertising-api.amazon.com/v2/portfolios', {
-      headers: adsAuthHeaders(accessToken)
-    });
-    if (res.ok) {
-      const list = await res.json().catch(() => []);
-      if (Array.isArray(list) && list.length) {
-        return Object.fromEntries(list.map(p => [String(p.portfolioId), p.name]));
-      }
-    }
-  } catch (err) {
-    console.error('[ADREPORTS] portfolios v2 failed:', err.message);
-  }
-  return {};
-}
-
-async function loadMappings() {
-  const [product, brand] = await Promise.all([
-    kv.get('mappings:product'),
-    kv.get('mappings:brand')
-  ]);
-  return { product: product || {}, brand: brand || {} };
 }
 
 // ─── ROW NORMALIZATION ───────────────────────────────────────────────────────
-// Column names vary by report type and Amazon has revved them before, so each
-// field reads the first present candidate rather than one hardcoded key.
 // SP carries 7-day attribution and SB 14-day, matching what the console
-// exports show and therefore what the numbers have always been read against.
-function arfNormalizeRows(rawRows, adProduct) {
+// exports show and therefore what these numbers have always been read against.
+// Each field reads the first present candidate: Amazon has revved column names
+// before, and a silent zero is worse than a loud mismatch.
+function rfNormalizeRows(rawRows, adProduct) {
   if (!Array.isArray(rawRows)) return [];
   return rawRows.map(r => ({
-    date:           String(arfPick(r, ['date', 'startDate']) || '').substring(0, 10),
+    date:       String(rfPick(r, ['date', 'startDate']) || '').substring(0, 10),
     adProduct,
-    campaignId:     String(arfPick(r, ['campaignId']) || ''),
-    portfolioId:    String(arfPick(r, ['portfolioId']) || ''),
-    campaignName:   String(arfPick(r, ['campaignName']) || ''),
-    campaignStatus: String(arfPick(r, ['campaignStatus', 'status']) || ''),
-    budgetAmount:   num(arfPick(r, ['campaignBudgetAmount', 'budgetAmount', 'budget'])),
-    budgetType:     String(arfPick(r, ['campaignBudgetType', 'budgetType']) || ''),
-    cost:           num(arfPick(r, ['cost', 'spend'])),
-    clicks:         num(arfPick(r, ['clicks'])),
-    impressions:    num(arfPick(r, ['impressions'])),
-    orders:         num(arfPick(r, adProduct === 'SP'
-                       ? ['purchases7d', 'orders7d', 'purchases']
-                       : ['purchases', 'purchases14d', 'orders14d'])),
-    sales:          num(arfPick(r, adProduct === 'SP'
-                       ? ['sales7d', 'attributedSales7d', 'sales']
-                       : ['sales', 'sales14d', 'attributedSales14d']))
-  })).filter(r => r.date && (r.campaignId || r.campaignName));
+    campaignId: String(rfPick(r, ['campaignId']) || ''),
+    cost:       num(rfPick(r, ['cost', 'spend'])),
+    clicks:     num(rfPick(r, ['clicks'])),
+    impressions: num(rfPick(r, ['impressions'])),
+    orders:     num(rfPick(r, ['purchases7d', 'purchases', 'purchases14d'])),
+    sales:      num(rfPick(r, ['sales7d', 'sales', 'sales14d']))
+  })).filter(r => r.date && r.campaignId);
 }
 
-function arfPick(obj, keys) {
+function rfPick(row, keys) {
   for (const k of keys) {
-    if (obj && obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+    if (row && row[k] !== undefined && row[k] !== null && row[k] !== '') return row[k];
   }
   return undefined;
 }
 
-// ─── ADVERTISING API CLIENT ──────────────────────────────────────────────────
+// ─── ADVERTISING API ─────────────────────────────────────────────────────────
 
 function missingAdsCredentials() {
   return ['ADV_CLIENT_ID', 'ADV_CLIENT_SECRET', 'ADV_REFRESH_TOKEN', 'ADV_PROFILE_ID']
     .filter(k => !process.env[k]);
 }
 
-function buildReportBody(product, start, end, columns) {
+function buildReportBody(product, start, end) {
   return {
     name: `RedFlags ${product.toUpperCase()} ${start}..${end}`,
     startDate: start,
@@ -1731,7 +1373,7 @@ function buildReportBody(product, start, end, columns) {
     configuration: {
       adProduct: product === 'sp' ? 'SPONSORED_PRODUCTS' : 'SPONSORED_BRANDS',
       groupBy: ['campaign'],
-      columns,
+      columns: RF_COLUMNS[product],
       reportTypeId: product === 'sp' ? 'spCampaigns' : 'sbCampaigns',
       timeUnit: 'DAILY',
       format: 'GZIP_JSON'
@@ -1739,77 +1381,51 @@ function buildReportBody(product, start, end, columns) {
   };
 }
 
-// Tries each column set in turn. An invalid column 400s the whole request, so
-// falling back to a narrower set keeps the run alive at reduced fidelity
-// rather than failing outright — and reports which set landed, so the UI can
-// say the capped check is unavailable when the budget columns were dropped.
-async function requestCampaignReport(accessToken, spec) {
-  const sets = COLUMN_SETS[spec.product];
-  const rejections = [];
-  let lastErr;
-  for (let i = 0; i < sets.length; i++) {
-    const columns = sets[i];
-    try {
-      const reportId = await withAdsRetry(
-        () => requestReport(accessToken, buildReportBody(spec.product, spec.start, spec.end, columns))
-      );
-      return {
-        reportId,
-        columnSet: i,
-        columns,
-        hasBudgetColumns: columns.includes('campaignBudgetAmount'),
-        degraded: i > 0,
-        rejections
-      };
-    } catch (err) {
-      lastErr = err;
-      // 425 is "already running", not a bad column set — retrying with fewer
-      // columns would just earn a second duplicate rejection.
-      if (/\(425\)/.test(err.message)) {
-        // Amazon sometimes names the in-flight report in the duplicate body.
-        // Adopting that id recovers a run that would otherwise be orphaned —
-        // generating at Amazon with nothing left able to poll it.
-        const m = err.message.match(/"reportId"\s*:\s*"([^"]+)"/);
-        if (m && REPORT_ID_RE.test(m[1])) {
-          return {
-            reportId: m[1],
-            columnSet: i,
-            columns,
-            hasBudgetColumns: columns.includes('campaignBudgetAmount'),
-            degraded: i > 0,
-            adopted: true,
-            rejections
-          };
-        }
-        throw err;
+// One column set, no fallback. Every column here is a metric Amazon documents
+// for this report type; a refusal means something changed and the run should
+// say so rather than quietly proceed on less data.
+async function requestCampaignReport(accessToken, { product, start, end }) {
+  try {
+    const reportId = await withAdsRetry(
+      () => requestReport(accessToken, buildReportBody(product, start, end))
+    );
+    return { reportId, columns: RF_COLUMNS[product] };
+  } catch (err) {
+    // 425 means an identical report is already generating. Amazon sometimes
+    // names it in the body; adopting that id recovers a run that would
+    // otherwise be orphaned — generating at Amazon with nothing left to poll it.
+    if (/\(425\)/.test(err.message)) {
+      const m = err.message.match(/"reportId"\s*:\s*"([^"]+)"/);
+      if (m && REPORT_ID_RE.test(m[1])) {
+        return { reportId: m[1], columns: RF_COLUMNS[product], adopted: true };
       }
-      if (!/\(4\d\d\)/.test(err.message)) throw err;
-      console.error(`[ADREPORTS] ${spec.key} column set ${i} rejected:`, err.message);
-      // Amazon names the offending column in the body. That message is the
-      // entire answer to "why are there no budgets" — return it, don't bury it
-      // in a server log.
-      rejections.push({ setIndex: i, columns, error: String(err.message).slice(0, 600) });
-      await sleep(300);
     }
+    throw err;
   }
-  throw lastErr;
 }
 
-// Retry on throttling and transient server errors only. Never on 425
-// (duplicate — retrying guarantees another rejection) or on validation 4xx.
-// adspend.js has no retry handling at all; this mirrors orders.js instead.
+// Amazon's 400 body reads "configuration columns includes invalid values:
+// (x). Allowed values: (...)" and then lists a hundred columns. The answer is
+// the two words before the list.
+function rfInvalidColumns(message) {
+  const m = String(message || '').match(/includes invalid values:\s*\(([^)]*)\)/i);
+  if (!m) return [];
+  return m[1].split(',').map(x => x.trim()).filter(Boolean);
+}
+
+// Retry on throttling and transient server errors only. Never on 425 —
+// retrying a duplicate guarantees another rejection — nor on a validation 4xx.
 async function withAdsRetry(fn, attempts = 3) {
   let lastErr;
-  for (let attempt = 0; attempt < attempts; attempt++) {
+  for (let i = 0; i < attempts; i++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      const msg = err?.message || '';
-      const retryable = /\(429\)/.test(msg) || /\(5\d\d\)/.test(msg) ||
-                        /throttl|too many|rate.?limit/i.test(msg);
-      if (!retryable || attempt === attempts - 1) throw err;
-      await sleep(2000 * Math.pow(2, attempt));
+      const msg = String(err.message || '');
+      const retryable = /\(429\)|\(5\d\d\)/.test(msg);
+      if (!retryable || i === attempts - 1) throw err;
+      await sleep(1000 * Math.pow(2, i));
     }
   }
   throw lastErr;
@@ -1842,9 +1458,7 @@ function parseReportsParam(raw) {
   return { reports };
 }
 
-// UTC instant → 'YYYY-MM-DD' in America/Los_Angeles. Vercel runs UTC and Ads
-// report dates are marketplace-local, so a UTC-naive window would sit a day
-// ahead between 00:00 and 08:00 UTC.
+// UTC instant → 'YYYY-MM-DD' in America/Los_Angeles.
 function _ptDate(instant) {
   const d = instant instanceof Date ? instant : new Date(instant);
   if (isNaN(d.getTime())) return '';
@@ -1865,6 +1479,7 @@ function r2(n) { return Math.round(n * 100) / 100; }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Exported for the offline red-flag test harness. Vercel only invokes the
-// default export, so these are inert in production.
-export { computeRedFlags, arfNormalizeRows, resolveWindow, brandFromPrefix, RF_CONFIG, MARGINS };
+// Exported for the offline cadence tests. Vercel only invokes the default
+// export, so these are inert in production.
+export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
+         RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, MARGINS };

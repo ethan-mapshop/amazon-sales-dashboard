@@ -1759,3 +1759,96 @@
     /* Keyboard users never trigger :hover, so the icon would be invisible and
        unreachable without this. */
     .aco-edit-affordance:focus-visible { opacity: 1; outline: 1px solid var(--accent-orange); }
+
+    /* Weekly Red Flag Monitor. The cadence doc asks for a note, not a
+       dashboard: prose sections, one per check, and nothing about campaigns
+       that are fine. Styling stays close to reading a memo. */
+    .arf-note { line-height: 1.6; }
+
+    .arf-note-head {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .arf-note-head h3 { margin: 0 0 0.25rem; }
+
+    .arf-note-window {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      font-family: 'Roboto Mono', monospace;
+    }
+
+    .arf-clean {
+      font-size: 1rem;
+      color: var(--success);
+      margin: 0.5rem 0 0;
+    }
+
+    .arf-section { margin-bottom: 1.5rem; }
+
+    .arf-section h4 {
+      margin: 0 0 0.25rem;
+      font-size: 0.8125rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+    }
+
+    .arf-blurb {
+      margin: 0 0 0.5rem;
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }
+
+    .arf-none {
+      margin: 0;
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      opacity: 0.7;
+    }
+
+    .arf-list {
+      margin: 0;
+      padding-left: 1.1rem;
+      font-size: 0.875rem;
+    }
+
+    .arf-list li { margin-bottom: 0.75rem; }
+
+    .arf-subject { font-weight: 600; }
+
+    .arf-tag {
+      display: inline-block;
+      margin-left: 0.4rem;
+      padding: 0.05rem 0.35rem;
+      font-size: 0.65rem;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      vertical-align: middle;
+    }
+
+    .arf-detail {
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      margin-top: 0.2rem;
+    }
+
+    .arf-muted { opacity: 0.65; font-size: 0.75rem; }
+
+    .arf-up { color: var(--warning); }
+
+    .arf-down { color: var(--accent-blue, var(--text-secondary)); }
+
+    /* The run's receipt: what the denominator was. One line, so a run that
+       covered half the account cannot read as a clean week. */
+    .arf-footer {
+      margin-top: 1.5rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .arf-warn { color: var(--warning); margin-top: 0.3rem; }
