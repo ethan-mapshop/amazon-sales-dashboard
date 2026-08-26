@@ -284,10 +284,12 @@
       const f = data.flags || {};
       return [
         arfSection('1 · Budget cap emergencies', f.budgetCap,
-          'Profitable campaigns losing sales to their daily cap. The fix is a budget increase ' +
-          'at the next bi-weekly window.',
+          'Profitable campaigns whose daily budget is routinely the binding constraint. ' +
+          'A day counts as at cap when spend reaches 95% of the daily budget — including ' +
+          'days over it, since Amazon averages across the month and an overshoot means ' +
+          'demand exceeded the budget. The fix is a budget increase at the next bi-weekly window.',
           [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('7-day spend'),
-           R('% of cap'), R('ACoS'), R('Retention')],
+           R('At cap'), R('ACoS'), R('Retention')],
           arfBudgetCapRow),
 
         arfSection('2 · Runaway spenders', f.runaway,
@@ -339,9 +341,12 @@
       </section>`;
     }
 
-    // Doc's report format: campaign name, current daily budget, 7-day spend vs
-    // implied cap, ACoS, profit retention. Amazon's estimated missed-sales
-    // range is console-only and has no API field, so it cannot appear here.
+    // Doc's report format: campaign name, current daily budget, 7-day spend,
+    // ACoS, profit retention. Amazon's estimated missed-sales range is
+    // console-only and has no API field, so it cannot appear here.
+    //
+    // "5 of 7" rather than a percentage: the column counts days, and a
+    // percentage here would read as time-in-budget, which this is not.
     function arfBudgetCapRow(r) {
       return `<tr>
         <td class="arf-name">${escapeHtml(r.campaign)}</td>
@@ -349,7 +354,7 @@
         <td>${escapeHtml(r.brand || '—')}</td>
         <td class="arf-r">${arfMoney(r.dailyBudget)}</td>
         <td class="arf-r">${arfMoney(r.spend7)}</td>
-        <td class="arf-r arf-em">${arfPct(r.capRatio)}</td>
+        <td class="arf-r arf-em">${r.cappedDays} of ${r.weekDays}</td>
         <td class="arf-r">${arfPct(r.acos)}</td>
         <td class="arf-r arf-em">${arfPct(r.retention)}</td>
       </tr>`;
@@ -425,8 +430,11 @@
           c.unmapped.map(x => `${escapeHtml(x.campaign)} (${arfMoney(x.spend7)})`).join(', ')}`);
       }
       if (c.noBudget && c.noBudget.length) {
-        warn.push(`Not evaluated for budget cap (no daily budget in the snapshot): ${
-          c.noBudget.map(x => escapeHtml(x.campaign)).join(', ')}`);
+        // The server distinguishes a missing budget from a lifetime one; they
+        // are different facts and lumping them loses the reason.
+        warn.push(`Not evaluated for budget cap: ${c.noBudget
+          .map(x => `${escapeHtml(x.campaign)} (${escapeHtml(x.reason || 'no daily budget')})`)
+          .join(', ')}`);
       }
       if (c.orphanRows) {
         warn.push('Some report rows belong to campaigns missing from the snapshot — refresh Campaign Overview.');

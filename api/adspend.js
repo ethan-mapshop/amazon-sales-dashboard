@@ -863,7 +863,8 @@ function previousMonthISO() {
 // own words are "do not adjust for feel or context". Returned with each run so
 // the output can be checked against the spec without reading this file.
 const RF_CONFIG = {
-  CAP_RATIO:             0.95,  // 1 — 7-day spend ≥ 95% of (daily budget × 7)
+  CAP_DAY_RATIO:         0.95,  // 1 — a day counts as "at cap" at ≥ 95% of the daily budget
+  CAP_DAYS_MIN:          4,     // 1 — ... on at least this many days of the week
   CAP_RETENTION_MIN:     0.50,  // 1 — ... and profit retention ≥ 50%
   RUNAWAY_MULTIPLE:      2,     // 2 — 7-day spend > 2× trailing 28-day weekly average
   RUNAWAY_RETENTION_MAX: 0.25,  // 2 — ... and retention < 25%
@@ -883,7 +884,11 @@ const RF_SPEC_DEVIATIONS = [
   'the cadence doc specifies campaign level with 10 clicks.',
   'Every enabled campaign is evaluated; the cadence doc excludes campaigns ' +
   'under $5 of weekly spend. The data is pulled either way, so the exclusion ' +
-  'only hid campaigns rather than saving anything.'
+  'only hid campaigns rather than saving anything.',
+  'Check 1 counts days at cap rather than time-in-budget. Amazon exposes ' +
+  'time-in-budget only in the console Budget Report; days at cap measures how ' +
+  'routinely demand exceeded the budget, which is what a raise-the-budget ' +
+  'decision turns on.'
 ];
 
 // Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
@@ -1186,7 +1191,10 @@ function evaluateWeek({ census, rows, window }) {
       segment,
       grossMargin: segment ? MARGINS[segment] : null,
       spend7: 0, clicks7: 0, impressions7: 0, orders7: 0, sales7: 0,
-      spend28: 0
+      spend28: 0,
+      // Per-day, because a week total cannot tell a campaign that spent evenly
+      // from one that was clipped on three days and idle on four.
+      spendByDate: new Map()
     });
   }
 
@@ -1199,6 +1207,7 @@ function evaluateWeek({ census, rows, window }) {
     if (!c) { orphanRows++; continue; }
     if (r.date >= window.weekStart && r.date <= window.weekEnd) {
       c.spend7 += r.cost;
+      c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
       c.clicks7 += r.clicks;
       c.impressions7 += r.impressions;
       c.orders7 += r.orders;
@@ -1221,18 +1230,39 @@ function evaluateWeek({ census, rows, window }) {
       : null;
     c.baselineWeekly = r2(c.spend28 / 4);
     c.spendMultiple = c.baselineWeekly > 0 ? r4(c.spend7 / c.baselineWeekly) : null;
-    // Check 1 needs time-in-budget, which Amazon exposes ONLY in the console
-    // Budget Report — there is no API field for it, and no amount of looking
-    // will produce one. The cadence doc's own SB proxy is used for both ad
-    // products: 7-day spend against the implied weekly cap.
+    // Check 1 counts DAYS AT CAP, not time-in-budget and not a weekly ratio.
     //
-    // A LIFETIME budget has no daily cap, so budget x 7 is not a weekly
-    // ceiling and the ratio would be meaningless. Skipped rather than
-    // computed wrong. An absent budgetType is treated as daily, which is what
-    // Sponsored Products returns for effectively every campaign.
+    // Amazon treats the daily budget as an average across the month, so a
+    // campaign with real demand overshoots on some days and is pulled back on
+    // others. A week total hides that: 3 days at 200% and 4 days at 10% comes
+    // to 91% of the weekly cap and looks unconstrained, when the budget
+    // clipped three days of genuine demand.
+    //
+    // A day OVER budget counts as at cap. Under a lost-serving-time reading it
+    // would not — Amazon kept serving — but the question here is whether
+    // demand exceeded the budget, and an overshoot is the strongest evidence
+    // that it did.
+    //
+    // Days with no report row had no spend, so they cannot reach the
+    // threshold and are correctly absent. The denominator is the window, never
+    // the row count.
+    //
+    // A LIFETIME budget has no daily ceiling to be at, so it is skipped rather
+    // than measured wrong. An absent budgetType is treated as daily, which is
+    // what Sponsored Products returns for effectively every campaign.
     const lifetime = /LIFETIME/i.test(c.budgetType);
-    c.capRatio = (c.dailyBudget > 0 && !lifetime) ? r4(c.spend7 / (c.dailyBudget * 7)) : null;
+    if (c.dailyBudget > 0 && !lifetime) {
+      const atCap = c.dailyBudget * RF_CONFIG.CAP_DAY_RATIO;
+      let days = 0;
+      for (const daySpend of c.spendByDate.values()) if (daySpend >= atCap) days++;
+      c.cappedDays = days;
+    } else {
+      c.cappedDays = null;
+    }
   }
+
+  // Always the window's length, never how many days Amazon returned rows for.
+  const weekDays = daySpan(window.weekStart, window.weekEnd);
 
   const flags = { budgetCap: [], runaway: [], stalled: [], brandPacing: [] };
 
@@ -1241,13 +1271,13 @@ function evaluateWeek({ census, rows, window }) {
   // small campaigns bought nothing and hid real flags. Check 2 keeps its own
   // $50 floor, which is a threshold in the doc rather than a coverage rule.
   for (const c of campaigns.values()) {
-    if (c.capRatio !== null && c.capRatio >= RF_CONFIG.CAP_RATIO &&
+    if (c.cappedDays !== null && c.cappedDays >= RF_CONFIG.CAP_DAYS_MIN &&
         c.retention !== null && c.retention >= RF_CONFIG.CAP_RETENTION_MIN) {
       flags.budgetCap.push({
         campaign: c.name, adProduct: c.adProduct, campaignId: c.campaignId,
         brand: c.brand, dailyBudget: c.dailyBudget,
-        impliedWeeklyCap: r2(c.dailyBudget * 7),
-        spend7: r2(c.spend7), capRatio: c.capRatio,
+        cappedDays: c.cappedDays, weekDays,
+        spend7: r2(c.spend7),
         acos: c.acos, retention: c.retention
       });
     }
@@ -1350,7 +1380,7 @@ function evaluateWeek({ census, rows, window }) {
   // Campaigns check 1 could not look at: no daily budget in the snapshot, or a
   // lifetime budget, which has no daily ceiling to be capped against.
   const noBudget = all
-    .filter(c => c.spend7 > 0 && c.capRatio === null)
+    .filter(c => c.spend7 > 0 && c.cappedDays === null)
     .map(c => ({ campaign: c.name, adProduct: c.adProduct, spend7: r2(c.spend7),
                  reason: /LIFETIME/i.test(c.budgetType) ? 'lifetime budget' : 'no daily budget' }))
     .sort((a, b) => b.spend7 - a.spend7);
