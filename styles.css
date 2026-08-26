@@ -1808,32 +1808,32 @@
       opacity: 0.7;
     }
 
-    .arf-list {
-      margin: 0;
-      padding-left: 1.1rem;
-      font-size: 0.875rem;
+    /* Wide tables scroll inside their own box rather than pushing the page
+       sideways. */
+    .arf-table-wrap { overflow-x: auto; }
+
+    .arf-table th, .arf-table td { padding: 0.4rem 0.625rem; }
+
+    .arf-r { text-align: right !important; }
+
+    /* The name column reads as prose, not as a figure. */
+    .arf-name {
+      font-family: inherit !important;
+      font-size: 0.8125rem !important;
+      font-weight: 600;
     }
 
-    .arf-list li { margin-bottom: 0.75rem; }
-
-    .arf-subject { font-weight: 600; }
-
-    .arf-tag {
-      display: inline-block;
-      margin-left: 0.4rem;
-      padding: 0.05rem 0.35rem;
-      font-size: 0.65rem;
+    /* Evidence for the row, not a value to compare down a column. */
+    .arf-sub {
+      font-family: inherit;
+      font-weight: 400;
+      font-size: 0.7rem;
       color: var(--text-secondary);
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      vertical-align: middle;
+      margin-top: 0.15rem;
     }
 
-    .arf-detail {
-      font-size: 0.8125rem;
-      color: var(--text-secondary);
-      margin-top: 0.2rem;
-    }
+    /* The numbers the flag actually turns on. */
+    .arf-em { font-weight: 600; color: var(--text-primary); }
 
     .arf-muted { opacity: 0.65; font-size: 0.75rem; }
 

@@ -277,95 +277,131 @@
         </div>`;
     }
 
+    // Each check is a table. Anything identical on every row — what to do
+    // about the flag, where to look first — belongs in the section header, not
+    // repeated down a column.
     function arfSections(data) {
       const f = data.flags || {};
       return [
-        arfSection('1 · Budget cap emergencies', f.budgetCap, arfBudgetCapLine,
-          'Profitable campaigns losing sales to their daily cap.'),
-        arfSection('2 · Runaway spenders', f.runaway, arfRunawayLine,
-          'Spend well above trailing average with poor profit retention.'),
-        arfSection('3 · Stalled', f.stalled, arfStalledLine,
-          'Clicks without orders &mdash; usually a listing problem, not an ad problem.'),
-        arfSection('4 · Brand pacing', f.brandPacing, arfPacingLine,
-          'Account-level sanity check against each brand&rsquo;s trailing average.')
+        arfSection('1 · Budget cap emergencies', f.budgetCap,
+          'Profitable campaigns losing sales to their daily cap. The fix is a budget increase ' +
+          'at the next bi-weekly window.',
+          [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('7-day spend'),
+           R('% of cap'), R('ACoS'), R('Retention')],
+          arfBudgetCapRow),
+
+        arfSection('2 · Runaway spenders', f.runaway,
+          'Spend well above the trailing average with poor profit retention. Look for bid ' +
+          'automation overreactions, keyword spikes, or search term explosions.',
+          [C('Campaign'), C('Ad'), C('Brand'), R('7-day spend'), R('Trailing avg'),
+           R('Multiple'), R('ACoS'), R('Retention')],
+          arfRunawayRow),
+
+        arfSection('3 · Stalled', f.stalled,
+          'Clicks without orders — usually a listing problem rather than an ad problem. ' +
+          'Check inventory, Buy Box, reviews and pricing before touching the ads.',
+          [C('Portfolio'), C('Brand'), R('Clicks'), R('7-day spend'), R('Campaigns')],
+          arfStalledRow),
+
+        arfSection('4 · Brand pacing', f.brandPacing,
+          'Brand spend against its trailing weekly average. Above baseline, look for a bid or ' +
+          'budget increase, a portfolio cap lifting, or seasonal demand; below, look for a ' +
+          'portfolio budget cap, a paused campaign, or lost impression share.',
+          [C('Brand'), R('7-day spend'), R('Trailing avg'), R('Change')],
+          arfPacingRow)
       ].join('');
     }
 
+    // Column definitions. Numbers right-align so they can be compared down the
+    // column, which is the only reason to use a table here at all.
+    function C(label) { return { label, align: 'left' }; }
+    function R(label) { return { label, align: 'right' }; }
+
     // "with 'No flags' written for any check that did not trigger"
-    function arfSection(title, rows, lineFn, blurb) {
+    function arfSection(title, rows, guidance, cols, rowFn) {
       const list = rows || [];
-      return `
-        <section class="arf-section">
+      if (!list.length) {
+        return `<section class="arf-section">
           <h4>${title}</h4>
-          ${list.length
-            ? `<p class="arf-blurb">${blurb}</p><ul class="arf-list">${list.map(lineFn).join('')}</ul>`
-            : `<p class="arf-none">No flags this week.</p>`}
+          <p class="arf-none">No flags this week.</p>
         </section>`;
+      }
+      return `<section class="arf-section">
+        <h4>${title}</h4>
+        <p class="arf-blurb">${guidance}</p>
+        <div class="arf-table-wrap">
+          <table class="table-fill arf-table">
+            <thead><tr>${cols.map(c =>
+              `<th${c.align === 'right' ? ' class="arf-r"' : ''}>${c.label}</th>`).join('')}</tr></thead>
+            <tbody>${list.map(rowFn).join('')}</tbody>
+          </table>
+        </div>
+      </section>`;
     }
 
     // Doc's report format: campaign name, current daily budget, 7-day spend vs
     // implied cap, ACoS, profit retention. Amazon's estimated missed-sales
     // range is console-only and has no API field, so it cannot appear here.
-    function arfBudgetCapLine(r) {
-      return `<li>
-        <span class="arf-subject">${escapeHtml(r.campaign)}</span>${arfTag(r)}
-        spent <strong>${arfMoney(r.spend7)}</strong> against an implied weekly cap of
-        ${arfMoney(r.impliedWeeklyCap)} (${arfMoney(r.dailyBudget)}/day) &mdash;
-        <strong>${arfPct(r.capRatio)}</strong> of cap, at ${arfPct(r.acos)} ACoS
-        and <strong>${arfPct(r.retention)}</strong> profit retention.
-      </li>`;
+    function arfBudgetCapRow(r) {
+      return `<tr>
+        <td class="arf-name">${escapeHtml(r.campaign)}</td>
+        <td>${escapeHtml(r.adProduct || '')}</td>
+        <td>${escapeHtml(r.brand || '—')}</td>
+        <td class="arf-r">${arfMoney(r.dailyBudget)}</td>
+        <td class="arf-r">${arfMoney(r.spend7)}</td>
+        <td class="arf-r arf-em">${arfPct(r.capRatio)}</td>
+        <td class="arf-r">${arfPct(r.acos)}</td>
+        <td class="arf-r arf-em">${arfPct(r.retention)}</td>
+      </tr>`;
     }
 
     // Doc's report format: campaign name, 7-day spend, trailing average,
     // multiplier, current profit retention.
-    function arfRunawayLine(r) {
-      return `<li>
-        <span class="arf-subject">${escapeHtml(r.campaign)}</span>${arfTag(r)}
-        spent <strong>${arfMoney(r.spend7)}</strong> against a trailing weekly average of
-        ${arfMoney(r.baselineWeekly)} &mdash; <strong>${r.spendMultiple}&times;</strong>,
-        at ${arfPct(r.acos)} ACoS and <strong>${arfPct(r.retention)}</strong> profit retention.
-      </li>`;
+    function arfRunawayRow(r) {
+      return `<tr>
+        <td class="arf-name">${escapeHtml(r.campaign)}</td>
+        <td>${escapeHtml(r.adProduct || '')}</td>
+        <td>${escapeHtml(r.brand || '—')}</td>
+        <td class="arf-r">${arfMoney(r.spend7)}</td>
+        <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
+        <td class="arf-r arf-em">${r.spendMultiple}&times;</td>
+        <td class="arf-r">${arfPct(r.acos)}</td>
+        <td class="arf-r arf-em">${arfPct(r.retention)}</td>
+      </tr>`;
     }
 
     // Doc's report format: campaign name, 7-day clicks, spend, associated
-    // SKU(s), and a suggested first area to check. SKUs are not in the
-    // campaign report; the portfolio is one-per-SKU in this account, so the
-    // portfolio name identifies the product.
-    function arfStalledLine(r) {
-      const names = r.campaigns.map(c => c.campaign).join(', ');
-      return `<li>
-        <span class="arf-subject">${escapeHtml(r.portfolio)}</span>
-        ${r.brand ? `<span class="arf-tag">${escapeHtml(r.brand)}</span>` : ''}
-        took <strong>${r.clicks7} clicks</strong> and <strong>${arfMoney(r.spend7)}</strong>
-        with <strong>zero orders</strong>, across ${r.campaignCount}
-        campaign${r.campaignCount === 1 ? '' : 's'}.
-        <div class="arf-detail">Check inventory, Buy Box, reviews and pricing before touching the ads.</div>
-        <div class="arf-detail arf-muted">${escapeHtml(names)}</div>
-      </li>`;
+    // SKU(s), and a suggested first area to check. SKUs are not in the campaign
+    // report; portfolio is one-per-SKU in this account, so the portfolio name
+    // identifies the product. The campaign names sit under it rather than in
+    // their own column — they are the evidence for the row, not a value to
+    // compare down a column.
+    function arfStalledRow(r) {
+      const names = (r.campaigns || []).map(c => c.campaign).join(', ');
+      return `<tr>
+        <td class="arf-name">
+          ${escapeHtml(r.portfolio)}
+          <div class="arf-sub">${escapeHtml(names)}</div>
+        </td>
+        <td>${escapeHtml(r.brand || '—')}</td>
+        <td class="arf-r arf-em">${r.clicks7}</td>
+        <td class="arf-r">${arfMoney(r.spend7)}</td>
+        <td class="arf-r">${r.campaignCount}</td>
+      </tr>`;
     }
 
     // Doc's report format: brand name, 7-day spend, trailing average, %
-    // change, and a brief likely-cause hypothesis. The hypothesis is a
-    // judgement call, so the direction is stated and the reading is left to
-    // you rather than invented here.
-    function arfPacingLine(r) {
+    // change, and a brief likely-cause hypothesis. The hypothesis is the same
+    // two possibilities every time, so it lives in the section header and the
+    // row states the direction.
+    function arfPacingRow(r) {
       const up = r.deviation > 0;
-      return `<li>
-        <span class="arf-subject">${escapeHtml(r.brand)}</span>
-        spent <strong>${arfMoney(r.spend7)}</strong> against a trailing weekly average of
-        ${arfMoney(r.baselineWeekly)} &mdash;
-        <strong class="${up ? 'arf-up' : 'arf-down'}">${up ? '+' : ''}${arfPct(r.deviation)}</strong>.
-        <div class="arf-detail">${up
-          ? 'Look for a bid or budget increase, a portfolio cap lifting, or seasonal demand.'
-          : 'Look for a portfolio budget cap, a paused campaign, or lost impression share.'}</div>
-      </li>`;
-    }
-
-    function arfTag(r) {
-      const bits = [];
-      if (r.brand) bits.push(r.brand);
-      if (r.adProduct === 'SB') bits.push('SB');
-      return bits.length ? `<span class="arf-tag">${escapeHtml(bits.join(' · '))}</span>` : '';
+      return `<tr>
+        <td class="arf-name">${escapeHtml(r.brand)}</td>
+        <td class="arf-r">${arfMoney(r.spend7)}</td>
+        <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
+        <td class="arf-r arf-em ${up ? 'arf-up' : 'arf-down'}">${up ? '+' : ''}${arfPct(r.deviation)}</td>
+      </tr>`;
     }
 
     // The run's own receipt — one line, so a run that covered half the account
