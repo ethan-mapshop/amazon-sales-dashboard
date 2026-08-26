@@ -282,6 +282,11 @@
     // Each check is a table. Anything identical on every row — what to do
     // about the flag, where to look first — belongs in the section header, not
     // repeated down a column.
+    //
+    // Five of the six checks read only impressions, clicks and spend, which
+    // are final the day they happen. The exception is check 1's retention
+    // gate, which reads the settled 28-day baseline and is labelled "28d"
+    // wherever it appears so it is never mistaken for a weekly number.
     function arfSections(data) {
       const f = data.flags || {};
       return [
@@ -289,30 +294,48 @@
           'Profitable campaigns whose daily budget is routinely the binding constraint. ' +
           'A day counts as at cap when spend reaches 95% of the daily budget — including ' +
           'days over it, since Amazon averages across the month and an overshoot means ' +
-          'demand exceeded the budget. The suggested raise is a step — 25% at four days at cap, ' +
-          'rising to 50% at seven, never below the best single day it already managed — because ' +
-          'real demand for a capped campaign cannot be measured. Applying it writes to Amazon.',
+          'demand exceeded the budget. Retention is the settled 28-day figure. The ' +
+          'suggested raise is a step: 25% at four days at cap rising to 50% at seven, ' +
+          'never below the best single day it already managed. Applying it writes to Amazon.',
           [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('7-day spend'),
-           R('At cap'), R('ACoS'), R('Retention'), R('Raise to')],
+           R('At cap'), R('ACoS 28d'), R('Retention 28d'), R('Raise to')],
           arfBudgetCapRow),
 
-        arfSection('2 · Runaway spenders', f.runaway,
-          'Spend well above the trailing average with poor profit retention. Look for bid ' +
-          'automation overreactions, keyword spikes, or search term explosions.',
-          [C('Campaign'), C('Ad'), C('Brand'), R('7-day spend'), R('Trailing avg'),
-           R('Multiple'), R('ACoS'), R('Retention')],
-          arfRunawayRow),
+        arfSection('2 · Silent campaigns', f.silent,
+          'Enabled and funded, but served nothing at all this week after running normally ' +
+          'before. Not a performance problem — a delivery one. Check stock, listing ' +
+          'suppression, Buy Box, and whether the ad group or its ads were paused.',
+          [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('Typical spend/wk'),
+           R('Impressions 28d')],
+          arfSilentRow),
 
-        arfSection('3 · Stalled', f.stalled,
-          'Clicks without orders — usually a listing problem rather than an ad problem. ' +
-          'Check inventory, Buy Box, reviews and pricing before touching the ads.',
-          [C('Portfolio'), C('Brand'), R('Clicks'), R('7-day spend'), R('Campaigns')],
-          arfStalledRow),
+        arfSection('3 · Spend collapse', f.spendCollapse,
+          'Still serving, but spending at or below half its own normal rate. Usually lost ' +
+          'Buy Box, a stock issue, or bids falling out of the auction.',
+          [C('Campaign'), C('Ad'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
+           R('Change')],
+          arfSpendCollapseRow),
 
-        arfSection('4 · Brand pacing', f.brandPacing,
-          'Brand spend against its trailing weekly average. Above baseline, look for a bid or ' +
-          'budget increase, a portfolio cap lifting, or seasonal demand; below, look for a ' +
-          'portfolio budget cap, a paused campaign, or lost impression share.',
+        arfSection('4 · CTR collapse', f.ctrCollapse,
+          'Impressions accumulating without clicks, at half the campaign’s usual rate or ' +
+          'worse. Points at the listing — main image, price, reviews — or at targeting ' +
+          'drift, and it shows up before the money is spent rather than after.',
+          [C('Campaign'), C('Ad'), C('Brand'), R('Impressions'), R('Clicks'),
+           R('CTR'), R('Typical CTR'), R('Change')],
+          arfCtrRow),
+
+        arfSection('5 · CPC spike', f.cpcSpike,
+          'Paying at least half again as much per click as usual: competitive pressure, or ' +
+          'bid automation reaching. This is the leading indicator for the two checks above ' +
+          'and for budget caps — it appears before it becomes a spend problem.',
+          [C('Campaign'), C('Ad'), C('Brand'), R('Clicks'), R('7-day spend'),
+           R('CPC'), R('Typical CPC'), R('Change')],
+          arfCpcRow),
+
+        arfSection('6 · Brand pacing', f.brandPacing,
+          'Brand spend against its trailing weekly average — the account-level sanity ' +
+          'check. Above baseline, look for a bid or budget increase, a portfolio cap ' +
+          'lifting, or seasonal demand; below, a paused campaign or lost impression share.',
           [C('Brand'), R('7-day spend'), R('Trailing avg'), R('Change')],
           arfPacingRow)
       ].join('');
@@ -345,65 +368,63 @@
       </section>`;
     }
 
-    // Doc's report format: campaign name, current daily budget, 7-day spend,
-    // ACoS, profit retention. Amazon's estimated missed-sales range is
-    // console-only and has no API field, so it cannot appear here.
-    //
+    // The first three cells are the same on every check, so they are written
+    // once rather than five times.
+    function arfWho(r) {
+      return `<td class="arf-name">${escapeHtml(r.campaign)}</td>
+        <td>${escapeHtml(r.adProduct || '')}</td>
+        <td>${escapeHtml(r.brand || '—')}</td>`;
+    }
+
     // "5 of 7" rather than a percentage: the column counts days, and a
     // percentage here would read as time-in-budget, which this is not.
     function arfBudgetCapRow(r) {
-      return `<tr>
-        <td class="arf-name">${escapeHtml(r.campaign)}</td>
-        <td>${escapeHtml(r.adProduct || '')}</td>
-        <td>${escapeHtml(r.brand || '—')}</td>
+      return `<tr>${arfWho(r)}
         <td class="arf-r">${arfMoney(r.dailyBudget)}</td>
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r arf-em">${r.cappedDays} of ${r.weekDays}</td>
-        <td class="arf-r">${arfPct(r.acos)}</td>
-        <td class="arf-r arf-em">${arfPct(r.retention)}</td>
+        <td class="arf-r">${arfPct(r.acos28)}</td>
+        <td class="arf-r arf-em">${arfPct(r.retention28)}</td>
         <td class="arf-r arf-action">${arfRecommendCell(r)}</td>
       </tr>`;
     }
 
-    // Doc's report format: campaign name, 7-day spend, trailing average,
-    // multiplier, current profit retention.
-    function arfRunawayRow(r) {
-      return `<tr>
-        <td class="arf-name">${escapeHtml(r.campaign)}</td>
-        <td>${escapeHtml(r.adProduct || '')}</td>
-        <td>${escapeHtml(r.brand || '—')}</td>
+    function arfSilentRow(r) {
+      return `<tr>${arfWho(r)}
+        <td class="arf-r">${arfMoney(r.dailyBudget)}</td>
+        <td class="arf-r arf-em">${arfMoney(r.baselineWeekly)}</td>
+        <td class="arf-r">${formatCount(r.baselineImpressions)}</td>
+      </tr>`;
+    }
+
+    function arfSpendCollapseRow(r) {
+      return `<tr>${arfWho(r)}
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
-        <td class="arf-r arf-em">${r.spendMultiple}&times;</td>
-        <td class="arf-r">${arfPct(r.acos)}</td>
-        <td class="arf-r arf-em">${arfPct(r.retention)}</td>
+        <td class="arf-r arf-em arf-down">${arfPct(r.change)}</td>
       </tr>`;
     }
 
-    // Doc's report format: campaign name, 7-day clicks, spend, associated
-    // SKU(s), and a suggested first area to check. SKUs are not in the campaign
-    // report; portfolio is one-per-SKU in this account, so the portfolio name
-    // identifies the product. The campaign names sit under it rather than in
-    // their own column — they are the evidence for the row, not a value to
-    // compare down a column.
-    function arfStalledRow(r) {
-      const names = (r.campaigns || []).map(c => c.campaign).join(', ');
-      return `<tr>
-        <td class="arf-name">
-          ${escapeHtml(r.portfolio)}
-          <div class="arf-sub">${escapeHtml(names)}</div>
-        </td>
-        <td>${escapeHtml(r.brand || '—')}</td>
-        <td class="arf-r arf-em">${r.clicks7}</td>
+    function arfCtrRow(r) {
+      return `<tr>${arfWho(r)}
+        <td class="arf-r">${formatCount(r.impressions7)}</td>
+        <td class="arf-r">${formatCount(r.clicks7)}</td>
+        <td class="arf-r arf-em">${arfRate(r.ctr7)}</td>
+        <td class="arf-r">${arfRate(r.ctr28)}</td>
+        <td class="arf-r arf-em arf-down">${arfPct(r.change)}</td>
+      </tr>`;
+    }
+
+    function arfCpcRow(r) {
+      return `<tr>${arfWho(r)}
+        <td class="arf-r">${formatCount(r.clicks7)}</td>
         <td class="arf-r">${arfMoney(r.spend7)}</td>
-        <td class="arf-r">${r.campaignCount}</td>
+        <td class="arf-r arf-em">${arfMoney(r.cpc7)}</td>
+        <td class="arf-r">${arfMoney(r.cpc28)}</td>
+        <td class="arf-r arf-em arf-up">+${arfPct(r.change)}</td>
       </tr>`;
     }
 
-    // Doc's report format: brand name, 7-day spend, trailing average, %
-    // change, and a brief likely-cause hypothesis. The hypothesis is the same
-    // two possibilities every time, so it lives in the section header and the
-    // row states the direction.
     function arfPacingRow(r) {
       const up = r.deviation > 0;
       return `<tr>
@@ -414,6 +435,7 @@
       </tr>`;
     }
 
+
     // The run's own receipt — one line, so a run that covered half the account
     // cannot look identical to a clean week. Not a report of healthy campaigns.
     function arfFooter(data) {
@@ -421,17 +443,20 @@
       const bits = [
         `all ${c.enabled} enabled campaigns evaluated`,
         typeof c.withSpend === 'number' ? `${c.withSpend} spent anything this week` : null,
+        // Not flagged anywhere: a campaign that has never run is a config
+        // cleanup job, not a weekly emergency. Counted so it is not invisible.
+        c.neverActive ? `${c.neverActive} have never run` : null,
         c.unmapped && c.unmapped.length ? `${c.unmapped.length} unmapped to a brand` : null,
-        c.noBudget && c.noBudget.length ? `${c.noBudget.length} with no daily budget` : null,
+        c.noBudget && c.noBudget.length ? `${c.noBudget.length} with no usable daily budget` : null,
         c.orphanRows ? `${c.orphanRows} report rows for campaigns not in the snapshot` : null
       ].filter(Boolean);
 
       const warn = [];
       // An unmapped campaign has no margin, so it has no profit retention and
-      // silently cannot trip checks 1 or 2. Saying so is the difference between
-      // "nothing wrong" and "not looked at".
+      // silently cannot pass check 1's gate. Saying so is the difference
+      // between "nothing wrong" and "not looked at".
       if (c.unmapped && c.unmapped.length) {
-        warn.push(`Not evaluated for retention (no brand, so no margin): ${
+        warn.push(`No brand, so no margin and no retention — cannot be checked for budget cap: ${
           c.unmapped.map(x => `${escapeHtml(x.campaign)} (${arfMoney(x.spend7)})`).join(', ')}`);
       }
       if (c.noBudget && c.noBudget.length) {
@@ -568,6 +593,19 @@
         console.error('[ARF] budget raise failed:', err);
         arfSetApplyStage(campaignId, 'error', { message: err.message });
       }
+    }
+
+    // Counts, not money: impressions and clicks are whole numbers and reading
+    // "12,400" beside "$12.40" should never be ambiguous.
+    function formatCount(n) {
+      if (typeof n !== 'number' || !isFinite(n)) return '—';
+      return Math.round(n).toLocaleString('en-US');
+    }
+
+    // CTR sits around 0.4%, so two decimals or it reads as a flat 0%.
+    function arfRate(n) {
+      if (typeof n !== 'number' || !isFinite(n)) return '—';
+      return (n * 100).toFixed(2) + '%';
     }
 
     function arfMoney(n) {

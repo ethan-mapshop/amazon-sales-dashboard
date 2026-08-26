@@ -863,34 +863,46 @@ function previousMonthISO() {
 // own words are "do not adjust for feel or context". Returned with each run so
 // the output can be checked against the spec without reading this file.
 const RF_CONFIG = {
-  CAP_DAY_RATIO:         0.95,  // 1 — a day counts as "at cap" at ≥ 95% of the daily budget
-  CAP_DAYS_MIN:          4,     // 1 — ... on at least this many days of the week
-  CAP_RETENTION_MIN:     0.50,  // 1 — ... and profit retention ≥ 50%
-  RAISE_MIN:             0.25,  // 1 — suggested raise at CAP_DAYS_MIN days at cap
-  RAISE_MAX:             0.50,  // 1 — ... rising to this when capped every day
-  RUNAWAY_MULTIPLE:      2,     // 2 — 7-day spend > 2× trailing 28-day weekly average
-  RUNAWAY_RETENTION_MAX: 0.25,  // 2 — ... and retention < 25%
-  RUNAWAY_MIN_SPEND:     50,    // 2 — ... and 7-day spend > $50
-  STALLED_MIN_CLICKS:    15,    // 3 — see the deviation note below
-  PACING_DEVIATION:      0.30   // 4 — brand spend ±30% of trailing weekly average
+  // 1 — budget cap emergencies
+  CAP_DAY_RATIO:         0.95,  // a day counts as "at cap" at ≥ 95% of the daily budget
+  CAP_DAYS_MIN:          4,     // ... on at least this many days of the week
+  CAP_RETENTION_MIN:     0.50,  // ... and 28-day profit retention ≥ 50%
+  RAISE_MIN:             0.25,  // suggested raise at CAP_DAYS_MIN days at cap
+  RAISE_MAX:             0.50,  // ... rising to this when capped every day
+  // 3 — spend collapse
+  COLLAPSE_RATIO:        0.50,  // 7-day spend at or below half the trailing weekly average
+  COLLAPSE_MIN_BASELINE: 10,    // ... and a baseline worth collapsing from
+  // 4 — CTR collapse
+  CTR_COLLAPSE_RATIO:    0.50,  // week CTR at or below half the baseline
+  CTR_MIN_IMPRESSIONS:   2000,  // ... on enough impressions to mean anything
+  // 5 — CPC spike
+  CPC_SPIKE_MULTIPLE:    1.50,  // week CPC at or above 1.5× the baseline
+  CPC_MIN_CLICKS:        20,    // ... on enough clicks in both windows
+  // 6 — brand pacing
+  PACING_DEVIATION:      0.30   // brand spend ±30% of trailing weekly average
 };
 
-// THE ONE DEVIATION FROM THE SPEC, recorded so it stays a decision rather than
-// drift: the doc puts check 3 at campaign level with a 10-click threshold. It
-// is run at PORTFOLIO level with 15 clicks instead, because a stalled listing
-// stops every campaign for that product at once — reporting it per campaign
-// stated one fact four times while missing products whose campaigns each sat
-// under the bar. Portfolio is one-per-SKU in this account.
+// DEVIATIONS FROM THE CADENCE DOC, recorded so they stay decisions rather than
+// drift. The doc's four checks predate knowing that Amazon's 7-day attribution
+// window leaves conversion data incomplete for the days closest to the run —
+// which is fatal for a cadence whose whole value is speed.
 const RF_SPEC_DEVIATIONS = [
-  'Check 3 (stalled) runs at portfolio level with a 15-click threshold; ' +
-  'the cadence doc specifies campaign level with 10 clicks.',
-  'Every enabled campaign is evaluated; the cadence doc excludes campaigns ' +
-  'under $5 of weekly spend. The data is pulled either way, so the exclusion ' +
-  'only hid campaigns rather than saving anything.',
-  'Check 1 counts days at cap rather than time-in-budget. Amazon exposes ' +
-  'time-in-budget only in the console Budget Report; days at cap measures how ' +
-  'routinely demand exceeded the budget, which is what a raise-the-budget ' +
-  'decision turns on.'
+  'Checks 2 (runaway spenders) and 3 (stalled campaigns) are removed. Both turn ' +
+  'on conversion metrics, which Amazon leaves incomplete for 7 days after the ' +
+  'click, biased downward — so on a fresh window they manufacture runaways and ' +
+  'stalls. Profitability judgements belong to the bi-weekly cadence, where the ' +
+  'data has settled.',
+
+  'Four checks added that use only impressions, clicks and spend, all final the ' +
+  'day they happen: silent campaigns, spend collapse, CTR collapse and CPC spike.',
+
+  'Check 1 counts days at cap rather than time-in-budget, which Amazon exposes ' +
+  'only in the console Budget Report. Its profit retention gate reads the 28-day ' +
+  'baseline rather than the week: campaign economics are a standing property, ' +
+  'and there is no fresher retention to be had.',
+
+  'Every enabled campaign is evaluated; the doc excludes campaigns under $5 of ' +
+  'weekly spend. The reports are pulled in full either way.'
 ];
 
 // Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
@@ -1171,10 +1183,17 @@ function daySpan(start, end) {
 // ─── EVALUATE ────────────────────────────────────────────────────────────────
 // Pure, so the whole cadence can be exercised offline against fixtures.
 //
-// Stage order matters: brand and portfolio rollups span EVERY campaign, while
-// the $5 floor applies only to the two campaign-level checks. The cadence doc
-// excludes sub-$5 campaigns from evaluation, not from their brand's totals.
+// Six checks. Five read only impressions, clicks and spend from the week —
+// all final the day they happen. The sixth, check 1's retention gate, reads
+// the 28-day baseline, which ends 8+ days before the run and is therefore
+// past Amazon's 7-day attribution window and settled.
+//
+// Nothing in the WEEK window touches conversions. That is the property the
+// whole cadence rests on, and it is worth preserving deliberately.
 function evaluateWeek({ census, rows, window }) {
+  // Always the window's length, never how many days Amazon returned rows for.
+  const weekDays = daySpan(window.weekStart, window.weekEnd);
+
   // ── the spine ──
   const campaigns = new Map();
   for (const row of census.campaigns) {
@@ -1192,8 +1211,13 @@ function evaluateWeek({ census, rows, window }) {
       brand,
       segment,
       grossMargin: segment ? MARGINS[segment] : null,
-      spend7: 0, clicks7: 0, impressions7: 0, orders7: 0, sales7: 0,
-      spend28: 0,
+      // The week carries NO conversion metrics. Every weekly signal is built
+      // from spend, clicks and impressions, which are final the day they
+      // happen. Conversions are incomplete for 7 days after the click.
+      spend7: 0, clicks7: 0, impressions7: 0,
+      // The baseline is the comparison for every "versus normal" check, and it
+      // ends 8+ days before the run, so its conversion data IS settled.
+      spend28: 0, clicks28: 0, impressions28: 0, sales28: 0,
       // Per-day, because a week total cannot tell a campaign that spent evenly
       // from one that was clipped on three days and idle on four.
       spendByDate: new Map()
@@ -1209,45 +1233,49 @@ function evaluateWeek({ census, rows, window }) {
     if (!c) { orphanRows++; continue; }
     if (r.date >= window.weekStart && r.date <= window.weekEnd) {
       c.spend7 += r.cost;
-      c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
       c.clicks7 += r.clicks;
       c.impressions7 += r.impressions;
-      c.orders7 += r.orders;
-      c.sales7 += r.sales;
+      c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
     } else if (r.date >= window.baseStart && r.date <= window.baseEnd) {
       c.spend28 += r.cost;
+      c.clicks28 += r.clicks;
+      c.impressions28 += r.impressions;
+      c.sales28 += r.sales;
     }
   }
 
   // ── derived ──
   for (const c of campaigns.values()) {
-    c.acos = c.sales7 > 0 ? r4(c.spend7 / c.sales7) : null;
-    // Profit retention — the cadence's primary decision metric.
-    //   (gross margin % − ACoS %) ÷ gross margin %
-    // null, never 0, when it cannot be computed: an unmapped brand has no
-    // margin, and a campaign with no sales has no ACoS. Treating either as
-    // zero retention would flag it as a runaway.
-    c.retention = (c.grossMargin && c.acos !== null)
-      ? r4((c.grossMargin - c.acos) / c.grossMargin)
-      : null;
     c.baselineWeekly = r2(c.spend28 / 4);
-    c.spendMultiple = c.baselineWeekly > 0 ? r4(c.spend7 / c.baselineWeekly) : null;
-    // Check 1 counts DAYS AT CAP, not time-in-budget and not a weekly ratio.
+
+    // Profit retention, from the BASELINE and labelled as such wherever it is
+    // shown. Campaign economics are a standing property — price, cost, fees,
+    // competitive conversion rate — not a weekly event, so a 28-day read is
+    // both settled and a larger sample. There is no fresher retention to be
+    // had; the alternative is none at all.
+    c.acos28 = c.sales28 > 0 ? r4(c.spend28 / c.sales28) : null;
+    // null, never 0, when it cannot be computed: an unmapped brand has no
+    // margin and a campaign with no sales has no ACoS. Treating either as zero
+    // retention would read as maximally unprofitable.
+    c.retention28 = (c.grossMargin && c.acos28 !== null)
+      ? r4((c.grossMargin - c.acos28) / c.grossMargin)
+      : null;
+
+    // Rates. Weekly and baseline, both conversion-free.
+    c.ctr7  = c.impressions7  > 0 ? r4(c.clicks7  / c.impressions7)  : null;
+    c.ctr28 = c.impressions28 > 0 ? r4(c.clicks28 / c.impressions28) : null;
+    c.cpc7  = c.clicks7  > 0 ? r2(c.spend7  / c.clicks7)  : null;
+    c.cpc28 = c.clicks28 > 0 ? r2(c.spend28 / c.clicks28) : null;
+
+    // Days at cap. Amazon treats the daily budget as an average across the
+    // month, so a campaign with real demand overshoots on some days and is
+    // pulled back on others; a week total hides that. A day OVER budget counts
+    // as at cap — under a lost-serving-time reading it would not, since Amazon
+    // kept serving, but the question here is whether demand exceeded the
+    // budget, and an overshoot is the strongest evidence that it did.
     //
-    // Amazon treats the daily budget as an average across the month, so a
-    // campaign with real demand overshoots on some days and is pulled back on
-    // others. A week total hides that: 3 days at 200% and 4 days at 10% comes
-    // to 91% of the weekly cap and looks unconstrained, when the budget
-    // clipped three days of genuine demand.
-    //
-    // A day OVER budget counts as at cap. Under a lost-serving-time reading it
-    // would not — Amazon kept serving — but the question here is whether
-    // demand exceeded the budget, and an overshoot is the strongest evidence
-    // that it did.
-    //
-    // Days with no report row had no spend, so they cannot reach the
-    // threshold and are correctly absent. The denominator is the window, never
-    // the row count.
+    // Days with no report row had no spend, so they cannot reach the threshold
+    // and are correctly absent.
     //
     // A LIFETIME budget has no daily ceiling to be at, so it is skipped rather
     // than measured wrong. An absent budgetType is treated as daily, which is
@@ -1269,21 +1297,26 @@ function evaluateWeek({ census, rows, window }) {
     }
   }
 
-  // Always the window's length, never how many days Amazon returned rows for.
-  const weekDays = daySpan(window.weekStart, window.weekEnd);
+  const flags = {
+    budgetCap: [], silent: [], spendCollapse: [],
+    ctrCollapse: [], cpcSpike: [], brandPacing: []
+  };
 
-  const flags = { budgetCap: [], runaway: [], stalled: [], brandPacing: [] };
+  const base = (c) => ({
+    campaignId: c.campaignId, campaign: c.name,
+    adProduct: c.adProduct, brand: c.brand
+  });
 
-  // ── checks 1 and 2, every enabled campaign ──
-  // No spend floor: the reports are pulled in full regardless, so excluding
-  // small campaigns bought nothing and hid real flags. Check 2 keeps its own
-  // $50 floor, which is a threshold in the doc rather than a coverage rule.
   for (const c of campaigns.values()) {
+
+    // ── 1 · Budget cap emergencies ──
+    // Current trigger, standing filter: the campaign is pressed against its
+    // ceiling THIS week, and is a kind of campaign worth feeding.
     if (c.cappedDays !== null && c.cappedDays >= RF_CONFIG.CAP_DAYS_MIN &&
-        c.retention !== null && c.retention >= RF_CONFIG.CAP_RETENTION_MIN) {
+        c.retention28 !== null && c.retention28 >= RF_CONFIG.CAP_RETENTION_MIN) {
       flags.budgetCap.push({
-        campaign: c.name, adProduct: c.adProduct, campaignId: c.campaignId,
-        brand: c.brand, dailyBudget: c.dailyBudget,
+        ...base(c),
+        dailyBudget: c.dailyBudget,
         cappedDays: c.cappedDays, weekDays,
         maxDaySpend: c.maxDaySpend,
         recommendedBudget: rfRecommendBudget({
@@ -1291,60 +1324,79 @@ function evaluateWeek({ census, rows, window }) {
           weekDays, maxDaySpend: c.maxDaySpend
         }),
         spend7: r2(c.spend7),
-        acos: c.acos, retention: c.retention
+        acos28: c.acos28, retention28: c.retention28
       });
     }
 
-    if (c.spend7 > RF_CONFIG.RUNAWAY_MIN_SPEND &&
-        c.spendMultiple !== null && c.spendMultiple > RF_CONFIG.RUNAWAY_MULTIPLE &&
-        c.retention !== null && c.retention < RF_CONFIG.RUNAWAY_RETENTION_MAX) {
-      flags.runaway.push({
-        campaign: c.name, adProduct: c.adProduct, campaignId: c.campaignId,
-        brand: c.brand, spend7: r2(c.spend7),
-        baselineWeekly: c.baselineWeekly, spendMultiple: c.spendMultiple,
-        acos: c.acos, retention: c.retention
+    // ── 2 · Silent campaigns ──
+    // Enabled, funded, and served nothing at all. Deliberately requires prior
+    // activity: a campaign that has never run is dormant, not broken, and
+    // flagging every dormant campaign weekly would drown the report. This is a
+    // CHANGE detector — it ran, and now it does not.
+    const wasActive = c.impressions28 > 0;
+    const silent = c.dailyBudget > 0 && c.impressions7 === 0 && wasActive;
+    if (silent) {
+      flags.silent.push({
+        ...base(c),
+        dailyBudget: c.dailyBudget,
+        baselineWeekly: c.baselineWeekly,
+        baselineImpressions: Math.round(c.impressions28)
+      });
+    }
+
+    // ── 3 · Spend collapse ──
+    // Still serving, but spending far below its own normal. Skips campaigns
+    // already reported silent, which would otherwise appear twice saying the
+    // same thing less precisely.
+    if (!silent && c.baselineWeekly >= RF_CONFIG.COLLAPSE_MIN_BASELINE &&
+        c.spend7 <= c.baselineWeekly * RF_CONFIG.COLLAPSE_RATIO) {
+      flags.spendCollapse.push({
+        ...base(c),
+        spend7: r2(c.spend7),
+        baselineWeekly: c.baselineWeekly,
+        change: r4((c.spend7 - c.baselineWeekly) / c.baselineWeekly)
+      });
+    }
+
+    // ── 4 · CTR collapse ──
+    // Impressions accumulating without clicks. Points at the listing — main
+    // image, price, reviews — or at targeting drift, and it fires before the
+    // money is spent rather than after. The impression floor is significance:
+    // at a typical 0.4% CTR, a few hundred impressions cannot distinguish a
+    // collapse from an ordinary quiet week.
+    if (c.impressions7 >= RF_CONFIG.CTR_MIN_IMPRESSIONS &&
+        c.ctr28 > 0 && c.ctr7 !== null &&
+        c.ctr7 <= c.ctr28 * RF_CONFIG.CTR_COLLAPSE_RATIO) {
+      flags.ctrCollapse.push({
+        ...base(c),
+        impressions7: Math.round(c.impressions7),
+        clicks7: Math.round(c.clicks7),
+        ctr7: c.ctr7, ctr28: c.ctr28,
+        change: r4((c.ctr7 - c.ctr28) / c.ctr28)
+      });
+    }
+
+    // ── 5 · CPC spike ──
+    // Paying materially more per click than usual: competitive pressure, or
+    // bid automation reaching. It is the leading indicator for the cap and
+    // collapse checks — it shows up before it becomes a spend problem.
+    if (c.clicks7 >= RF_CONFIG.CPC_MIN_CLICKS &&
+        c.clicks28 >= RF_CONFIG.CPC_MIN_CLICKS &&
+        c.cpc28 > 0 && c.cpc7 !== null &&
+        c.cpc7 >= c.cpc28 * RF_CONFIG.CPC_SPIKE_MULTIPLE) {
+      flags.cpcSpike.push({
+        ...base(c),
+        clicks7: Math.round(c.clicks7),
+        spend7: r2(c.spend7),
+        cpc7: c.cpc7, cpc28: c.cpc28,
+        change: r4((c.cpc7 - c.cpc28) / c.cpc28)
       });
     }
   }
 
-  // ── check 3, portfolio level ──
-  // The 15-click threshold is the noise filter here; a portfolio that took
-  // real clicks and returned nothing is worth seeing whatever it cost.
-  const portfolios = new Map();
-  for (const c of campaigns.values()) {
-    // A campaign with no portfolio stands alone rather than being pooled with
-    // every other unfiled campaign into one meaningless group.
-    const key = c.portfolioId || `campaign:${c.campaignId}`;
-    let p = portfolios.get(key);
-    if (!p) {
-      p = { key, portfolio: c.portfolio || c.name, brand: c.brand,
-            clicks7: 0, orders7: 0, spend7: 0, campaigns: [] };
-      portfolios.set(key, p);
-    }
-    p.clicks7 += c.clicks7;
-    p.orders7 += c.orders7;
-    p.spend7 += c.spend7;
-    p.campaigns.push({ campaign: c.name, adProduct: c.adProduct,
-                       clicks7: c.clicks7, spend7: r2(c.spend7) });
-  }
-  for (const p of portfolios.values()) {
-    // Clicks and orders are per-day integers, so the sums are exact — but
-    // round anyway, so a portfolio sitting on the threshold cannot turn on
-    // float dust.
-    const clicks = Math.round(p.clicks7);
-    if (clicks >= RF_CONFIG.STALLED_MIN_CLICKS && Math.round(p.orders7) === 0) {
-      flags.stalled.push({
-        portfolio: p.portfolio, brand: p.brand,
-        clicks7: clicks, spend7: r2(p.spend7),
-        campaignCount: p.campaigns.length,
-        campaigns: p.campaigns.sort((a, b) => b.spend7 - a.spend7)
-      });
-    }
-  }
-
-  // ── check 4, brand level ──
-  // No spend floor: the doc specifies none, and this is the account-level
-  // sanity check that is meant to catch what the campaign checks miss.
+  // ── 6 · Brand pacing ──
+  // The only account-level check, and structurally the soundest: it aggregates
+  // 30-40 campaigns, so it is the least noisy thing here. Pure spend.
   const brands = new Map();
   for (const c of campaigns.values()) {
     if (!c.brand) continue;
@@ -1367,22 +1419,24 @@ function evaluateWeek({ census, rows, window }) {
   }
 
   flags.budgetCap.sort((a, b) => b.spend7 - a.spend7);
-  flags.runaway.sort((a, b) => b.spend7 - a.spend7);
-  flags.stalled.sort((a, b) => b.spend7 - a.spend7);
+  flags.silent.sort((a, b) => b.baselineWeekly - a.baselineWeekly);
+  flags.spendCollapse.sort((a, b) => a.change - b.change);
+  flags.ctrCollapse.sort((a, b) => a.change - b.change);
+  flags.cpcSpike.sort((a, b) => b.change - a.change);
   flags.brandPacing.sort((a, b) => Math.abs(b.deviation) - Math.abs(a.deviation));
 
-  const flagCount = flags.budgetCap.length + flags.runaway.length +
-                    flags.stalled.length + flags.brandPacing.length;
+  const flagCount = Object.values(flags).reduce((n, list) => n + list.length, 0);
 
   // The run's own receipt. Not a report of healthy campaigns — one line saying
   // what the denominator was, so a run that silently covers half the account
   // cannot look identical to a clean week.
   const all = [...campaigns.values()];
   const enabled = all.length;
-  // Every enabled campaign is now evaluated, so the interesting number is how
-  // many of them Amazon reported any activity for. A campaign with no rows
-  // spent nothing — which is a fact about the week, not a gap in the run.
   const withSpend = all.filter(c => c.spend7 > 0).length;
+  // Campaigns that have never run at all. Not flagged: dormant is a config
+  // cleanup job, not a weekly emergency, and reporting the same 60 campaigns
+  // every week would bury the ones that actually broke.
+  const neverActive = all.filter(c => c.impressions7 === 0 && c.impressions28 === 0).length;
 
   // Lists are limited to campaigns that actually spent: a dormant campaign
   // with no brand cannot affect any check, and naming it is just noise.
@@ -1402,7 +1456,8 @@ function evaluateWeek({ census, rows, window }) {
     flags,
     flagCount,
     clean: flagCount === 0,
-    coverage: { enabled, evaluated: enabled, withSpend, orphanRows, unmapped, noBudget }
+    coverage: { enabled, evaluated: enabled, withSpend, neverActive,
+                orphanRows, unmapped, noBudget }
   };
 }
 
