@@ -1419,17 +1419,29 @@ async function requestCampaignReport(accessToken, { product, start, end }) {
     );
     return { reportId, columns: RF_COLUMNS[product] };
   } catch (err) {
-    // 425 means an identical report is already generating. Amazon sometimes
-    // names it in the body; adopting that id recovers a run that would
-    // otherwise be orphaned — generating at Amazon with nothing left to poll it.
+    // 425 means an identical report is already generating. Adopting the id
+    // Amazon names recovers a run that would otherwise be orphaned —
+    // generating at Amazon with nothing left able to poll it, and blocking
+    // every retry for as long as it lives.
     if (/\(425\)/.test(err.message)) {
-      const m = err.message.match(/"reportId"\s*:\s*"([^"]+)"/);
-      if (m && REPORT_ID_RE.test(m[1])) {
-        return { reportId: m[1], columns: RF_COLUMNS[product], adopted: true };
-      }
+      const adopted = rfDuplicateReportId(err.message);
+      if (adopted) return { reportId: adopted, columns: RF_COLUMNS[product], adopted: true };
     }
     throw err;
   }
+}
+
+// Amazon names the in-flight report in the 425 body, in one of two shapes:
+//   {"detail":"The Request is a duplicate of : a886b6d8-62c7-4257-8a4f-..."}
+//   {"reportId":"a886b6d8-..."}
+// The prose form is the one production actually returns. Missing it meant
+// every retry re-requested, got refused again, and left four live reports at
+// Amazon that nothing could ever collect.
+function rfDuplicateReportId(message) {
+  const text = String(message || '');
+  const m = text.match(/duplicate of\s*:?\s*([A-Za-z0-9._-]{8,80})/i) ||
+            text.match(/"reportId"\s*:\s*"([^"]+)"/);
+  return (m && REPORT_ID_RE.test(m[1])) ? m[1] : null;
 }
 
 // Amazon's 400 body reads "configuration columns includes invalid values:
@@ -1510,5 +1522,5 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Exported for the offline cadence tests. Vercel only invokes the default
 // export, so these are inert in production.
 export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
-         reportSpec, buildReportBody, daySpan,
+         reportSpec, buildReportBody, daySpan, rfDuplicateReportId,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS };
