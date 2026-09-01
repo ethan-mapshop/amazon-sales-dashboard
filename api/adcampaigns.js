@@ -171,6 +171,7 @@ const AC_ENDPOINTS = {
   spAdGroupsV3: {
     label: 'sp-adgroups-v3', adProduct: 'SP', version: 'v3',
     url: `${ADS_HOST}/sp/adGroups/list`, method: 'POST',
+    writeUrl: `${ADS_HOST}/sp/adGroups`,
     contentType: 'application/vnd.spAdGroup.v3+json',
     accept: 'application/vnd.spAdGroup.v3+json',
     listField: 'adGroups', paging: 'token'
@@ -398,10 +399,15 @@ async function handleUpdate(req, res) {
 
     const local = (req.body && req.body.local) || {};
     const amazon = (req.body && req.body.amazon) || {};
+    // The default bid lives on the AD GROUP — a different endpoint and a
+    // different id — so it travels separately rather than being smuggled into
+    // the campaign payload.
+    const adGroup = (req.body && req.body.adGroup) || {};
     const hasLocal = Object.prototype.hasOwnProperty.call(local, 'brand');
     const hasAmazon = Object.keys(amazon).length > 0;
+    const hasBid = Object.prototype.hasOwnProperty.call(adGroup, 'defaultBid');
 
-    if (!hasLocal && !hasAmazon) {
+    if (!hasLocal && !hasAmazon && !hasBid) {
       return res.status(400).json({ error: 'Nothing to change' });
     }
 
@@ -1390,14 +1396,19 @@ function acJoinDefaultBids(campaigns, adGroups) {
   const multiAdGroup = [];
   let resolved = 0;
   for (const row of campaigns) {
-    if (row.adProduct !== 'SP') { row.defaultBid = null; continue; }
+    if (row.adProduct !== 'SP') { row.defaultBid = null; row.adGroupId = null; continue; }
     const groups = byCampaign.get(String(row.campaignId)) || [];
     if (groups.length === 1) {
       const bid = acNum(groups[0].defaultBid);
       row.defaultBid = Number.isFinite(bid) && bid > 0 ? bid : null;
+      // The bid write targets the ad group, so its id travels with the bid.
+      // Not tracked for diffing: an ad group id changing means a different ad
+      // group, not a change to this one.
+      row.adGroupId = acStr(groups[0].adGroupId) || null;
       if (row.defaultBid !== null) resolved++;
     } else {
       row.defaultBid = null;
+      row.adGroupId = null;
       if (groups.length > 1) multiAdGroup.push(row.name || row.campaignId);
     }
   }
