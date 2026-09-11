@@ -68,7 +68,7 @@ console.log('\nEXACT FITS  — a curve of the right degree must be reproduced');
   };
   ok(err(4) < err(2),
      'a higher degree fits a curve with more turns more closely',
-     'which is why the conversion charts used 4 and the rest used 2');
+     'which is why every chart runs at 4 rather than the sheet\'s mix of 4 and 2');
 }
 
 console.log('\nSHAPE  — a fit is a trend, not a redrawing of the data');

@@ -34,12 +34,13 @@
       { key: 'cvr', label: 'CVR', fmt: 'pct2' }
     ];
 
-    // The sheet's three chart tabs, kept as three groups on one page, each with
-    // the polynomial degree that tab used. Conversion ran at 4 because those
-    // curves turn more than once across a year; everything else at 2.
+    // The sheet's three chart tabs, kept as three groups on one page. The sheet
+    // ran Conversion at degree 4 and the rest at 2; everything is 4 here, so a
+    // curve that turns more than twice across the year is followed rather than
+    // flattened. The cost is that a fit now needs six weeks rather than four.
     const WK_CHART_GROUPS = [
-      { title: 'Sales & Spend', degree: 2, keys: ['sales', 'orders', 'spend', 'cpc'] },
-      { title: 'ROAS & ACoS', degree: 2, keys: ['roas', 'acos'] },
+      { title: 'Sales & Spend', degree: 4, keys: ['sales', 'orders', 'spend', 'cpc'] },
+      { title: 'ROAS & ACoS', degree: 4, keys: ['roas', 'acos'] },
       { title: 'Conversion', degree: 4, keys: ['impressions', 'clicks', 'ctr', 'cvr'] }
     ];
 
