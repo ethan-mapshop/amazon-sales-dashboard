@@ -252,8 +252,15 @@
 
     // Brand narrows first, then the changes/all toggle. Select-all reads this,
     // so a header tick can never reach a row the filters are hiding.
+    //
+    // Sorting happens HERE rather than on the server. Order is presentation,
+    // and a server-side sort gets frozen into every stored run — so a result
+    // saved before the rule changed keeps the old order forever, which is
+    // exactly what happened when this moved from magnitude to alphabetical.
     function bwVisibleRows(data) {
-      let all = data.rows || [];
+      let all = (data.rows || []).slice()
+        .sort((a, b) => String(a.campaign || '').localeCompare(String(b.campaign || ''),
+                                                               'en', { numeric: true }));
       if (bwBrand !== 'all') all = all.filter(r => bwBrandOf(r) === bwBrand);
       if (bwFilter === 'all') return all;
       // A row applied this session becomes a hold, which would drop it from

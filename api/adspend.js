@@ -2097,10 +2097,10 @@ function bwDecideAll({ inputs, window, postures = {}, recentRaises = {} }) {
     });
   }
 
-  // DEVIATION: the doc sorts by magnitude of change, biggest movers first.
-  // Alphabetical by campaign name instead, because the list is now something
-  // you work down with checkboxes rather than skim - and the naming convention
-  // puts each brand's campaigns together anyway (BW, RR, SOK, STATE).
+  // A sensible default order for anything reading this payload directly. The
+  // PAGE does its own sorting at render time and does not rely on this: order
+  // baked in here would be frozen into every stored run, so a cached result
+  // would keep whatever rule was in force when it was collected.
   out.sort((a, b) => String(a.campaign || '').localeCompare(String(b.campaign || ''),
                                                             'en', { numeric: true }));
 
