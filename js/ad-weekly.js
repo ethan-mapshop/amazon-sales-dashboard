@@ -34,11 +34,13 @@
       { key: 'cvr', label: 'CVR', fmt: 'pct2' }
     ];
 
-    // The sheet's three chart tabs, kept as three groups on one page.
+    // The sheet's three chart tabs, kept as three groups on one page, each with
+    // the polynomial degree that tab used. Conversion ran at 4 because those
+    // curves turn more than once across a year; everything else at 2.
     const WK_CHART_GROUPS = [
-      { title: 'Sales & Spend', keys: ['sales', 'orders', 'spend', 'cpc'] },
-      { title: 'ROAS & ACoS', keys: ['roas', 'acos'] },
-      { title: 'Conversion', keys: ['impressions', 'clicks', 'ctr', 'cvr'] }
+      { title: 'Sales & Spend', degree: 2, keys: ['sales', 'orders', 'spend', 'cpc'] },
+      { title: 'ROAS & ACoS', degree: 2, keys: ['roas', 'acos'] },
+      { title: 'Conversion', degree: 4, keys: ['impressions', 'clicks', 'ctr', 'cvr'] }
     ];
 
     let wkData = null;
@@ -213,7 +215,8 @@
     function wkChartFrames() {
       return WK_CHART_GROUPS.map(g => `
         <div class="card arf-section">
-          <h4>${g.title}</h4>
+          <h4>${g.title} <span class="arf-muted wk-degree">polynomial trend, degree ${
+            g.degree}</span></h4>
           <div class="wk-charts">
             ${g.keys.map(k => `
               <div class="wk-chart">
@@ -250,6 +253,77 @@
 
     // ─── CHARTS ──────────────────────────────────────────────────────────────
 
+    // Least-squares polynomial fit, which is what the spreadsheet drew over each
+    // of these charts. Returns a fitted value per point, or null when a fit
+    // would be dishonest.
+    //
+    // x is normalised to [-1, 1] before fitting. Left as a week index, a
+    // degree-4 fit over 52 weeks builds normal equations reaching x^8, around
+    // 4.6e13, and the smallest and largest entries differ by enough orders of
+    // magnitude to lose most of the available precision.
+    function wkPolyFit(values, degree) {
+      const n = values.length;
+      const xOf = (i) => (n === 1 ? 0 : (2 * i) / (n - 1) - 1);
+
+      // Weeks with no value are left out of the fit rather than read as zero.
+      // A rate is absent when there were no clicks, which is not the same as a
+      // rate of nothing, and would drag the curve to the floor.
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const y = values[i];
+        if (y === null || y === undefined || typeof y !== 'number' || !isFinite(y)) continue;
+        pts.push([xOf(i), y]);
+      }
+      // A degree-d curve laid through d+1 points passes exactly through all of
+      // them. That is interpolation wearing a trend's clothes, so it is refused.
+      if (pts.length < degree + 2) return null;
+
+      const m = degree + 1;
+      // Normal equations, built straight from power sums: (XᵀX)c = Xᵀy.
+      const A = [];
+      for (let r = 0; r < m; r++) {
+        const row = new Array(m + 1).fill(0);
+        for (let c = 0; c < m; c++) {
+          let sum = 0;
+          for (const [x] of pts) sum += Math.pow(x, r + c);
+          row[c] = sum;
+        }
+        let sum = 0;
+        for (const [x, y] of pts) sum += y * Math.pow(x, r);
+        row[m] = sum;
+        A.push(row);
+      }
+
+      // Gauss-Jordan with partial pivoting.
+      for (let col = 0; col < m; col++) {
+        let piv = col;
+        for (let r = col + 1; r < m; r++) {
+          if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+        }
+        // Singular: every x identical, or a degree the data cannot support.
+        // No curve is better than a fabricated one.
+        if (Math.abs(A[piv][col]) < 1e-12) return null;
+        const t = A[col]; A[col] = A[piv]; A[piv] = t;
+        for (let r = 0; r < m; r++) {
+          if (r === col) continue;
+          const f = A[r][col] / A[col][col];
+          for (let c = col; c <= m; c++) A[r][c] -= f * A[col][c];
+        }
+      }
+
+      const coef = A.map((row, i) => row[m] / row[i]);
+      if (coef.some(c => !isFinite(c))) return null;
+
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const x = xOf(i);
+        let y = 0;
+        for (let k = 0; k < m; k++) y += coef[k] * Math.pow(x, k);
+        out.push(y);
+      }
+      return out;
+    }
+
     function wkDestroyCharts() {
       for (const c of wkCharts) { try { c.destroy(); } catch (e) { /* already gone */ } }
       wkCharts = [];
@@ -267,21 +341,40 @@
           if (!el) continue;
           const meta = WK_METRICS.find(m => m.key === key) || { fmt: 'int' };
           const pct = meta.fmt === 'pct' || meta.fmt === 'pct2';
+          // null stays a gap rather than a zero: a week with no clicks has no
+          // CPC, and drawing it at the axis would read as free.
+          const values = s.map(w => (w[key] === null || w[key] === undefined)
+            ? null : (pct ? w[key] * 100 : w[key]));
+
+          const datasets = [{
+            label: meta.label || key,
+            data: values,
+            backgroundColor: 'rgba(59, 130, 246, 0.55)',
+            borderColor: 'rgb(59, 130, 246)',
+            borderWidth: 1,
+            // Higher order draws first, so the bars sit behind the curve.
+            order: 1
+          }];
+
+          const trend = wkPolyFit(values, g.degree);
+          if (trend) {
+            datasets.push({
+              type: 'line',
+              label: `Trend (degree ${g.degree})`,
+              data: trend,
+              borderColor: 'rgb(249, 115, 22)',
+              borderWidth: 2,
+              pointRadius: 0,
+              pointHitRadius: 0,
+              fill: false,
+              tension: 0.3,
+              order: 0
+            });
+          }
+
           wkCharts.push(new Chart(el.getContext('2d'), {
             type: 'bar',
-            data: {
-              labels,
-              datasets: [{
-                label: meta.label || key,
-                // null stays a gap rather than a zero: a week with no clicks
-                // has no CPC, and drawing it at the axis would read as free.
-                data: s.map(w => (w[key] === null || w[key] === undefined)
-                  ? null : (pct ? w[key] * 100 : w[key])),
-                backgroundColor: 'rgba(59, 130, 246, 0.55)',
-                borderColor: 'rgb(59, 130, 246)',
-                borderWidth: 1
-              }]
-            },
+            data: { labels, datasets },
             options: {
               responsive: true,
               maintainAspectRatio: false,

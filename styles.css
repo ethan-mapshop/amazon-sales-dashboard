@@ -2055,6 +2055,14 @@
 
     .wk-chart { min-width: 0; }
 
+    .wk-degree {
+      font-weight: 400;
+      font-size: 0.7rem;
+      text-transform: none;
+      letter-spacing: 0;
+      margin-left: 0.5rem;
+    }
+
     .wk-chart-title {
       font-size: 0.75rem;
       color: var(--text-secondary);
