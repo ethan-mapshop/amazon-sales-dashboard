@@ -1,27 +1,33 @@
     // ─── AD RED FLAGS ────────────────────────────────────────────────────────
-    // Weekly Red Flag Monitor. Four fixed threshold checks over the most
+    // Weekly Red Flag Monitor. Six fixed threshold checks over the most
     // recent complete Mon–Sun week, computed server-side by the red-flag
     // section of /api/adspend (it lives there because Vercel's Hobby plan
     // caps a deployment at 12 serverless functions).
     //
     // Amazon's report generation is asynchronous and takes minutes, so this
     // module drives the request → poll → collect cycle from the browser and
-    // keeps the in-flight report IDs (and the last computed result) in
-    // localStorage. Nothing is persisted server-side.
+    // keeps the in-flight report IDs in localStorage so a manual run survives a
+    // reload.
     //
-    // loadAdRedFlags() NEVER starts a run — it renders the cache and waits for
+    // THE RESULT IS NEVER CACHED. The server stores what the reports said and
+    // re-runs the checks on every read, so a budget or bid applied since the
+    // reports were pulled is reflected at once. A cron fetches before the
+    // working day, so the usual path is reading what is already there.
+    //
+    // loadAdRedFlags() NEVER starts a run — it reads and waits for
     // the user. showPage() and triggerCurrentPageLoad() both fire on restore
     // and after sign-in, and auto-running there would burn Amazon report quota
     // and earn a 425 duplicate rejection on the next real run.
 
     const ARF_RUN_KEY = 'arfRunState';
-    const ARF_RESULT_KEY = 'arfLastResult';
     const ARF_POLL_MS = 20000;
     const ARF_POLL_SLOW_MS = 30000;
     const ARF_MAX_WAIT_MS = 45 * 60 * 1000;
 
     let arfPollTimer = null;
     let arfBusy = false;
+    // In memory for the life of the page, never written to storage.
+    let arfData = null;
 
     function loadAdRedFlags() {
       const container = document.getElementById('adredflags-content');
@@ -32,15 +38,35 @@
         return;
       }
 
-      const cached = arfCacheLoad();
-      if (cached) arfRender(cached);
-      else arfRenderIdle();
+      arfFetch();
 
       // Resume a run that was in flight when the tab closed.
       const state = arfRunLoad();
       if (state && !arfPollTimer) {
         arfSetStatus('Resuming report run started ' + _svTimeAgo(state.startedAt) + '…');
         arfSchedulePoll(0);
+      }
+    }
+
+    // Decisions are made server-side on every read, so this is the only way the
+    // page gets a result. There is nothing to invalidate.
+    async function arfFetch(after) {
+      try {
+        const res = await fetch('/api/adspend?action=weekly-get', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Load failed (${res.status})`);
+        if (data.empty) {
+          arfData = null;
+          return arfRenderIdle();
+        }
+        arfData = data;
+        arfRender(data);
+        if (after) arfSetStatus(after);
+      } catch (err) {
+        console.error('[ARF] load failed:', err);
+        arfSetStatus('', err.message);
       }
     }
 
@@ -205,10 +231,10 @@
         // request step knows about it.
         data.notes = [...(data.notes || []),
           ...(state.failures || []).map(f => ({ key: f.key, note: 'report not requested: ' + f.error }))];
-        arfCacheSave(data);
         arfRunClear();
         arfSetStatus('');
         arfSetBusy(false);
+        arfData = data;
         arfRender(data);
       } catch (err) {
         console.error('[ARF] collect failed:', err);
@@ -603,15 +629,13 @@
     function arfSetApplyStage(campaignId, stage, extra) {
       if (!stage) delete arfApply[campaignId];
       else arfApply[campaignId] = { stage, ...(extra || {}) };
-      const cached = arfCacheLoad();
-      if (cached) arfRender(cached);
+      if (arfData) arfRender(arfData);
     }
 
     async function arfApplyBudget(key) {
       const [campaignId, kind] = String(key).split(':');
-      const cached = arfCacheLoad();
       const bucket = kind === 'bid' ? 'cpcSpike' : 'budgetCap';
-      const row = ((cached && cached.flags && cached.flags[bucket]) || [])
+      const row = ((arfData && arfData.flags && arfData.flags[bucket]) || [])
         .find(r => String(r.campaignId) === String(campaignId));
       if (!row || !accessToken) return;
 
@@ -644,19 +668,13 @@
           throw new Error(data.error || `Failed (${res.status})`);
         }
 
-        // Keep the cached run truthful: the value on screen is now stale, and
-        // this row's own recommendation no longer applies to it.
-        let applied;
-        if (kind === 'bid') {
-          applied = row.defaultBid = row.recommendedBid;
-          row.recommendedBid = null;
-        } else {
-          applied = row.dailyBudget = row.recommendedBudget;
-          row.recommendedBudget = null;
-        }
-        arfCacheSave(cached);
-        arfApply[key] = { stage: 'done', applied };
-        arfRender(cached);
+        // Re-read rather than patching what is on screen: the update handler
+        // writes the new value back into the census, and the server decides
+        // from the census, so the row comes back correct without this page
+        // having to fake it.
+        arfApply[key] = { stage: 'done',
+                          applied: kind === 'bid' ? row.recommendedBid : row.recommendedBudget };
+        await arfFetch();
       } catch (err) {
         console.error('[ARF] apply failed:', err);
         arfSetApplyStage(key, 'error', { message: err.message });
@@ -722,20 +740,9 @@
       btn.textContent = busy ? 'Running…' : (label || 'Run weekly check');
     }
 
-    // ─── LOCAL CACHE ─────────────────────────────────────────────────────────
-    // Report download URLs expire, so the computed result is what gets cached —
-    // a page refresh then costs nothing instead of forcing a fresh run.
-
-    function arfCacheSave(data) {
-      try { localStorage.setItem(ARF_RESULT_KEY, JSON.stringify(data)); } catch { /* quota */ }
-    }
-
-    function arfCacheLoad() {
-      try {
-        const raw = localStorage.getItem(ARF_RESULT_KEY);
-        return raw ? JSON.parse(raw) : null;
-      } catch { return null; }
-    }
+    // ─── IN-FLIGHT RUN STATE ─────────────────────────────────────────────────
+    // Report IDs only. A manual run takes minutes and has to survive a reload;
+    // the result it produces is stored server-side, not here.
 
     function arfRunSave(state) {
       try { localStorage.setItem(ARF_RUN_KEY, JSON.stringify(state)); } catch { /* quota */ }

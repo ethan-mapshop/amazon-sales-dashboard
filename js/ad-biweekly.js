@@ -40,6 +40,7 @@
     let bwBulkProgress = '';
     // In memory for the life of the page, never written to storage.
     let bwData = null;
+    let bwImporting = false;
 
     function loadAdBiweekly() {
       const container = document.getElementById('adbiweekly-content');
@@ -300,7 +301,7 @@
 
       const rows = bwVisibleRows(data);
       container.innerHTML =
-        bwCounts(data) + bwPostureBar(data) + bwBrandSummary(data) +
+        bwCounts(data) + bwNewerBanner(data) + bwPostureBar(data) + bwBrandSummary(data) +
         bwTable(rows, data) + bwSelectionBar(data, rows) + bwFooter(data);
       bwBindActions();
     }
@@ -361,6 +362,26 @@
             14 days to ${escapeHtml(w.end)} · prior ${escapeHtml(w.priorStart)}&ndash;${escapeHtml(w.priorEnd)}
             <span class="bw-muted">lagged 8 days so conversions have landed</span>
           </div>
+        </div>`;
+    }
+
+    // Fresh data is offered, not imposed: adopting it mid-fortnight would change
+    // every recommendation without asking. The scheduled run adopts on its own
+    // once a fortnight has passed, and this is the off-cycle path — a seasonal
+    // peak week, say — without a special case in the schedule.
+    function bwNewerBanner(data) {
+      if (!data.newer) return '';
+      const w = data.newer.window || {};
+      return `
+        <div class="card bw-newer">
+          <div>
+            <strong>Newer data available</strong>
+            <span class="arf-muted">· fetched ${escapeHtml(_svTimeAgo(data.newer.fetchedAt))}, covering ${
+              escapeHtml(w.start || '')} to ${escapeHtml(w.end || '')}</span>
+            <div class="arf-muted">Importing replaces every recommendation below.</div>
+          </div>
+          <button class="btn btn-primary" data-bw-import${bwImporting ? ' disabled' : ''}>${
+            bwImporting ? 'Importing…' : 'Import'}</button>
         </div>`;
     }
 
@@ -608,9 +629,10 @@
       el.addEventListener('click', e => {
         const btn = e.target.closest(
           '[data-bw-apply], [data-bw-confirm], [data-bw-cancel], [data-bw-filter], ' +
-          '[data-bw-bulk]');
+          '[data-bw-bulk], [data-bw-import]');
         if (!btn) return;
         const d = btn.dataset;
+        if ('bwImport' in d) return bwImport();
         if (d.bwFilter) { bwFilter = d.bwFilter; bwRerender(); }
         else if (d.bwApply) bwSetApplyStage(d.bwApply, 'confirm');
         else if (d.bwCancel) bwSetApplyStage(d.bwCancel, null);
@@ -762,6 +784,32 @@
         console.error('[BW] apply failed:', err);
         bwApply[campaignId] = { stage: 'error', message: err.message };
         return false;
+      }
+    }
+
+    async function bwImport() {
+      if (bwImporting || !accessToken) return;
+      bwImporting = true;
+      bwRerender();
+      try {
+        const res = await fetch('/api/adspend?action=biweekly-import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || `Import failed (${res.status})`);
+        // A selection made against the old numbers no longer points at the same
+        // recommendations, so it is dropped rather than silently re-aimed.
+        bwSelected.clear();
+        bwBulkConfirm = false;
+        bwApply = {};
+        bwImporting = false;
+        await bwFetch('Imported the latest data.');
+      } catch (err) {
+        console.error('[BW] import failed:', err);
+        bwImporting = false;
+        bwSetStatus('', err.message);
+        bwRerender();
       }
     }
 

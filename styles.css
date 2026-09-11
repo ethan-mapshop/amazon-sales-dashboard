@@ -1977,6 +1977,20 @@
 
     .bw-warn { color: var(--warning); }
 
+    /* Offered, not imposed: newer data sits above the table until you take it. */
+    .bw-newer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1.25rem;
+      border-left: 3px solid var(--accent-blue);
+    }
+
+    .bw-newer button { flex-shrink: 0; }
+
     /* Bulk selection on the bi-weekly table. The bar itself reuses the Campaign
        Overview save-bar styles so the two pages behave and look the same. */
     .bw-tick { width: 2rem; padding-right: 0 !important; }

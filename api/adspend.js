@@ -1,4 +1,8 @@
 import { kv } from '@vercel/kv';
+// The campaign census. Imported rather than re-implemented: the cron needs to
+// refresh it before fetching reports, and there is exactly one correct way to
+// do that. Vercel bundles the module; it does not add a serverless function.
+import { acRunSync } from './adcampaigns.js';
 import { gunzip } from 'zlib';
 import { promisify } from 'util';
 
@@ -58,11 +62,16 @@ export default async function handler(req, res) {
     if (action === 'weekly-request')      return handleWeeklyRequest(req, res);
     if (action === 'weekly-status')       return handleWeeklyStatus(req, res);
     if (action === 'weekly-collect')      return handleWeeklyCollect(req, res);
+    if (action === 'weekly-get')          return handleWeeklyGet(req, res);
     // Bi-weekly tactical budget management — see the section at the bottom.
     if (action === 'biweekly-request')    return handleBiweeklyRequest(req, res);
     if (action === 'biweekly-status')     return handleBiweeklyStatus(req, res);
     if (action === 'biweekly-collect')    return handleBiweeklyCollect(req, res);
     if (action === 'biweekly-get')        return handleBiweeklyGet(req, res);
+    // Vercel cron. Unauthenticated by the convention every other cron here
+    // follows; nothing in them writes a budget.
+    if (action === 'cron-ads-request')    return handleCronAdsRequest(req, res);
+    if (action === 'cron-ads-collect')    return handleCronAdsCollect(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
@@ -71,6 +80,7 @@ export default async function handler(req, res) {
     if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
     if (action === 'biweekly-adopt')          return handleBiweeklyAdopt(req, res);
+    if (action === 'biweekly-import')         return handleBiweeklyImport(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -1144,7 +1154,12 @@ async function handleWeeklyCollect(req, res) {
       return res.status(502).json({ error: 'No report rows could be downloaded.', notes });
     }
 
-    const result = evaluateWeek({ census, rows, window });
+    const { inputs, orphanRows } = rfBuildInputs({ census, rows, window });
+    // Stored: what the reports said. Never: what to do about it.
+    await rfSaveRun(window, inputs);
+
+    const result = rfDecideAll({ inputs, census, window });
+    result.coverage.orphanRows += orphanRows;
 
     return res.status(200).json({
       success: true,
@@ -1154,11 +1169,44 @@ async function handleWeeklyCollect(req, res) {
       censusSyncedAt: census.syncedAt,
       ...result,
       notes,
-      generatedAt: new Date().toISOString()
+      collectedAt: new Date().toISOString()
     });
   } catch (error) {
     console.error('[REDFLAGS COLLECT] Error:', error);
     return res.status(500).json({ error: 'Weekly-collect failed: ' + error.message });
+  }
+}
+
+// The page's only read. The six checks are re-run every time from the stored
+// metrics and the current census, so a budget or bid applied since the reports
+// were pulled is reflected at once and nothing decided is ever written down.
+async function handleWeeklyGet(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const [run, census] = await Promise.all([rfLoadRun(), loadCensus()]);
+    if (!run) return res.status(200).json({ success: true, empty: true });
+    if (!census.campaigns.length) {
+      return res.status(409).json({
+        error: 'No campaign snapshot stored. Refresh Campaign Overview first — ' +
+               'budgets, brands and bids are read from it on every load.'
+      });
+    }
+
+    const result = rfDecideAll({ inputs: run.inputs, census, window: run.window });
+    return res.status(200).json({
+      success: true,
+      window: run.window,
+      config: RF_CONFIG,
+      deviations: RF_SPEC_DEVIATIONS,
+      censusSyncedAt: census.syncedAt,
+      collectedAt: run.collectedAt,
+      ...result
+    });
+  } catch (error) {
+    console.error('[REDFLAGS GET] Error:', error);
+    return res.status(500).json({ error: 'Weekly-get failed: ' + error.message });
   }
 }
 
@@ -1240,21 +1288,92 @@ function daySpan(start, end) {
 //
 // Nothing in the WEEK window touches conversions. That is the property the
 // whole cadence rests on, and it is worth preserving deliberately.
-function evaluateWeek({ census, rows, window }) {
-  // Always the window's length, never how many days Amazon returned rows for.
-  const weekDays = daySpan(window.weekStart, window.weekEnd);
-
-  // ── the spine ──
-  const campaigns = new Map();
+// Split for the same reason the bi-weekly is: reports are fetched once, by a
+// cron at 4am, and the checks are re-run on every page load. Storing decisions
+// is what made every stale-result bug on the other page.
+//
+//   rfBuildInputs  aggregates report rows, once per fetch
+//   rfDecideAll    runs the six checks against them, on every read
+//
+// METRICS ONLY in the inputs. Budget, brand, bid and portfolio are joined from
+// the census at decide time, so a budget applied since the reports were pulled
+// shows up without the stored run knowing anything about it.
+function rfBuildInputs({ census, rows, window }) {
+  const enabled = new Set();
   for (const row of census.campaigns) {
     if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
     // Sponsored Brands is not reported here, so it must not be in the spine
     // either — a row with no report behind it looks silent and collapsed.
     if (row.adProduct !== 'SP') continue;
+    enabled.add(String(row.campaignId));
+  }
+
+  const byId = new Map();
+  const dayKey = new Map();
+  let orphanRows = 0;
+  for (const r of rows) {
+    if (!enabled.has(r.campaignId)) { orphanRows++; continue; }
+    let c = byId.get(r.campaignId);
+    if (!c) {
+      c = { campaignId: r.campaignId,
+            spend7: 0, clicks7: 0, impressions7: 0,
+            spend28: 0, clicks28: 0, impressions28: 0, sales28: 0,
+            daily7: [] };
+      byId.set(r.campaignId, c);
+    }
+    if (r.date >= window.weekStart && r.date <= window.weekEnd) {
+      c.spend7 += r.cost; c.clicks7 += r.clicks; c.impressions7 += r.impressions;
+      const k = r.campaignId + '|' + r.date;
+      dayKey.set(k, (dayKey.get(k) || 0) + r.cost);
+    } else if (r.date >= window.baseStart && r.date <= window.baseEnd) {
+      c.spend28 += r.cost; c.clicks28 += r.clicks;
+      c.impressions28 += r.impressions; c.sales28 += r.sales;
+    }
+  }
+  for (const [k, spend] of dayKey) {
+    const c = byId.get(k.slice(0, k.indexOf('|')));
+    if (c) c.daily7.push(r2(spend));
+  }
+
+  // A campaign the report never mentioned still needs a row: it spent nothing,
+  // which is a fact about the week and is what the silent check exists to find.
+  for (const id of enabled) {
+    if (!byId.has(id)) {
+      byId.set(id, { campaignId: id, spend7: 0, clicks7: 0, impressions7: 0,
+                     spend28: 0, clicks28: 0, impressions28: 0, sales28: 0, daily7: [] });
+    }
+  }
+
+  for (const c of byId.values()) {
+    c.spend7 = r2(c.spend7); c.clicks7 = Math.round(c.clicks7);
+    c.impressions7 = Math.round(c.impressions7);
+    c.spend28 = r2(c.spend28); c.clicks28 = Math.round(c.clicks28);
+    c.impressions28 = Math.round(c.impressions28); c.sales28 = r2(c.sales28);
+  }
+  return { inputs: [...byId.values()], orphanRows };
+}
+
+function rfDecideAll({ inputs, census, window }) {
+  // Always the window's length, never how many days Amazon returned rows for.
+  const weekDays = daySpan(window.weekStart, window.weekEnd);
+
+  // Configuration comes from the census on every read, never from the stored
+  // run — so a budget or bid changed since the fetch is reflected at once.
+  const config = new Map();
+  for (const row of (census.campaigns || [])) config.set(String(row.campaignId), row);
+
+  const campaigns = new Map();
+  let orphanRows = 0;
+  for (const i of inputs) {
+    const row = config.get(String(i.campaignId));
+    if (!row || String(row.state || '').toUpperCase() !== 'ENABLED' || row.adProduct !== 'SP') {
+      orphanRows++;
+      continue;
+    }
     const brand = row.brand || null;
     const segment = brand ? rfSegment(brand, row.name) : null;
-    campaigns.set(String(row.campaignId), {
-      campaignId: String(row.campaignId),
+    campaigns.set(String(i.campaignId), {
+      ...i,
       name: row.name || '',
       adProduct: row.adProduct || '',
       dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
@@ -1270,38 +1389,8 @@ function evaluateWeek({ census, rows, window }) {
       adGroupId: row.adGroupId || null,
       brand,
       segment,
-      grossMargin: segment ? MARGINS[segment] : null,
-      // The week carries NO conversion metrics. Every weekly signal is built
-      // from spend, clicks and impressions, which are final the day they
-      // happen. Conversions are incomplete for 7 days after the click.
-      spend7: 0, clicks7: 0, impressions7: 0,
-      // The baseline is the comparison for every "versus normal" check, and it
-      // ends 8+ days before the run, so its conversion data IS settled.
-      spend28: 0, clicks28: 0, impressions28: 0, sales28: 0,
-      // Per-day, because a week total cannot tell a campaign that spent evenly
-      // from one that was clipped on three days and idle on four.
-      spendByDate: new Map()
+      grossMargin: segment ? MARGINS[segment] : null
     });
-  }
-
-  // ── metrics fold onto the spine ──
-  // A report row for a campaign the census does not list is counted rather
-  // than dropped: it means the snapshot is stale, and that is worth saying.
-  let orphanRows = 0;
-  for (const r of rows) {
-    const c = campaigns.get(r.campaignId);
-    if (!c) { orphanRows++; continue; }
-    if (r.date >= window.weekStart && r.date <= window.weekEnd) {
-      c.spend7 += r.cost;
-      c.clicks7 += r.clicks;
-      c.impressions7 += r.impressions;
-      c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
-    } else if (r.date >= window.baseStart && r.date <= window.baseEnd) {
-      c.spend28 += r.cost;
-      c.clicks28 += r.clicks;
-      c.impressions28 += r.impressions;
-      c.sales28 += r.sales;
-    }
   }
 
   // ── derived ──
@@ -1345,7 +1434,7 @@ function evaluateWeek({ census, rows, window }) {
       const atCap = c.dailyBudget * RF_CONFIG.CAP_DAY_RATIO;
       let days = 0;
       let peak = 0;
-      for (const daySpend of c.spendByDate.values()) {
+      for (const daySpend of (c.daily7 || [])) {
         if (daySpend >= atCap) days++;
         if (daySpend > peak) peak = daySpend;
       }
@@ -1538,6 +1627,33 @@ function evaluateWeek({ census, rows, window }) {
     coverage: { enabled, evaluated: enabled, withSpend, neverActive,
                 orphanRows, unmapped, noBudget }
   };
+}
+
+function evaluateWeek({ census, rows, window }) {
+  const { inputs, orphanRows } = rfBuildInputs({ census, rows, window });
+  const result = rfDecideAll({ inputs, census, window });
+  result.coverage.orphanRows += orphanRows;
+  result.inputs = inputs;
+  return result;
+}
+
+// The stored weekly run: what the reports said, nothing decided. The checks are
+// re-run on every read, so a budget applied ten minutes ago or an edited
+// threshold shows up without another report.
+const RF_RUN_KEY = 'weekly:lastrun';
+
+async function rfSaveRun(window, inputs) {
+  await kv.set(RF_RUN_KEY, { window, inputs, collectedAt: new Date().toISOString() });
+}
+
+async function rfLoadRun() {
+  try {
+    const run = await kv.get(RF_RUN_KEY);
+    return (run && Array.isArray(run.inputs) && run.inputs.length) ? run : null;
+  } catch (err) {
+    console.error('[REDFLAGS] stored run load failed:', err.message);
+    return null;
+  }
 }
 
 // A capped campaign's real demand is unobservable — it was cut off before
@@ -1830,7 +1946,13 @@ const BW_CONFIG = {
   // Capped, carried over from the weekly: the doc asks for time-in-budget,
   // which Amazon exposes only in the console Budget Report.
   CAP_DAY_RATIO:       0.95,
-  CAP_DAYS_MIN:        8      // of 14, the same proportion the weekly uses
+  CAP_DAYS_MIN:        8,     // of 14, the same proportion the weekly uses
+  // The cron fetches every Tuesday; this cadence acts every other one. Fresh
+  // data is adopted automatically once a fortnight has passed and is otherwise
+  // offered for import, so an off-cycle run during a seasonal peak is a choice
+  // rather than a special case. Measured from the last ADOPTION, so a missed
+  // cron is picked up the following week instead of skipping a fortnight.
+  ADOPT_AFTER_DAYS:    13
 };
 
 // The ladders the monthly posture shifts along. "Scale brands get one tier of
@@ -2170,8 +2292,47 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
 // decision that can disagree with the current rules.
 const BW_RUN_KEY = 'biweekly:lastrun';
 
-async function bwSaveRun(window, inputs) {
-  await kv.set(BW_RUN_KEY, { window, inputs, collectedAt: new Date().toISOString() });
+async function bwSaveRun(window, inputs, collectedAt) {
+  await kv.set(BW_RUN_KEY, {
+    window, inputs,
+    collectedAt: collectedAt || new Date().toISOString(),
+    adoptedAt: new Date().toISOString()
+  });
+}
+
+// The most recent fetch, which may or may not be what the page is deciding
+// from. Kept apart from the adopted run so fresh data never silently changes
+// recommendations mid-fortnight.
+const BW_AVAILABLE_KEY = 'biweekly:available';
+
+async function bwSaveAvailable(window, inputs) {
+  await kv.set(BW_AVAILABLE_KEY, { window, inputs, fetchedAt: new Date().toISOString() });
+}
+
+async function bwLoadAvailable() {
+  try {
+    const a = await kv.get(BW_AVAILABLE_KEY);
+    return (a && Array.isArray(a.inputs) && a.inputs.length) ? a : null;
+  } catch (err) {
+    console.error('[BIWEEKLY] available load failed:', err.message);
+    return null;
+  }
+}
+
+// Adopts the latest fetch when a fortnight has passed since the last adoption,
+// or when there is nothing adopted at all. Returns whether it did.
+async function bwAdoptIfDue() {
+  const [available, run] = await Promise.all([bwLoadAvailable(), bwLoadRun()]);
+  if (!available) return false;
+  if (!run) {
+    await bwSaveRun(available.window, available.inputs, available.fetchedAt);
+    return true;
+  }
+  const since = Date.parse(run.adoptedAt || run.collectedAt || 0);
+  const days = (Date.now() - since) / 86400000;
+  if (!Number.isFinite(days) || days < BW_CONFIG.ADOPT_AFTER_DAYS) return false;
+  await bwSaveRun(available.window, available.inputs, available.fetchedAt);
+  return true;
 }
 
 async function bwLoadRun() {
@@ -2358,8 +2519,8 @@ async function handleBiweeklyGet(req, res) {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
 
-    const [run, census, postures] = await Promise.all([
-      bwLoadRun(), loadCensus(), bwLoadPostures()
+    const [run, census, postures, available] = await Promise.all([
+      bwLoadRun(), loadCensus(), bwLoadPostures(), bwLoadAvailable()
     ]);
     if (!run) return res.status(200).json({ success: true, empty: true });
     if (!census.campaigns.length) {
@@ -2374,16 +2535,45 @@ async function handleBiweeklyGet(req, res) {
       recentRaises: bwRecentRaises(census.changes, run.window)
     });
 
+    // Newer data is offered, never imposed: adopting it mid-fortnight would
+    // change every recommendation under you without asking.
+    const newer = available && Date.parse(available.fetchedAt) > Date.parse(run.collectedAt || 0)
+      ? { fetchedAt: available.fetchedAt, window: available.window }
+      : null;
+
     return res.status(200).json({
       success: true, window: run.window, config: BW_CONFIG, postures,
       deviations: BW_SPEC_DEVIATIONS,
       censusSyncedAt: census.syncedAt,
       collectedAt: run.collectedAt,
+      adoptedAt: run.adoptedAt,
+      newer,
       ...result
     });
   } catch (error) {
     console.error('[BIWEEKLY GET] Error:', error);
     return res.status(500).json({ error: 'Biweekly-get failed: ' + error.message });
+  }
+}
+
+// Adopts the most recent fetch on demand, which is what makes an off-cycle run
+// possible: during a seasonal peak the doc moves a brand to weekly budget
+// review, and this is that, without a special case in the schedule.
+async function handleBiweeklyImport(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const available = await bwLoadAvailable();
+    if (!available) {
+      return res.status(200).json({ success: false, error: 'No newer data has been fetched yet.' });
+    }
+    await bwSaveRun(available.window, available.inputs, available.fetchedAt);
+    return res.status(200).json({ success: true, window: available.window,
+                                  collectedAt: available.fetchedAt });
+  } catch (error) {
+    console.error('[BIWEEKLY IMPORT] Error:', error);
+    return res.status(500).json({ error: 'Import failed: ' + error.message });
   }
 }
 
@@ -2477,10 +2667,167 @@ async function handleBiweeklyPosture(req, res) {
   }
 }
 
-export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
+// ═════════════════════════════════════════════════════════════════════════════
+// TUESDAY CRON — fetches both cadences' reports before the working day
+// ═════════════════════════════════════════════════════════════════════════════
+// Amazon's report queue is the bottleneck, not report size: the same single
+// campaign report took ~30 minutes when requested around 07:40 Eastern and ~5
+// minutes later the same morning. Both reports sat PENDING, meaning queued and
+// not started. So the fix is not to ask for less — it is to not be waiting.
+//
+// Two scheduled runs, because api/adspend.js is capped at 60 seconds and a
+// queue can sit for half an hour:
+//
+//   cron-ads-request   resolves both windows, fires three reports, stashes ids
+//   cron-ads-collect   polls, downloads, stores. Idempotent, and scheduled
+//                      twice so a slow queue is picked up by the later slot.
+//
+// Unauthenticated, like every other cron handler in this file and in orders.js.
+// The blast radius is Amazon report quota: nothing here writes a budget.
+//
+// Runs DAILY and checks the weekday itself rather than relying on a
+// day-of-week cron expression — every existing schedule in vercel.json is
+// daily or monthly, so that support is untested here and six no-op invocations
+// a week cost nothing.
+
+const ADS_CRON_KEY = 'ads:cron:pending';
+const ADS_CRON_DAY = 2;   // Tuesday, in Pacific terms — see below
+
+// Pacific, to match every window in this file. A UTC-naive weekday check would
+// fire on Monday evening Pacific during the hours the cron actually runs.
+function adsCronIsRunDay(nowInstant) {
+  const d = new Date(_ptDate(nowInstant) + 'T00:00:00Z');
+  return d.getUTCDay() === ADS_CRON_DAY;
+}
+
+async function handleCronAdsRequest(req, res) {
+  try {
+    if (!adsCronIsRunDay(new Date())) {
+      return res.status(200).json({ success: true, skipped: 'not the run day' });
+    }
+    const missing = missingAdsCredentials();
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing Advertising API credentials: ${missing.join(', ')}` });
+    }
+
+    // The census decides which campaigns are evaluated and supplies every
+    // budget, so it is refreshed before the reports rather than left to
+    // whenever someone last opened Campaign Overview.
+    let censusError = null;
+    try {
+      await acRunSync({});
+    } catch (err) {
+      censusError = err.message;
+      console.error('[ADS CRON] census refresh failed:', err.message);
+    }
+
+    const weekly = resolveWindow(new Date());
+    const biweekly = resolveBiweeklyWindow(new Date());
+    const accessToken = await getAdsAccessToken();
+
+    // Three reports: the two cadences use different windows, and the combined
+    // span is over Amazon's 31-day cap.
+    const specs = [
+      { key: 'spWeek', ...reportSpec('spWeek', weekly) },
+      { key: 'spBase', ...reportSpec('spBase', weekly) },
+      { key: 'spBw',   ...bwReportSpec('spBw', biweekly) }
+    ];
+
+    const reports = [];
+    const failures = [];
+    for (const spec of specs) {
+      try {
+        const r = await requestCampaignReport(accessToken, spec);
+        reports.push({ key: spec.key, reportId: r.reportId, adopted: !!r.adopted });
+      } catch (err) {
+        console.error(`[ADS CRON] ${spec.key} failed:`, err.message);
+        failures.push({ key: spec.key, error: err.message,
+                        window: `${spec.start}..${spec.end}` });
+      }
+      await sleep(600);
+    }
+
+    await kv.set(ADS_CRON_KEY, {
+      weekly, biweekly, reports, failures,
+      requestedAt: new Date().toISOString(), collected: false
+    });
+
+    return res.status(200).json({ success: true, requested: reports.length, failures, censusError });
+  } catch (error) {
+    console.error('[ADS CRON REQUEST] Error:', error);
+    return res.status(500).json({ error: 'Cron request failed: ' + error.message });
+  }
+}
+
+// Safe to call repeatedly: it does nothing once a pending batch is collected,
+// which is what lets a second slot exist purely as a safety net.
+async function handleCronAdsCollect(req, res) {
+  try {
+    const pending = await kv.get(ADS_CRON_KEY);
+    if (!pending || !Array.isArray(pending.reports) || !pending.reports.length) {
+      return res.status(200).json({ success: true, skipped: 'nothing pending' });
+    }
+    if (pending.collected) {
+      return res.status(200).json({ success: true, skipped: 'already collected' });
+    }
+
+    const census = await loadCensus();
+    if (!census.campaigns.length) {
+      return res.status(200).json({ success: false, error: 'no campaign snapshot to evaluate against' });
+    }
+
+    const accessToken = await getAdsAccessToken();
+    const rowsByKey = {};
+    const notReady = [];
+    for (const { key, reportId } of pending.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const url = status.url || status.location;
+        if (!url) { notReady.push({ key, status: status.status || 'unknown' }); continue; }
+        const raw = await withAdsRetry(() => downloadReport(url));
+        rowsByKey[key] = rfNormalizeRows(raw, 'SP');
+      } catch (err) {
+        console.error(`[ADS CRON] ${key} download failed:`, err.message);
+        notReady.push({ key, status: 'error: ' + err.message });
+      }
+    }
+
+    // All or nothing per cadence: half a window is worse than none, because a
+    // missing baseline makes every campaign look like it collapsed.
+    const stored = [];
+    if (rowsByKey.spWeek && rowsByKey.spBase) {
+      const { inputs } = rfBuildInputs({
+        census, rows: [...rowsByKey.spWeek, ...rowsByKey.spBase], window: pending.weekly
+      });
+      await rfSaveRun(pending.weekly, inputs);
+      stored.push('weekly');
+    }
+    if (rowsByKey.spBw) {
+      const { inputs } = bwBuildInputs({ census, rows: rowsByKey.spBw, window: pending.biweekly });
+      await bwSaveAvailable(pending.biweekly, inputs);
+      // The bi-weekly is an action cadence on a fortnightly rhythm, so fresh
+      // data is offered rather than imposed — except when a fortnight has
+      // passed, which is the scheduled run.
+      if (await bwAdoptIfDue()) stored.push('biweekly (auto-adopted)');
+      else stored.push('biweekly (available to import)');
+    }
+
+    const done = stored.length > 0 && !notReady.length;
+    await kv.set(ADS_CRON_KEY, { ...pending, collected: done, lastCollectAt: new Date().toISOString() });
+
+    return res.status(200).json({ success: true, stored, notReady, collected: done });
+  } catch (error) {
+    console.error('[ADS CRON COLLECT] Error:', error);
+    return res.status(500).json({ error: 'Cron collect failed: ' + error.message });
+  }
+}
+
+export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
+         rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
          rfRecommendBid, rfDecomposeSpend,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
          bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
+         bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };

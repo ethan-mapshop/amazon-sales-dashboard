@@ -39,6 +39,18 @@
     {
       "path": "/api/orders?action=cron-data-check",
       "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/adspend?action=cron-ads-request",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/adspend?action=cron-ads-collect",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/adspend?action=cron-ads-collect&slot=2",
+      "schedule": "0 12 * * *"
     }
   ],
   "functions": {

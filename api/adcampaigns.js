@@ -1614,7 +1614,7 @@ function _ptDate(instant) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-export { acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
+export { acRunSync, acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
          acPlacementsSummary, acApplyBrandOverride, acKnownBrands,
          acValidateAmazonFields, acCollectItemErrors, acAdsWrite, acJoinDefaultBids,

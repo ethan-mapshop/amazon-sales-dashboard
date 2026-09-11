@@ -1,19 +1,10 @@
 // The bi-weekly decision tree, checked against Amazon_Ad_Management_BiWeekly.docx.
 // Every threshold here is quoted from that doc. This cadence WRITES, so a wrong
 // branch moves real money — Tier 1 cuts a live campaign to $1.
-import fs from 'fs';
-import path from 'path';
-import { pathToFileURL, fileURLToPath } from 'url';
+import { loadAdspend } from './harness.mjs';
 
-// The module imports @vercel/kv, which does not resolve outside Vercel, so a
-// stubbed copy is written next to this file and imported instead. The copy is
-// gitignored; the test is not.
-const here = path.dirname(fileURLToPath(import.meta.url));
-const src = fs.readFileSync(path.join(here, '..', 'api', 'adspend.js'), 'utf8')
-  .replace(/^import \{ kv \} from '@vercel\/kv';$/m, 'const kv = null;');
-const f = path.join(here, '.bw_testable.mjs');
-fs.writeFileSync(f, src);
-const M = await import(pathToFileURL(f).href);
+// Pure decision functions only, so no kv stub is handed in.
+const { M, cleanup } = await loadAdspend('bw');
 
 let fails = 0;
 const ok = (c, l, d = '') => { if (!c) fails++; console.log(`  ${c ? 'OK  ' : 'FAIL'} ${l}${d ? '  ' + d : ''}`); };
