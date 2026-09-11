@@ -14,6 +14,12 @@
     // then, and because a settled month never changes again there is nothing
     // to refresh: which day you read it on is entirely up to you.
     //
+    // RUNNING it, though, only works from the 15th. Before that the target
+    // slides back an extra month to find one that has settled, and Amazon has
+    // already dropped the comparison month: it keeps 95 days of Sponsored
+    // Products reporting and 60 of Sponsored Brands. The server refuses that
+    // case and says so rather than returning a half-built review.
+    //
     // Everything is prefixed `mo`. These files share one global scope, so
     // escapeHtml / formatNumber / _svTimeAgo are CALLED, never redefined.
     //
@@ -240,6 +246,11 @@
             Steady or Constrain &mdash; which is what the bi-weekly reads to decide how hard to
             push that brand. The two Sponsored Brands campaigns are shown underneath, since
             neither faster cadence covers them.
+            <div style="margin-top: 1rem; opacity: 0.8;">
+              Runs from the 15th of the month onward. Before then it would have to reach two
+              months back, and Amazon only keeps 95 days of Sponsored Products reporting and
+              60 of Sponsored Brands, so the comparison month is already gone.
+            </div>
           </div>
         </div>`;
     }

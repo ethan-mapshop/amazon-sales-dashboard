@@ -437,6 +437,103 @@ console.log('\nmoLoadBrandSales  \u2014 total sales, which no ad report can give
   c2();
 }
 
+console.log('\nRETENTION  \u2014 how far back Amazon still has anything');
+
+// Separate from the 31-day cap on how long one request may span. These two
+// numbers came from Amazon's own refusals on 2026-09-11, and they differ by ad
+// product, which is what made an off-cadence run fail in two different ways.
+ok(M.REPORT_RETENTION_DAYS.sp === 95 && M.REPORT_RETENTION_DAYS.sb === 60,
+   'Sponsored Products keeps 95 days, Sponsored Brands 60');
+
+{
+  const now = new Date('2026-09-11T18:00:00Z');
+  ok(M.reportRetentionStart('sp', now) === '2026-06-08',
+     'the Sponsored Products floor matches what Amazon said',
+     'its refusal named 2026-06-08 exactly');
+  ok(M.reportRetentionStart('sb', now) === '2026-07-13',
+     'and so does the Sponsored Brands floor');
+}
+
+{
+  // The run that failed. On the 11th the target slides back two months, and
+  // the comparison month is then over 100 days old.
+  const now = new Date('2026-09-11T18:00:00Z');
+  const a = M.moAvailability(M.resolveMonthlyWindow(now), now);
+  ok(a.spMonth.available === true, 'on the 11th the target month is still there');
+  ok(a.spPrior.available === false,
+     'but the month before it has aged out',
+     'this is the spPrior 400 from the failed run');
+  ok(a.sbMonth.available === false,
+     'and Sponsored Brands has too, at only 60 days',
+     'the same month the Sponsored Products report could still supply');
+}
+
+{
+  const now = new Date('2026-09-15T18:00:00Z');
+  const a = M.moAvailability(M.resolveMonthlyWindow(now), now);
+  ok(Object.values(a).every(x => x.available),
+     'four days later, on the cadence, all three fit',
+     'the settle day and the retention window only overlap from the 15th');
+}
+
+{
+  // Every day the review can be run, for three years. The Sponsored Products
+  // halves must always fit, or the cadence itself is wrong.
+  let worstSp = -99, worstSb = -99, badSpDate = null, badSbDate = null;
+  for (let y = 2026; y <= 2028; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      for (let d = 15; d <= last; d++) {
+        const iso = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const now = new Date(iso + 'T18:00:00Z');
+        const a = M.moAvailability(M.resolveMonthlyWindow(now), now);
+        const over = (k, lim) => M.daySpan(a[k].floor, a[k].start) - 1;
+        if (!a.spPrior.available && over('spPrior') > worstSp) { worstSp = 1; badSpDate = iso; }
+        if (!a.sbMonth.available && !badSbDate) badSbDate = iso;
+      }
+    }
+  }
+  ok(badSpDate === null,
+     'both Sponsored Products months fit on every day from the 15th onward',
+     'four days of margin in the worst case, which is what makes the cadence safe');
+  ok(badSbDate === '2026-01-31',
+     'Sponsored Brands misses only on the last day of a long month after another',
+     `first such day: ${badSbDate}`);
+}
+
+{
+  const now = new Date('2026-09-11T18:00:00Z');
+  const why = M.moUnavailableReason(M.moAvailability(M.resolveMonthlyWindow(now), now), now);
+  ok(/2026-06/.test(why) && /95-day/.test(why),
+     'the refusal names the month and the limit rather than echoing a raw 400');
+  ok(/runs from the 15th/.test(why) && /today is the 11th/.test(why),
+     'and says when it will work instead',
+     'a 400 from Amazon says none of this');
+}
+
+{
+  // The local check has to refuse before a request is sent, for the same
+  // reason the 31-day cap does: a doomed request still costs quota.
+  let threw = '';
+  try {
+    M.buildReportBody('sb', '2020-01-01', '2020-01-31', ['date', 'campaignId', 'cost']);
+  } catch (err) { threw = err.message; }
+  ok(/retention|reaches back/i.test(threw),
+     'building a report body outside retention throws locally',
+     threw || '(it did not throw)');
+}
+
+{
+  // The cadences that are nowhere near the limit must be untouched by it.
+  const now = new Date('2026-09-11T18:00:00Z');
+  const w = M.resolveWindow(now);
+  const b = M.resolveBiweeklyWindow(now);
+  const spFloor = M.reportRetentionStart('sp', now);
+  ok(w.baseStart > spFloor && b.priorStart > spFloor,
+     'the weekly baseline and the bi-weekly prior half are well inside retention',
+     'neither reaches past about 36 days, so this check never fires for them');
+}
+
 cleanup();
 console.log(fails === 0 ? '\nmonthly: all assertions pass\n' : `\nmonthly: ${fails} FAILED\n`);
 process.exit(fails === 0 ? 0 : 1);

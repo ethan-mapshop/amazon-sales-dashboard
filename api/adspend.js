@@ -1003,6 +1003,25 @@ const RF_COLUMNS = {
 // are contiguous and total 35 days.
 const MAX_REPORT_DAYS = 31;
 
+// How far back each report type still HAS data, which is a separate limit from
+// how long a single request may span, and differs by ad product. Read off
+// Amazon's own refusals on 2026-09-11:
+//
+//   sp: "startDate (2026-06-01) must be equal to or after report type data
+//        retention start date (2026-06-08)"   → 95 days
+//   sb: "startDate (2026-07-01) ... (2026-07-13)"                → 60 days
+//
+// Only the monthly review reaches anywhere near these. The weekly and the
+// bi-weekly never ask for anything older than about 36 days.
+const REPORT_RETENTION_DAYS = { sp: 95, sb: 60 };
+
+// The oldest date a report of this type can still cover.
+function reportRetentionStart(product, nowInstant) {
+  const days = REPORT_RETENTION_DAYS[product];
+  if (!days) return null;
+  return _addDays(_ptDate(nowInstant || new Date()), -days);
+}
+
 // Two windows, Sponsored Products only. Rows from both are pooled and binned
 // by their own `date`, so the split is a transport detail rather than
 // something the evaluation has to know about.
@@ -1774,6 +1793,14 @@ function buildReportBody(product, start, end, columns) {
     // Caught here rather than at Amazon, where it surfaces as an opaque 4xx.
     throw new Error(`report window ${start}..${end} is ${daySpan(start, end)} days, ` +
                     `over Amazon's ${MAX_REPORT_DAYS}-day limit`);
+  }
+  // Past retention Amazon has nothing to give, and says so as an opaque 400
+  // after the request has already cost quota. Named here instead.
+  const floor = reportRetentionStart(product);
+  if (floor && start < floor) {
+    throw new Error(`report window ${start}..${end} starts before Amazon keeps ` +
+                    `${product.toUpperCase()} report data, which reaches back ` +
+                    `${REPORT_RETENTION_DAYS[product]} days to ${floor}`);
   }
   // RF_COLUMNS has no Sponsored Brands set any more, so an SB report must name
   // its own columns. Caught here rather than sending `columns: undefined`.
@@ -2849,6 +2876,50 @@ function moReportSpec(key, window) {
   return { product: 'sp', start: window.start, end: window.end };
 }
 
+// Whether each of the three reports is still inside Amazon's retention. Pure,
+// and the reason the Run button can say something useful before spending quota.
+//
+// The arithmetic works out cleanly on the cadence and badly off it. From the
+// 15th onward both Sponsored Products months always fit, with at least four
+// days to spare in the worst case. Sponsored Brands fits too, except on the
+// very last day of a long month following another long month, where it is a
+// single day short. Run BEFORE the 15th, though, and the target slides back an
+// extra month: the prior month is then ~100 days old and gone, and so is
+// Sponsored Brands.
+function moAvailability(window, nowInstant) {
+  const now = nowInstant || new Date();
+  const out = {};
+  for (const key of MO_REPORT_KEYS) {
+    const spec = moReportSpec(key, window);
+    const floor = reportRetentionStart(spec.product, now);
+    out[key] = {
+      product: spec.product,
+      start: spec.start,
+      floor,
+      available: !floor || spec.start >= floor
+    };
+  }
+  return out;
+}
+
+// Says what is missing and, where it is knowable, when it will not be. The
+// answer is almost always "the 15th", because that is the only day on which
+// both halves of the comparison are simultaneously settled and still retained.
+function moUnavailableReason(availability, nowInstant) {
+  const day = Number(_ptDate(nowInstant || new Date()).slice(8, 10));
+  const a = availability.spPrior;
+  const early = day < MO_CONFIG.SETTLE_DAY;
+  return `The month before (${a.start.slice(0, 7)}) is past Amazon's ` +
+         `${REPORT_RETENTION_DAYS.sp}-day retention, which now reaches back only to ${a.floor}. ` +
+         (early
+           ? `The monthly review runs from the ${MO_CONFIG.SETTLE_DAY}th: today is the ${day}th, ` +
+             'so it is still reaching two months back for a month that has settled, and the ' +
+             'comparison month before that has already aged out. Wait for the ' +
+             `${MO_CONFIG.SETTLE_DAY}th and both fit comfortably.`
+           : 'This is unexpected on or after the ' + MO_CONFIG.SETTLE_DAY +
+             'th and worth looking at.');
+}
+
 // ─── INPUTS ──────────────────────────────────────────────────────────────────
 // Metrics only, the same discipline as the other two cadences. Nothing about a
 // brand, a margin or a posture is written down, so changing a threshold or a
@@ -3204,8 +3275,23 @@ async function moRequestReports(accessToken, window) {
   const failures = [];
   const notes = [];
 
+  const availability = moAvailability(window);
+
   for (const key of MO_REPORT_KEYS) {
     const spec = moReportSpec(key, window);
+    // Known to be outside retention: not requested at all, because a request
+    // that cannot succeed still spends quota and comes back as a raw 400.
+    if (!availability[key].available) {
+      failures.push({
+        key,
+        error: `${spec.start} is past Amazon's ${REPORT_RETENTION_DAYS[spec.product]}-day ` +
+               `retention for ${spec.product.toUpperCase()} reports, which reaches back ` +
+               `to ${availability[key].floor}.`,
+        window: `${spec.start}..${spec.end}`,
+        retention: availability[key].floor
+      });
+      continue;
+    }
     try {
       const r = await requestCampaignReport(accessToken, spec);
       reports.push({ key, ...r });
@@ -3250,6 +3336,15 @@ async function handleMonthlyRequest(req, res) {
     }
 
     const window = resolveMonthlyWindow(new Date());
+
+    // The month-over-month comparison is half of what a posture reads, so a
+    // run without the prior month is refused rather than quietly delivered
+    // with every trend blank.
+    const availability = moAvailability(window);
+    if (!availability.spPrior.available) {
+      return res.status(409).json({ error: moUnavailableReason(availability), window, availability });
+    }
+
     const accessToken = await getAdsAccessToken();
     const { reports, failures, notes } = await moRequestReports(accessToken, window);
 
@@ -3330,6 +3425,7 @@ async function handleMonthlyCollect(req, res) {
     const accessToken = await getAdsAccessToken();
     const rows = [];
     const notes = [];
+    const got = new Set();
     for (const { key, reportId } of parsed.reports) {
       try {
         const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
@@ -3337,12 +3433,27 @@ async function handleMonthlyCollect(req, res) {
         if (!url) { notes.push({ key, note: `report not ready (${status.status || 'unknown'})` }); continue; }
         const raw = await withAdsRetry(() => downloadReport(url));
         rows.push(...rfNormalizeRows(raw, key === 'sbMonth' ? 'SB' : 'SP'));
+        got.add(key);
       } catch (err) {
         console.error(`[MONTHLY COLLECT] ${key} failed:`, err.message);
         notes.push({ key, note: 'download failed: ' + err.message });
       }
     }
     if (!rows.length) return res.status(502).json({ error: 'No report rows could be downloaded.', notes });
+
+    // Both Sponsored Products months or nothing, matching what the cron
+    // requires. Storing the target month alone looks like a working review
+    // while every month-over-month trend is silently blank, and the trend is
+    // half of what a posture recommendation reads.
+    if (!got.has('spMonth') || !got.has('spPrior')) {
+      const missing = ['spMonth', 'spPrior'].filter(k => !got.has(k))
+        .map(k => ADS_CRON_LABELS[k] || k).join(' and ');
+      return res.status(502).json({
+        error: `Cannot build the review without both months: the ${missing} did not arrive. ` +
+               'Nothing was stored, so the previous run is untouched.',
+        notes
+      });
+    }
 
     const { inputs, orphanRows } = moBuildInputs({ census, rows, window });
     await moSaveRun(window, inputs);
@@ -4068,6 +4179,7 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay, adsCronReport,
          moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
          moLoadBrandSales, moIsWholeMonth, moShiftMonth, moMonthBounds,
-         moCronReport, moMonthLabel,
+         moCronReport, moMonthLabel, moAvailability, moUnavailableReason,
+         reportRetentionStart, REPORT_RETENTION_DAYS,
          MO_CONFIG, MO_REPORT_KEYS, MO_SPEC_DEVIATIONS, TARGET_ACOS,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
