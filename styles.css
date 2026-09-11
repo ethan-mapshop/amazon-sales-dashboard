@@ -55,6 +55,11 @@
     .auth-expired-banner.warn {
       background: var(--accent-orange, #f97316);
     }
+    /* Confirmation after a renew. Green because the point is that the banner
+       says something different on success than it does on failure. */
+    .auth-expired-banner.done {
+      background: var(--success, #16a34a);
+    }
     .auth-expired-banner button {
       padding: 0.4rem 1rem;
       background: rgba(255, 255, 255, 0.95);

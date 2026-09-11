@@ -11,17 +11,46 @@
 
     const AUTH_BANNER_WARN_MS = 5 * 60 * 1000; // warn 5 min before expiry
 
-    function showAuthBanner(state) {
-      // state: 'expired' | 'warn' | 'hide'
+    // A renew that works makes the banner disappear, which is indistinguishable
+    // from a renew that did nothing. This holds a confirmation on screen for a
+    // moment first, so success and failure look different.
+    let authBannerTimer = null;
+
+    function showAuthBanner(state, message) {
+      // state: 'expired' | 'warn' | 'done' | 'hide'
       const banner = document.getElementById('auth-expired-banner');
       const text   = document.getElementById('auth-expired-text');
       const btn    = document.getElementById('auth-expired-signin-btn');
       if (!banner || !text || !btn) return;
+
+      // Any explicit state cancels a pending auto-hide, so the periodic check
+      // cannot yank a confirmation off the screen early.
+      clearTimeout(authBannerTimer);
+      authBannerTimer = null;
+
       if (state === 'hide') {
         banner.style.display = 'none';
+        banner.classList.remove('warn', 'done');
         document.body.classList.remove('auth-banner-active');
         return;
       }
+
+      if (state === 'done') {
+        banner.classList.remove('warn');
+        banner.classList.add('done');
+        text.textContent = message || '\u2713 Sign-in renewed. You have another hour.';
+        btn.style.display = 'none';
+        banner.style.display = 'flex';
+        document.body.classList.add('auth-banner-active');
+        authBannerTimer = setTimeout(() => {
+          btn.style.display = '';
+          showAuthBanner('hide');
+        }, 4000);
+        return;
+      }
+
+      btn.style.display = '';
+      banner.classList.remove('done');
       banner.classList.toggle('warn', state === 'warn');
       const expiry  = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
       const minutes = Math.max(1, Math.ceil((expiry - Date.now()) / 60000));
@@ -37,6 +66,9 @@
     }
 
     function checkAuthExpiry() {
+      // A confirmation is showing and will hide itself. Overwriting it here
+      // would replace "renewed" with a blank screen a moment after the click.
+      if (authBannerTimer) return;
       const expiry = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
       // No saved token yet → not signed in. The initial auth UI handles
       // that case; banner stays hidden.
@@ -50,6 +82,22 @@
     // immediately, before the periodic check ticks.
     window.showAuthExpiredBanner = () => showAuthBanner('expired');
 
+    // Puts the button back after a failed or abandoned attempt. The label has
+    // to follow the banner's state: the old code always wrote 'Sign In', so a
+    // failed renew relabelled a warning banner as if the token had expired.
+    function authResetBannerButton(message) {
+      const btn  = document.getElementById('auth-expired-signin-btn');
+      const text = document.getElementById('auth-expired-text');
+      const expiry = parseInt(localStorage.getItem('tokenExpiry') || '0', 10);
+      const expired = !expiry || Date.now() >= expiry;
+      if (btn) {
+        btn.disabled = false;
+        btn.style.display = '';
+        btn.textContent = expired ? 'Sign In' : 'Renew';
+      }
+      if (message && text) text.textContent = '\u26a0 ' + message;
+    }
+
     // Run an initial check on load and every 30 seconds thereafter.
     document.addEventListener('DOMContentLoaded', () => {
       checkAuthExpiry();
@@ -58,24 +106,20 @@
       const banner = document.getElementById('auth-expired-banner');
       const btn    = document.getElementById('auth-expired-signin-btn');
       if (btn) {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           // Disable the button so the user can't double-click while
           // the OAuth popup is open.
           btn.disabled = true;
           btn.textContent = 'Opening…';
-          if (tokenClient) {
-            tokenClient.requestAccessToken();
-          } else {
-            // Token client wasn't ready (rare) — re-init and try again.
-            initializeGoogleAuth();
-            setTimeout(() => {
-              if (tokenClient) tokenClient.requestAccessToken();
-              else {
-                btn.disabled = false;
-                btn.textContent = 'Sign In';
-              }
-            }, 500);
+          const client = await authEnsureTokenClient();
+          if (client) {
+            client.requestAccessToken();
+            // From here the outcome arrives at the callback or the
+            // error_callback, both of which reset the button.
+            return;
           }
+          authResetBannerButton("Google's sign-in library did not load. " +
+                                'Reload the page and try again.');
         });
       }
     });
@@ -83,24 +127,22 @@
     // Google Auth
     function initializeGoogleAuth() {
       if (!config.clientId) return;
-      
+
       // Show sign-in button immediately
       const signInBtn = document.getElementById('signInBtn');
       if (signInBtn) signInBtn.style.display = 'inline-flex';
-      
-      // Check for saved token
-      const savedToken = localStorage.getItem('googleAccessToken');
-      const tokenExpiry = localStorage.getItem('tokenExpiry');
-      
-      if (savedToken && tokenExpiry && Date.now() < parseInt(tokenExpiry)) {
-        accessToken = savedToken;
-        displayUserInfo(null);
-        enableUpload();
-        return; // Already signed in
-      }
-      
-      // Only initialize token client if google.accounts is available
-      if (typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
+
+      // THE TOKEN CLIENT IS CREATED UNCONDITIONALLY, and this is the whole fix
+      // for Renew. It used to sit after an early return taken whenever a valid
+      // token was in storage — which is exactly the state the Renew button
+      // exists for, since a token five minutes from expiry is still valid. So
+      // tokenClient was null precisely when Renew needed it, the click fell
+      // into a fallback that called this function again, hit the same early
+      // return, and silently gave up. The banner stayed, and nothing said why.
+      //
+      // Creating the client costs nothing and prompts nobody: it is a handle,
+      // and only requestAccessToken() opens anything.
+      if (!tokenClient && typeof google !== 'undefined' && google.accounts && google.accounts.oauth2) {
         tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: config.clientId,
           scope: 'https://www.googleapis.com/auth/spreadsheets',
@@ -113,27 +155,70 @@
               // Show signed in state
               displayUserInfo(null);
               enableUpload();
-              // Hide the expiry banner if it was showing, and reset its
-              // button (it may have been left in a disabled "Opening…"
-              // state by the click handler that triggered this re-auth).
-              showAuthBanner('hide');
+              // Confirm rather than just vanishing. A banner that disappears
+              // looks the same whether the renew worked or did nothing at all,
+              // which is how this failed silently for so long.
+              //
+              // Only when a banner was actually up, though: this same callback
+              // runs on a first sign-in, and a green "renewed" appearing out of
+              // nowhere would be its own small lie.
               const renewBtn = document.getElementById('auth-expired-signin-btn');
-              if (renewBtn) {
-                renewBtn.disabled = false;
-                renewBtn.textContent = 'Sign In';
-              }
+              if (renewBtn) renewBtn.disabled = false;
+              const bannerEl = document.getElementById('auth-expired-banner');
+              const wasShowing = bannerEl && bannerEl.style.display !== 'none';
+              showAuthBanner(wasShowing ? 'done' : 'hide');
               // Kick off the data fetch for whichever page + tab is
               // active so the user lands on a populated report instead of
               // having to click around to trigger the first load.
               triggerCurrentPageLoad();
             } else {
+              authResetBannerButton('Google did not return an access token. Try again.');
               showAuthError('Failed to get access token');
             }
           },
+          // Without this, closing the popup or having it blocked left the
+          // button disabled on "Opening…" with nothing to say why.
+          error_callback: (err) => {
+            console.error('[AUTH] sign-in did not complete:', err);
+            const why = err && /popup_closed/i.test(err.type || '')
+              ? 'Sign-in window was closed before it finished.'
+              : 'Sign-in did not complete. Check that pop-ups are allowed for this site.';
+            authResetBannerButton(why);
+          }
         });
       }
+
+      // Adopt a saved token that is still good. This used to return early and
+      // skip the client creation above; now it only decides whether the user is
+      // already signed in.
+      //
+      // Guarded on accessToken because authEnsureTokenClient calls this in a
+      // loop while it waits for the Google library, and displayUserInfo
+      // rewrites the header on every call.
+      if (accessToken) return;
+      const savedToken = localStorage.getItem('googleAccessToken');
+      const tokenExpiry = localStorage.getItem('tokenExpiry');
+      if (savedToken && tokenExpiry && Date.now() < parseInt(tokenExpiry, 10)) {
+        accessToken = savedToken;
+        displayUserInfo(null);
+        enableUpload();
+      }
     }
-    
+
+    // The Google script is loaded async, so it may not have arrived when
+    // DOMContentLoaded fires. Waits briefly for it rather than guessing with a
+    // fixed delay, and reports honestly when it never shows up.
+    async function authEnsureTokenClient(waitMs = 4000) {
+      const deadline = Date.now() + waitMs;
+      while (!tokenClient && Date.now() < deadline) {
+        initializeGoogleAuth();
+        if (tokenClient) break;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(r => setTimeout(r, 150));
+      }
+      return tokenClient;
+    }
+
     // Try to initialize on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', () => {
       initializeGoogleAuth();
