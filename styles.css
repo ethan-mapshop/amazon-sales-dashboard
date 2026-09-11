@@ -1959,3 +1959,16 @@
     .bw-filter { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; }
 
     .bw-warn { color: var(--warning); }
+
+    /* Bulk selection on the bi-weekly table. The bar itself reuses the Campaign
+       Overview save-bar styles so the two pages behave and look the same. */
+    .bw-tick { width: 2rem; padding-right: 0 !important; }
+
+    .bw-tick input { margin: 0; cursor: pointer; }
+
+    #bw-save-bar {
+      position: sticky;
+      bottom: 0;
+      z-index: 20;
+      margin-top: 1rem;
+    }

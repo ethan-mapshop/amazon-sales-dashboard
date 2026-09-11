@@ -24,6 +24,14 @@
     let bwApply = {};        // { [campaignId]: { stage, message, applied } }
     let bwBound = false;
     let bwFilter = 'moves';  // 'moves' | 'all'
+    // Campaign ids ticked for a bulk write. Held as a Set rather than read off
+    // the DOM because the table is re-rendered on every filter change and after
+    // every apply, and a selection that vanished on re-render would be worse
+    // than no selection at all.
+    let bwSelected = new Set();
+    let bwBulkBusy = false;
+    let bwBulkConfirm = false;
+    let bwBulkProgress = '';
 
     function loadAdBiweekly() {
       const container = document.getElementById('adbiweekly-content');
@@ -192,6 +200,8 @@
         data.notes = [...(data.notes || []),
           ...(state.failures || []).map(f => ({ key: f.key, note: 'report not requested: ' + f.error }))];
         bwApply = {};
+        bwSelected.clear();
+        bwBulkConfirm = false;
         bwCacheSave(data);
         bwRunClear();
         bwSetStatus('');
@@ -234,13 +244,25 @@
       const rows = bwVisibleRows(data);
       container.innerHTML =
         bwCounts(data) + bwPostureBar(data) + bwBrandSummary(data) +
-        bwTable(rows, data) + bwFooter(data);
+        bwTable(rows, data) + bwSelectionBar(data, rows) + bwFooter(data);
       bwBindActions();
     }
 
     function bwVisibleRows(data) {
       const all = data.rows || [];
-      return bwFilter === 'all' ? all : all.filter(r => r.action !== 'hold');
+      if (bwFilter === 'all') return all;
+      // A row applied this session becomes a hold, which would drop it from
+      // this filter and make a successful write look like a row that vanished.
+      // After a batch you need to see what landed, not infer it from absence.
+      return all.filter(r => r.action !== 'hold' ||
+                             (bwApply[r.campaignId] || {}).stage === 'done');
+    }
+
+    // Holds and already-applied rows have nothing to write.
+    function bwApplicable(r) {
+      const st = bwApply[r.campaignId] || {};
+      return r.action !== 'hold' && r.newBudget !== null &&
+             r.newBudget !== r.dailyBudget && st.stage !== 'done';
     }
 
     function bwCounts(data) {
@@ -330,10 +352,16 @@
       if (!rows.length) {
         return toggle + `<p class="arf-none" style="padding: 1rem 0;">No budget changes recommended this run.</p>`;
       }
+      const selectable = rows.filter(bwApplicable);
+      const allTicked = selectable.length > 0 && selectable.every(r => bwSelected.has(r.campaignId));
       return toggle + `
         <div class="arf-table-wrap">
           <table class="table-fill arf-table">
             <thead><tr>
+              <th class="bw-tick"><input type="checkbox" data-bw-all
+                    ${allTicked ? 'checked' : ''}
+                    ${selectable.length ? '' : 'disabled'}
+                    title="Select every changed campaign currently shown"></th>
               <th>Campaign</th><th>Brand</th>
               <th class="arf-r">Spend</th><th class="arf-r">Sales</th><th class="arf-r">Orders</th>
               <th class="arf-r">ACoS</th><th class="arf-r">Retention</th><th class="arf-r">At cap</th>
@@ -357,6 +385,10 @@
                 : r.action === 'cut' ? 'bw-cut' : 'bw-hold';
       const pct = r.pct ? ` ${r.pct > 0 ? '+' : ''}${Math.round(r.pct * 100)}%` : '';
       return `<tr>
+        <td class="bw-tick">${bwApplicable(r)
+          ? `<input type="checkbox" data-bw-tick="${escapeHtml(r.campaignId)}"${
+              bwSelected.has(r.campaignId) ? ' checked' : ''}>`
+          : ''}</td>
         <td class="arf-name">${escapeHtml(r.campaign)}
           <div class="arf-sub">${escapeHtml(r.reason || '')}${
             r.raisedRecently
@@ -401,6 +433,57 @@
         st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message)}</div>` : ''}`;
     }
 
+    // Sticky bar for the bulk write, mirroring the one on Campaign Overview so
+    // the two pages behave the same way. It reuses that bar's styles rather
+    // than duplicating forty lines of identical CSS.
+    //
+    // It states the direction of the money before anything moves. A run can
+    // recommend reductions across dozens of live campaigns, and "12 selected"
+    // alone does not tell you whether you are about to spend more or less.
+    function bwSelectionBar(data, visibleRows) {
+      const all = data.rows || [];
+      const picked = all.filter(r => bwSelected.has(r.campaignId) && bwApplicable(r));
+      if (!picked.length) return '<div id="bw-save-bar" style="display: none;"></div>';
+
+      const tally = { increase: 0, decrease: 0, cut: 0 };
+      let net = 0;
+      for (const r of picked) { tally[r.action] = (tally[r.action] || 0) + 1; net += (r.delta || 0); }
+      const parts = [
+        tally.increase ? `${tally.increase} increase` : null,
+        tally.decrease ? `${tally.decrease} decrease` : null,
+        tally.cut ? `${tally.cut} cut` : null
+      ].filter(Boolean);
+
+      // Selections survive a filter change, so a row can be ticked and not on
+      // screen. Applying something you cannot see is exactly the hazard a bulk
+      // button introduces, so it is called out rather than left implicit.
+      const shown = new Set(visibleRows.map(r => r.campaignId));
+      const hidden = picked.filter(r => !shown.has(r.campaignId)).length;
+      const failed = picked.filter(r => (bwApply[r.campaignId] || {}).stage === 'error').length;
+
+      return `
+        <div id="bw-save-bar">
+          <div class="card aco-save-bar-inner">
+            <div class="aco-save-bar-summary">
+              <strong>${picked.length} selected</strong>
+              <span class="aco-save-bar-detail">${escapeHtml(parts.join(' \u00b7 '))} \u00b7 net ${
+                net >= 0 ? '+' : ''}${bwMoney(net)}/day</span>
+              ${hidden ? `<span class="aco-save-bar-warn">${hidden} not currently shown</span>` : ''}
+              ${failed ? `<span class="aco-save-bar-failed">${failed} failed \u2014 still selected</span>` : ''}
+            </div>
+            <div class="aco-save-bar-actions">
+              ${bwBulkBusy
+                ? `<span class="loading"></span><span class="arf-muted">${escapeHtml(bwBulkProgress)}</span>`
+                : bwBulkConfirm
+                  ? `<button class="btn btn-secondary" data-bw-bulk="cancel">Cancel</button>
+                     <button class="btn btn-primary" data-bw-bulk="go">Write ${picked.length} to Amazon</button>`
+                  : `<button class="btn btn-secondary" data-bw-bulk="clear">Clear</button>
+                     <button class="btn btn-primary" data-bw-bulk="ask">Apply selected</button>`}
+            </div>
+          </div>
+        </div>`;
+    }
+
     function bwFooter(data) {
       const c = data.coverage || {};
       const bits = [
@@ -431,19 +514,85 @@
       const el = document.getElementById('adbiweekly-content');
       if (!el) return;
       el.addEventListener('click', e => {
-        const btn = e.target.closest('[data-bw-apply], [data-bw-confirm], [data-bw-cancel], [data-bw-filter]');
+        const btn = e.target.closest(
+          '[data-bw-apply], [data-bw-confirm], [data-bw-cancel], [data-bw-filter], [data-bw-bulk]');
         if (!btn) return;
         const d = btn.dataset;
-        if (d.bwFilter) { bwFilter = d.bwFilter; const c = bwCacheLoad(); if (c) bwRender(c); }
+        if (d.bwFilter) { bwFilter = d.bwFilter; bwRerender(); }
         else if (d.bwApply) bwSetApplyStage(d.bwApply, 'confirm');
         else if (d.bwCancel) bwSetApplyStage(d.bwCancel, null);
         else if (d.bwConfirm) bwApplyBudget(d.bwConfirm);
+        else if (d.bwBulk) bwBulkClick(d.bwBulk);
       });
       el.addEventListener('change', e => {
         const sel = e.target.closest('[data-bw-posture]');
-        if (sel) bwSavePosture(sel.dataset.bwPosture, sel.value);
+        if (sel) return bwSavePosture(sel.dataset.bwPosture, sel.value);
+
+        const tick = e.target.closest('[data-bw-tick]');
+        if (tick) {
+          if (tick.checked) bwSelected.add(tick.dataset.bwTick);
+          else bwSelected.delete(tick.dataset.bwTick);
+          // A new selection invalidates a pending confirmation: you should not
+          // confirm 12 and write 13.
+          bwBulkConfirm = false;
+          return bwRerender();
+        }
+
+        const all = e.target.closest('[data-bw-all]');
+        if (all) {
+          // Only what is on screen. Ticking a header box must never select
+          // rows the current filter is hiding.
+          const data = bwCacheLoad();
+          if (!data) return;
+          for (const r of bwVisibleRows(data).filter(bwApplicable)) {
+            if (all.checked) bwSelected.add(r.campaignId);
+            else bwSelected.delete(r.campaignId);
+          }
+          bwBulkConfirm = false;
+          return bwRerender();
+        }
       });
       bwBound = true;
+    }
+
+    function bwRerender() {
+      const cached = bwCacheLoad();
+      if (cached) bwRender(cached);
+    }
+
+    function bwBulkClick(what) {
+      if (bwBulkBusy) return;
+      if (what === 'clear') { bwSelected.clear(); bwBulkConfirm = false; return bwRerender(); }
+      if (what === 'ask') { bwBulkConfirm = true; return bwRerender(); }
+      if (what === 'cancel') { bwBulkConfirm = false; return bwRerender(); }
+      if (what === 'go') return bwApplySelected();
+    }
+
+    // Sequential, never parallel: Amazon throttles, and a failure has to be
+    // attributable to one campaign. Rows that succeed leave the selection;
+    // rows that fail stay in it so a retry is one click rather than a hunt.
+    async function bwApplySelected() {
+      if (bwBulkBusy || !accessToken) return;
+      const data = bwCacheLoad();
+      if (!data) return;
+      const picked = (data.rows || []).filter(r => bwSelected.has(r.campaignId) && bwApplicable(r));
+      if (!picked.length) return;
+
+      bwBulkBusy = true;
+      bwBulkConfirm = false;
+      let done = 0;
+      for (const row of picked) {
+        bwBulkProgress = `${done} of ${picked.length}`;
+        bwRender(data);
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await bwWriteBudget(row);
+        if (ok) bwSelected.delete(row.campaignId);
+        done++;
+      }
+      bwBulkBusy = false;
+      bwBulkProgress = '';
+      bwCacheSave(data);
+      bwRender(data);
     }
 
     function bwSetApplyStage(campaignId, stage, extra) {
@@ -459,6 +608,17 @@
       if (!row || !accessToken) return;
 
       bwSetApplyStage(campaignId, 'busy');
+      await bwWriteBudget(row);
+      bwCacheSave(cached);
+      bwRender(cached);
+    }
+
+    // The single write. Mutates `row` in place so a bulk caller can save the
+    // cache once rather than after every campaign, returns whether it landed,
+    // and never throws — a batch must not stop because one row was rejected.
+    async function bwWriteBudget(row) {
+      const campaignId = row.campaignId;
+      bwApply[campaignId] = { stage: 'busy' };
       try {
         // The Campaign Overview write path: it re-reads the campaign from
         // Amazon, refuses if the budget moved since this run, and verifies by
@@ -472,24 +632,27 @@
             expected: { dailyBudget: row.dailyBudget }
           })
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.success) {
-          if (data.conflicts?.length) {
-            const c0 = data.conflicts[0];
-            throw new Error(`Amazon now has ${c0.field} = ${c0.amazonHasNow ?? '—'} (this run saw ${c0.youSaw ?? '—'}). Re-run.`);
+        const reply = await res.json().catch(() => ({}));
+        if (!res.ok || !reply.success) {
+          if (reply.conflicts?.length) {
+            const c0 = reply.conflicts[0];
+            throw new Error(`Amazon now has ${c0.field} = ${c0.amazonHasNow ?? '—'} ` +
+                            `(this run saw ${c0.youSaw ?? '—'}). Re-run.`);
           }
-          throw new Error(data.error || `Failed (${res.status})`);
+          throw new Error(reply.error || `Failed (${res.status})`);
         }
         // Keep the cached run truthful: the budget on screen is now stale.
+        bwApply[campaignId] = { stage: 'done', applied: row.newBudget };
         row.dailyBudget = row.newBudget;
         row.action = 'hold';
+        row.pct = 0;
+        row.delta = 0;
         row.reason = 'Applied this run';
-        bwCacheSave(cached);
-        bwApply[campaignId] = { stage: 'done', applied: row.dailyBudget };
-        bwRender(cached);
+        return true;
       } catch (err) {
         console.error('[BW] apply failed:', err);
-        bwSetApplyStage(campaignId, 'error', { message: err.message });
+        bwApply[campaignId] = { stage: 'error', message: err.message };
+        return false;
       }
     }
 
@@ -515,7 +678,9 @@
 
     function bwMoney(n) {
       if (typeof n !== 'number' || !isFinite(n)) return '—';
-      return '$' + formatNumber(Math.round(n * 100) / 100);
+      // The sign belongs outside the currency symbol: -$10.00, never $-10.00.
+      const v = Math.round(n * 100) / 100;
+      return (v < 0 ? '-$' : '$') + formatNumber(Math.abs(v));
     }
 
     function bwPct(n) {
