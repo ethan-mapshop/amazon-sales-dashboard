@@ -276,6 +276,131 @@ ok(adsCrons.every(c => c.schedule.endsWith('* * *')),
    'every ad cron runs daily and checks the weekday itself',
    'day-of-week cron expressions are untested in this project');
 
+console.log('\nmoCronReport  \u2014 what the 15th-of-the-month message says');
+
+const brands = (o = {}) => ({
+  count: o.count === undefined ? 4 : o.count,
+  changed: o.changed === undefined ? 2 : o.changed,
+  scale: o.scale === undefined ? 1 : o.scale,
+  hold: o.hold === undefined ? 2 : o.hold,
+  constrain: o.constrain === undefined ? 1 : o.constrain
+});
+const sbPart = { campaigns: 2, spend: 410.4, ntbOrderShare: 0.31 };
+
+{
+  const r = M.moCronReport({ month: '2026-01', brands: brands(), sb: sbPart });
+  ok(r.outcome === 'ok', 'both halves landing is a clean load');
+  ok(r.text.includes('January 2026'),
+     'the month is named, not printed as 2026-01',
+     'Slack is prose, not a data table');
+  ok(r.text.includes('2 recommendations differ'),
+     'and the actionable number leads: how many postures would change');
+  ok(r.text.includes('31% of orders new to brand'),
+     'the Sponsored Brands line carries the one metric that justifies running it');
+  ok(/Postures are set on the Monthly Review page/.test(r.text),
+     'with a reminder that nothing was applied',
+     'monthly recommends; it never writes a posture on its own');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01', brands: brands({ changed: 0, scale: 0, hold: 4, constrain: 0 }),
+                             sb: sbPart });
+  ok(r.text.includes('every posture already matches'),
+     'a month with nothing to change says so plainly');
+  ok(!/Monthly Review page/.test(r.text),
+     'and does not ask you to go and look',
+     'a message that always ends in a task stops being read');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01', brands: brands(),
+                             sb: { campaigns: 2, spend: 410, ntbOrderShare: null } });
+  ok(!/new to brand/.test(r.text),
+     'new-to-brand is left out rather than printed as 0% when Amazon refused it');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01', brands: brands(),
+                             notReady: [{ key: 'sbMonth', status: 'PENDING' }] });
+  ok(r.outcome === 'partial' && r.text.startsWith('\u26a0'),
+     'the brand table without Sponsored Brands is a partial load',
+     'two campaigns missing is not the cadence failing');
+  ok(r.text.includes('monthly Sponsored Brands report never arrived'),
+     'naming the report in words rather than by its key');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01',
+                             notReady: [{ key: 'spMonth', status: 'PENDING' },
+                                        { key: 'spPrior', status: 'PROCESSING' }] });
+  ok(r.outcome === 'none' && r.text.startsWith('\ud83d\udd34'),
+     'without both Sponsored Products months there is no review at all',
+     'a missing prior month removes the trend, which is half of what a posture reads');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01', brands: brands(), sb: sbPart,
+                             censusError: 'Amazon returned 429' });
+  ok(r.outcome === 'ok' && r.text.includes('Campaign snapshot did not refresh'),
+     'a stale census is reported even when the reports landed',
+     'every brand and margin the table reads comes from it');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01', blocked: 'Missing Advertising API credentials: ADV_CLIENT_ID' });
+  ok(r.outcome === 'none' && r.text.includes('could not be loaded') && r.text.includes('ADV_CLIENT_ID'),
+     'a run stopped before it stored anything names the reason');
+  ok(!/never arrived/.test(r.text), 'without listing reports it never got as far as');
+}
+
+{
+  const r = M.moCronReport({ month: '2026-01', brands: brands({ count: 1, changed: 1, scale: 1, hold: 0, constrain: 0 }),
+                             sb: { campaigns: 1, spend: 10, ntbOrderShare: 0.5 } });
+  ok(r.text.includes('1 brand,') && r.text.includes('1 recommendation differs'),
+     'singulars read as singulars');
+}
+
+ok(M.moMonthLabel('2026-12') === 'December 2026', 'month labels are plain English');
+ok(M.moMonthLabel('') === '' || typeof M.moMonthLabel('') === 'string',
+   'and a missing month never throws');
+
+console.log('\nTHE MONTHLY SCHEDULE  \u2014 a fixed date, because a settled month never changes');
+
+const moCrons = (vercel.crons || []).filter(c => /action=cron-monthly-/.test(c.path));
+const moRequest = moCrons.filter(c => /cron-monthly-request/.test(c.path));
+const moCollects = moCrons.filter(c => /cron-monthly-collect/.test(c.path))
+  .sort((a, b) => minuteOfDay(a.schedule) - minuteOfDay(b.schedule));
+
+ok(moRequest.length === 1 && moCollects.length >= 2,
+   `one request slot and ${moCollects.length} collect slots`);
+
+const dayOfMonth = (schedule) => schedule.split(' ')[2];
+ok(moCrons.every(c => dayOfMonth(c.schedule) === '15'),
+   'every monthly cron runs on the 15th',
+   'the day the previous month finishes attributing, whatever its length');
+ok(moCrons.every(c => c.schedule.split(' ')[4] === '*'),
+   'and on no particular weekday',
+   'day-of-month is proven in this project; day-of-week is not');
+
+const moFinals = moCollects.filter(c => /final=1/.test(c.path));
+ok(moFinals.length === 1 && moFinals[0] === moCollects[moCollects.length - 1],
+   'exactly one collect slot is final, and it is the last by clock time');
+
+ok(minuteOfDay(moRequest[0].schedule) < minuteOfDay(moCollects[0].schedule),
+   'the request runs before the first collect');
+ok(minuteOfDay(moRequest[0].schedule) >= 8 * 60,
+   'and late enough in the UTC day that Pacific is also the 15th',
+   `request at ${moRequest[0].schedule} UTC`);
+// The 15th falls on a Tuesday about one month in seven, and on those days both
+// crons run. Only the two REQUEST slots refresh the campaign census, and two
+// concurrent syncs racing to write one snapshot would double-log every change
+// they found and eat the 200-record change-log cap.
+ok(minuteOfDay(moRequest[0].schedule) !== minuteOfDay(request[0].schedule),
+   'the two census-refreshing slots never share a minute',
+   `monthly ${moRequest[0].schedule} vs Tuesday ${request[0].schedule}`);
+ok(Math.abs(minuteOfDay(moRequest[0].schedule) - minuteOfDay(request[0].schedule)) >= 60,
+   'and are at least an hour apart, which is longer than either takes');
+
 cleanup();
 console.log(fails === 0 ? '\nschedule: all assertions pass\n' : `\nschedule: ${fails} FAILED\n`);
 process.exit(fails === 0 ? 0 : 1);

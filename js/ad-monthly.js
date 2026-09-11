@@ -8,9 +8,11 @@
     // weekly and the bi-weekly because they gated both runs, so this is the
     // only place they get looked at.
     //
-    // The window is lagged 15 days, set by the slower of the two ad products.
-    // Sponsored Brands keeps crediting sales to a click date for 14 days. One
-    // lag for both means every number here covers the same days.
+    // Whole calendar months, the most recent one that is fully attributed. A
+    // month's last day keeps crediting Sponsored Brands sales for 14 days, so
+    // the previous month settles on the 15th, every month. A cron loads it
+    // then, and because a settled month never changes again there is nothing
+    // to refresh: which day you read it on is entirely up to you.
     //
     // Everything is prefixed `mo`. These files share one global scope, so
     // escapeHtml / formatNumber / _svTimeAgo are CALLED, never redefined.
@@ -232,11 +234,12 @@
         <div class="card card-flat" style="text-align: center; padding: 4rem 2rem;">
           <div style="font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem;">📅</div>
           <div style="color: var(--text-secondary); max-width: 44rem; margin: 0 auto; line-height: 1.6;">
-            Thirty days per brand against the thirty before it, ending fifteen days ago so
-            every conversion has landed. Each brand gets a recommended posture &mdash; Scale,
-            Hold Steady or Constrain &mdash; which is what the bi-weekly reads to decide how
-            hard to push that brand. The two Sponsored Brands campaigns are shown underneath,
-            since neither faster cadence covers them.
+            The most recent complete calendar month per brand, against the month before it.
+            A month settles on the 15th of the next one, once Sponsored Brands has finished
+            crediting its last day. Each brand gets a recommended posture &mdash; Scale, Hold
+            Steady or Constrain &mdash; which is what the bi-weekly reads to decide how hard to
+            push that brand. The two Sponsored Brands campaigns are shown underneath, since
+            neither faster cadence covers them.
           </div>
         </div>`;
     }
@@ -245,7 +248,7 @@
       const container = document.getElementById('admonthly-content');
       if (!container) return;
       const w = data.window || {};
-      moSetBlurb(`${w.start} to ${w.end} · collected ${
+      moSetBlurb(`${moMonthLabel(w.month)} · collected ${
         data.collectedAt ? _svTimeAgo(data.collectedAt) : 'just now'}`);
 
       container.innerHTML =
@@ -267,8 +270,8 @@
             ${c.changed ? pill(c.changed, 'differ from current', 'bw-tag') : ''}
           </div>
           <div class="bw-window">
-            30 days to ${escapeHtml(w.end || '')}
-            <span class="bw-muted">prior ${escapeHtml(w.priorStart || '')}&ndash;${escapeHtml(w.priorEnd || '')}</span>
+            ${escapeHtml(moMonthLabel(w.month))}
+            <span class="bw-muted">against ${escapeHtml(moMonthLabel(w.priorMonth))}</span>
           </div>
         </div>`;
     }
@@ -286,10 +289,11 @@
         <div class="card arf-section">
           <h4>Brand posture</h4>
           <p class="arf-blurb">
-            Sponsored Products, thirty days against the thirty before. Profit retention is
-            the decision metric; ACoS against target is shown because it is what you think
-            in. Ad share counts Sponsored Brands too, and comes from orders rather than from
-            the ad reports.
+            Sponsored Products, one calendar month against the one before. Profit retention
+            is the decision metric; ACoS against target is shown because it is what you think
+            in. Every column that drives a posture is a ratio, so unequal month lengths
+            cancel &mdash; only the spend and sales dollars read as "that month". Ad share
+            counts Sponsored Brands too, and comes from orders rather than the ad reports.
           </p>
           <div class="arf-table-wrap">
             <table class="table-fill arf-table">
@@ -507,6 +511,15 @@
       if (typeof n !== 'number' || !isFinite(n)) return '—';
       const v = Math.round(n * 100) / 100;
       return (v < 0 ? '-$' : '$') + formatNumber(Math.abs(v));
+    }
+
+    const MO_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                            'July', 'August', 'September', 'October', 'November', 'December'];
+
+    function moMonthLabel(ym) {
+      if (!/^\d{4}-\d{2}$/.test(String(ym || ''))) return String(ym || '');
+      const [y, m] = ym.split('-').map(Number);
+      return `${MO_MONTH_NAMES[m - 1] || ym} ${y}`;
     }
 
     function moPct(n) {

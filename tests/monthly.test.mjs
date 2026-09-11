@@ -13,30 +13,71 @@ const { M, cleanup } = await loadAdspend('mo');
 let fails = 0;
 const ok = (c, l, d = '') => { if (!c) fails++; console.log(`  ${c ? 'OK  ' : 'FAIL'} ${l}${d ? '  ' + d : ''}`); };
 
-console.log('\nresolveMonthlyWindow  — one lag for both ad products');
+console.log('\nresolveMonthlyWindow  \u2014 whole calendar months, settled');
+
+// A month's last day keeps crediting Sponsored Brands sales for 14 days, so the
+// previous month is complete on the 15th of the next one. That arithmetic lands
+// on the 15th whatever the month's length, which is why the rule is a day of
+// the month rather than a rolling lag.
+const at = (iso) => M.resolveMonthlyWindow(new Date(iso + 'T18:00:00Z'));
 
 {
-  const w = M.resolveMonthlyWindow(new Date('2026-09-11T12:00:00Z'));
-  ok(w.end === '2026-08-27',
-     'the window ends 15 days back, not yesterday',
-     'Sponsored Brands credits sales to a click date for 14 days');
-  ok(M.daySpan(w.start, w.end) === 30 && M.daySpan(w.priorStart, w.priorEnd) === 30,
-     'both halves span exactly 30 days');
-  ok(M.daySpan(w.priorEnd, w.start) === 2,
-     'and they are contiguous, with no day in both or neither',
-     `${w.priorEnd} then ${w.start}`);
-  ok(M.daySpan(w.start, w.end) <= M.MAX_REPORT_DAYS &&
-     M.daySpan(w.priorStart, w.priorEnd) <= M.MAX_REPORT_DAYS,
-     'each fits inside Amazon’s 31-day report cap on its own',
-     'which is why they cannot be one request');
+  const w = at('2026-02-15');
+  ok(w.month === '2026-01' && w.start === '2026-01-01' && w.end === '2026-01-31',
+     'on the 15th the previous month is the target, end to end');
+  ok(w.priorMonth === '2025-12' && w.priorStart === '2025-12-01' && w.priorEnd === '2025-12-31',
+     'and the comparison is the month before it, across a year boundary');
 }
 
 {
-  const w = M.resolveMonthlyWindow(new Date('2026-03-09T11:00:00Z'));
-  ok(M.daySpan(w.start, w.end) === 30,
-     'the span survives a daylight-saving change',
-     'the labels are calendar dates, never elapsed hours');
+  const w = at('2026-02-14');
+  ok(w.month === '2025-12',
+     'a day early falls back two months rather than reading a month still settling',
+     'January is not complete until February 15');
 }
+
+ok(at('2026-03-01').month === '2026-01' && at('2026-03-14').month === '2026-01',
+   'and stays there for the whole first half of the next month');
+ok(at('2026-03-15').month === '2026-02', 'rolling forward on the 15th');
+
+{
+  const w = at('2026-03-15');
+  ok(w.end === '2026-02-28', 'February ends on the 28th');
+  ok(M.resolveMonthlyWindow(new Date('2028-03-15T18:00:00Z')).end === '2028-02-29',
+     'and on the 29th in a leap year',
+     'the bounds are computed, never assumed');
+}
+
+{
+  const w = at('2026-01-15');
+  ok(w.month === '2025-12' && w.priorMonth === '2025-11',
+     'January reaches back into the previous year');
+}
+
+{
+  for (const d of ['2026-02-15', '2026-03-15', '2026-05-15', '2027-03-15']) {
+    const w = at(d);
+    if (M.daySpan(w.start, w.end) > M.MAX_REPORT_DAYS ||
+        M.daySpan(w.priorStart, w.priorEnd) > M.MAX_REPORT_DAYS) {
+      ok(false, `a window from ${d} exceeds the report cap`);
+    }
+  }
+  ok(true, 'every month fits inside Amazon\u2019s 31-day report cap',
+     'a 31-day month is exactly at it, which is why the halves stay separate');
+}
+
+console.log('\nmoIsWholeMonth  \u2014 the collect handler cannot count days any more');
+
+ok(M.moIsWholeMonth('2026-01-01', '2026-01-31') === true, 'a 31-day month');
+ok(M.moIsWholeMonth('2026-02-01', '2026-02-28') === true, 'a 28-day month');
+ok(M.moIsWholeMonth('2028-02-01', '2028-02-29') === true, 'a leap February');
+ok(M.moIsWholeMonth('2026-02-01', '2026-02-27') === false, 'one day short is not a month');
+ok(M.moIsWholeMonth('2026-01-02', '2026-01-31') === false, 'nor is one starting on the 2nd');
+ok(M.moIsWholeMonth('2026-01-01', '2026-02-28') === false, 'nor a span across two months',
+   'counting days would have accepted this at 59, and at 30 for a rolling window');
+
+ok(M.moShiftMonth('2026-01', -1) === '2025-12' && M.moShiftMonth('2025-12', 1) === '2026-01',
+   'month arithmetic crosses a year in both directions');
 
 console.log('\nmoReportSpec  — three reports, and only SB names its own columns');
 
@@ -60,8 +101,9 @@ console.log('\nmoReportSpec  — three reports, and only SB names its own column
 
 // ─── FIXTURES ────────────────────────────────────────────────────────────────
 
-const W = { start: '2026-07-29', end: '2026-08-27',
-            priorStart: '2026-06-29', priorEnd: '2026-07-28' };
+const W = { month: '2026-08', priorMonth: '2026-07',
+            start: '2026-08-01', end: '2026-08-31',
+            priorStart: '2026-07-01', priorEnd: '2026-07-31' };
 
 const cam = (o = {}) => ({
   campaignId: String(o.campaignId),
@@ -100,8 +142,8 @@ console.log('\nmoBuildInputs  — METRICS ONLY, binned into the two halves');
 {
   const { inputs } = M.moBuildInputs({
     census: census([cam({ campaignId: 1 })]),
-    rows: [row({ date: '2026-08-01', cost: 10, sales: 60, orders: 2 }),
-           row({ date: '2026-07-01', cost: 7, sales: 40, orders: 1 })],
+    rows: [row({ date: '2026-08-15', cost: 10, sales: 60, orders: 2 }),
+           row({ date: '2026-07-15', cost: 7, sales: 40, orders: 1 })],
     window: W
   });
   const i = inputs.sp[0];
@@ -115,7 +157,7 @@ console.log('\nmoBuildInputs  — METRICS ONLY, binned into the two halves');
 {
   const { inputs } = M.moBuildInputs({
     census: census([cam({ campaignId: 1 })]),
-    rows: [row({ date: '2026-06-01', cost: 999 }), row({ date: '2026-09-01', cost: 999 })],
+    rows: [row({ date: '2026-06-30', cost: 999 }), row({ date: '2026-09-01', cost: 999 })],
     window: W
   });
   ok(inputs.sp[0].spend === 0 && inputs.sp[0].priorSpend === 0,
@@ -344,14 +386,13 @@ console.log('\nmoLoadBrandSales  \u2014 total sales, which no ad report can give
     ],
     'orders:v2:index': ['2026-07', '2026-08'],
     'orders:v2:2026-07': [
-      { orderDate: '2026-07-28', sku: 'RR-100', itemTotal: 999 },  // day before
-      { orderDate: '2026-07-29', sku: 'RR-100', itemTotal: 100 },
-      { orderDate: '2026-07-31', sku: 'SOK-9',  itemTotal: 50 }
+      { orderDate: '2026-07-31', sku: 'RR-100', itemTotal: 999 }   // the day before
     ],
     'orders:v2:2026-08': [
-      { orderDate: '2026-08-15', sku: 'RR-100', itemTotal: 200 },
+      { orderDate: '2026-08-01', sku: 'RR-100', itemTotal: 100 },  // first day, inclusive
+      { orderDate: '2026-08-15', sku: 'SOK-9',  itemTotal: 50 },
       { orderDate: '2026-08-15', sku: 'NOBRAND', itemTotal: 70 },
-      { orderDate: '2026-08-28', sku: 'RR-100', itemTotal: 999 }   // day after
+      { orderDate: '2026-08-31', sku: 'RR-100', itemTotal: 200 }   // last day, inclusive
     ]
   });
   const { M: K, cleanup: c2 } = await loadAdspend('mo_orders', kv);
@@ -359,12 +400,12 @@ console.log('\nmoLoadBrandSales  \u2014 total sales, which no ad report can give
 
   ok(out.available === true, 'the join reports itself available when both stores have data');
   ok(out.byBrand['Hubbard Scientific'] === 300,
-     'sales inside the window are summed per brand',
+     'both endpoints of the month are included',
      `got ${out.byBrand['Hubbard Scientific']}`);
   ok(out.byBrand['South of Kings'] === 50, 'across every brand present');
   ok(!/999/.test(JSON.stringify(out.byBrand)),
-     'and a purchase one day outside the window is excluded at either edge',
-     'the window is inclusive of both endpoints and nothing else');
+     'and the last day of the previous month is not',
+     'the bucket for that month is read, then filtered by date');
   ok(out.unmappedSkus === 1 && out.unmappedSales === 70,
      'a SKU with no brand in the catalog is counted, not absorbed',
      'silently dropping it would overstate ad share');

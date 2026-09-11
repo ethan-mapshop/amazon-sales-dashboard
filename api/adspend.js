@@ -77,6 +77,8 @@ export default async function handler(req, res) {
     // follows; nothing in them writes a budget.
     if (action === 'cron-ads-request')    return handleCronAdsRequest(req, res);
     if (action === 'cron-ads-collect')    return handleCronAdsCollect(req, res);
+    if (action === 'cron-monthly-request') return handleCronMonthlyRequest(req, res);
+    if (action === 'cron-monthly-collect') return handleCronMonthlyCollect(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
@@ -2713,13 +2715,23 @@ async function handleBiweeklyPosture(req, res) {
 // targeted for March 2027, and this page is built to grow into it.
 
 const MO_CONFIG = {
-  WINDOW_DAYS: 30,
-  // ONE lag for both ad products, set by the slower of the two. Sponsored
-  // Brands keeps crediting sales to a click date for 14 days; Sponsored
-  // Products for 7. Holding both to the same window means every number on the
-  // page covers the same days, and at a monthly cadence looking at a 30-day
-  // trend, a week of extra lag costs nothing.
-  LAG_DAYS: 15,
+  // The day of the month on which the PREVIOUS calendar month is finally
+  // complete. Sponsored Brands credits a purchase to its click date for 14
+  // days, so a month's last day is still growing until 14 days later and is
+  // settled the day after that. The arithmetic lands on the 15th every month,
+  // whatever the month's length:
+  //
+  //   Jan 31 + 14 = Feb 14, complete Feb 15
+  //   Feb 28 + 14 = Mar 14, complete Mar 15
+  //   Apr 30 + 14 = May 14, complete May 15
+  //
+  // Calendar months rather than a rolling 30 days, because a rolling window
+  // drifts and matches nothing else: not how the business thinks about a
+  // month, not the month-over-month comparison, and not the order buckets,
+  // which are already stored per calendar month. Every metric that drives a
+  // posture is a ratio, so unequal month lengths cancel; only the raw spend
+  // and sales dollars are affected, and those read as "that month" anyway.
+  SETTLE_DAY: 15,
 
   // Below this a brand has not transacted enough in a month for a posture
   // change to be anything but noise.
@@ -2788,16 +2800,44 @@ const MO_SB_COLUMNS = ['date', 'campaignId', 'cost', 'clicks', 'impressions',
 const MO_SB_COLUMNS_BASE = ['date', 'campaignId', 'cost', 'clicks', 'impressions',
                             'purchases', 'sales'];
 
-// Both 30-day windows end well clear of the attribution tail, and each is
-// inside Amazon's 31-day report cap on its own. They are contiguous, so they
-// cannot be one request.
+// First and last day of a 'YYYY-MM', timezone-free.
+function moMonthBounds(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { start: `${ym}-01`, end: `${ym}-${String(last).padStart(2, '0')}` };
+}
+
+function moShiftMonth(ym, n) {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// The most recent COMPLETE calendar month, and the one before it. Before the
+// settle day the previous month is still accumulating, so the answer is the
+// month before that rather than a partially attributed one.
+//
+// A calendar month is at most 31 days, so each half is one report and still
+// inside Amazon's cap. They are contiguous, so they cannot be one request.
 function resolveMonthlyWindow(nowInstant) {
   const today = _ptDate(nowInstant);
-  const end = _addDays(today, -MO_CONFIG.LAG_DAYS);
-  const start = _addDays(end, -(MO_CONFIG.WINDOW_DAYS - 1));
-  const priorEnd = _addDays(start, -1);
-  const priorStart = _addDays(priorEnd, -(MO_CONFIG.WINDOW_DAYS - 1));
-  return { start, end, priorStart, priorEnd };
+  const day = Number(today.slice(8, 10));
+  const back = day >= MO_CONFIG.SETTLE_DAY ? -1 : -2;
+  const month = moShiftMonth(today.slice(0, 7), back);
+  const priorMonth = moShiftMonth(month, -1);
+  const t = moMonthBounds(month);
+  const p = moMonthBounds(priorMonth);
+  return { month, priorMonth,
+           start: t.start, end: t.end, priorStart: p.start, priorEnd: p.end };
+}
+
+// A stricter check than counting days: 28, 30 and 31 are all valid spans, so
+// only the endpoints can say whether a window really is a whole month.
+function moIsWholeMonth(start, end) {
+  if (!DATE_RE.test(start) || !DATE_RE.test(end)) return false;
+  if (start.slice(0, 7) !== end.slice(0, 7)) return false;
+  const b = moMonthBounds(start.slice(0, 7));
+  return start === b.start && end === b.end;
 }
 
 function moReportSpec(key, window) {
@@ -3157,6 +3197,48 @@ async function moLoadRun() {
 
 // ─── HANDLERS ────────────────────────────────────────────────────────────────
 
+// Shared by the page's Run button and by the cron, so the two cannot drift.
+// Never throws: a caller needs to know which of the three reports it got.
+async function moRequestReports(accessToken, window) {
+  const reports = [];
+  const failures = [];
+  const notes = [];
+
+  for (const key of MO_REPORT_KEYS) {
+    const spec = moReportSpec(key, window);
+    try {
+      const r = await requestCampaignReport(accessToken, spec);
+      reports.push({ key, ...r });
+    } catch (err) {
+      // New-to-brand is enrichment, not the report. If Amazon refuses those
+      // columns the base set still answers the question SB is here for.
+      const bad = rfInvalidColumns(err.message);
+      if (spec.fallbackColumns && bad.length) {
+        notes.push({ key, note: `Amazon refused ${bad.join(', ')} — retried without ` +
+                                'new-to-brand, which will read as unknown.' });
+        try {
+          const r = await requestCampaignReport(accessToken,
+            { ...spec, columns: spec.fallbackColumns, fallbackColumns: null });
+          reports.push({ key, ...r });
+          await sleep(600);
+          continue;
+        } catch (err2) {
+          console.error(`[MONTHLY] ${key} fallback failed:`, err2.message);
+          failures.push({ key, error: err2.message, window: `${spec.start}..${spec.end}`,
+                          invalidColumns: rfInvalidColumns(err2.message) });
+          await sleep(600);
+          continue;
+        }
+      }
+      console.error(`[MONTHLY] ${key} failed:`, err.message);
+      failures.push({ key, error: err.message, window: `${spec.start}..${spec.end}`,
+                      invalidColumns: bad });
+    }
+    await sleep(600);
+  }
+  return { reports, failures, notes };
+}
+
 async function handleMonthlyRequest(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
@@ -3169,42 +3251,7 @@ async function handleMonthlyRequest(req, res) {
 
     const window = resolveMonthlyWindow(new Date());
     const accessToken = await getAdsAccessToken();
-    const reports = [];
-    const failures = [];
-    const notes = [];
-
-    for (const key of MO_REPORT_KEYS) {
-      const spec = moReportSpec(key, window);
-      try {
-        const r = await requestCampaignReport(accessToken, spec);
-        reports.push({ key, ...r });
-      } catch (err) {
-        // New-to-brand is enrichment, not the report. If Amazon refuses those
-        // columns the base set still answers the question SB is here for.
-        const bad = rfInvalidColumns(err.message);
-        if (spec.fallbackColumns && bad.length) {
-          notes.push({ key, note: `Amazon refused ${bad.join(', ')} — retried without ` +
-                                  'new-to-brand, which will read as unknown.' });
-          try {
-            const r = await requestCampaignReport(accessToken,
-              { ...spec, columns: spec.fallbackColumns, fallbackColumns: null });
-            reports.push({ key, ...r });
-            await sleep(600);
-            continue;
-          } catch (err2) {
-            console.error(`[MONTHLY REQUEST] ${key} fallback failed:`, err2.message);
-            failures.push({ key, error: err2.message, window: `${spec.start}..${spec.end}`,
-                            invalidColumns: rfInvalidColumns(err2.message) });
-            await sleep(600);
-            continue;
-          }
-        }
-        console.error(`[MONTHLY REQUEST] ${key} failed:`, err.message);
-        failures.push({ key, error: err.message, window: `${spec.start}..${spec.end}`,
-                        invalidColumns: bad });
-      }
-      await sleep(600);
-    }
+    const { reports, failures, notes } = await moRequestReports(accessToken, window);
 
     if (!reports.length) {
       return res.status(502).json({
@@ -3264,9 +3311,12 @@ async function handleMonthlyCollect(req, res) {
     for (const [k, v] of Object.entries(window)) {
       if (!DATE_RE.test(v)) return res.status(400).json({ error: `${k} must be YYYY-MM-DD` });
     }
-    if (daySpan(window.start, window.end) !== MO_CONFIG.WINDOW_DAYS ||
-        daySpan(window.priorStart, window.priorEnd) !== MO_CONFIG.WINDOW_DAYS) {
-      return res.status(400).json({ error: `both windows must span exactly ${MO_CONFIG.WINDOW_DAYS} days` });
+    if (!moIsWholeMonth(window.start, window.end) ||
+        !moIsWholeMonth(window.priorStart, window.priorEnd)) {
+      return res.status(400).json({ error: 'both windows must be whole calendar months' });
+    }
+    if (moShiftMonth(window.start.slice(0, 7), -1) !== window.priorStart.slice(0, 7)) {
+      return res.status(400).json({ error: 'the prior window must be the month immediately before' });
     }
 
     const census = await loadCensus();
@@ -3400,9 +3450,12 @@ function adsCronIsRunDay(nowInstant) {
 // thrown: reporting on the run must not break the run.
 
 const ADS_CRON_LABELS = {
-  spWeek: 'weekly report (the week)',
-  spBase: 'weekly report (the baseline)',
-  spBw:   'bi-weekly report'
+  spWeek:  'weekly report (the week)',
+  spBase:  'weekly report (the baseline)',
+  spBw:    'bi-weekly report',
+  spMonth: 'monthly report (the month)',
+  spPrior: 'monthly report (the month before)',
+  sbMonth: 'monthly Sponsored Brands report'
 };
 
 const RF_BUCKET_LABELS = {
@@ -3729,6 +3782,282 @@ async function handleCronAdsCollect(req, res) {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// MONTHLY CRON — the 15th, when the previous month finally settles
+// ═════════════════════════════════════════════════════════════════════════════
+// A fixed day of the month rather than a weekday, and that is the whole point.
+// Once a calendar month is fully attributed it NEVER CHANGES AGAIN, so unlike
+// the other two cadences there is no staleness to fight: load it once and it is
+// correct forever. Which Tuesday you actually read it on is your habit, not a
+// rule this code has to encode.
+//
+// Day-of-month scheduling is already proven here — the ad spend sync and
+// several others run that way — so this uses it directly instead of running
+// daily and checking the date, which is what the Tuesday cron has to do.
+//
+// Three reports, one of them the slow Sponsored Brands one, so the same
+// request-then-collect-twice shape as the Tuesday cron.
+//
+// TIMING, which is fiddlier than it looks:
+//
+//   09:00 UTC is 01:00 PST or 02:00 PDT on the 15th, so the Pacific date the
+//   window resolver reads is the 15th too. Much earlier in the UTC day would
+//   still be the 14th in Pacific terms and would resolve to the wrong month.
+//
+//   It is also an hour AHEAD of the Tuesday cron's 10:00 request. When the 15th
+//   falls on a Tuesday both would otherwise refresh the campaign census at the
+//   same moment, and two concurrent syncs racing to write one snapshot would
+//   double-log every change they found and eat the change-log cap.
+
+const MO_CRON_KEY = 'monthly:cron:pending';
+
+const MO_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                        'July', 'August', 'September', 'October', 'November', 'December'];
+
+// '2026-01' reads as 'January 2026'. Slack is prose, not a data table.
+function moMonthLabel(ym) {
+  if (!/^\d{4}-\d{2}$/.test(String(ym || ''))) return String(ym || 'the month');
+  const [y, m] = ym.split('-').map(Number);
+  return `${MO_MONTH_NAMES[m - 1] || ym} ${y}`;
+}
+
+// Pure, so the wording is testable without a webhook.
+function moCronReport(s) {
+  const notReady = s.notReady || [];
+  const failures = s.failures || [];
+  const label = (k) => ADS_CRON_LABELS[k] || k;
+  const month = moMonthLabel(s.month);
+
+  if (s.blocked) {
+    return {
+      outcome: 'none',
+      text: `🔴 [Monthly review] ${month} could not be loaded\n` +
+            `• ${s.blocked}\n` +
+            'Nothing was stored. It can still be run from the Monthly Review page.'
+    };
+  }
+
+  // The brand table needs both Sponsored Products months; without them there is
+  // no review. Sponsored Brands missing costs two rows, not the cadence.
+  const outcome = !s.brands ? 'none' : (s.sb ? 'ok' : 'partial');
+
+  const head = outcome === 'ok'      ? `✅ [Monthly review] ${month} is in`
+             : outcome === 'partial' ? `⚠️ [Monthly review] ${month} loaded without Sponsored Brands`
+             :                         `🔴 [Monthly review] ${month} did not load`;
+
+  const lines = [head];
+
+  if (s.brands) {
+    const b = s.brands;
+    lines.push(`• Brand posture — ${plural(b.count, 'brand')}, ` +
+               (b.changed
+                 ? `${plural(b.changed, 'recommendation')} differ${b.changed === 1 ? 's' : ''} from what is set`
+                 : 'every posture already matches'));
+    lines.push(`    scale ${b.scale} · hold steady ${b.hold} · constrain ${b.constrain}`);
+  }
+
+  if (s.sb) {
+    const parts = [plural(s.sb.campaigns, 'campaign'), `$${Math.round(s.sb.spend)} spend`];
+    if (s.sb.ntbOrderShare !== null && s.sb.ntbOrderShare !== undefined) {
+      parts.push(`${Math.round(s.sb.ntbOrderShare * 100)}% of orders new to brand`);
+    }
+    lines.push(`• Sponsored Brands — ${parts.join(', ')}`);
+  }
+
+  if (s.censusError) {
+    lines.push(`• Campaign snapshot did not refresh: ${s.censusError}`);
+    lines.push('    Brands and margins came from the previous snapshot.');
+  }
+
+  for (const n of notReady) lines.push(`• The ${label(n.key)} never arrived — ${n.status}`);
+  for (const f of failures) lines.push(`• The ${label(f.key)} was never requested — ${f.error}`);
+
+  if (outcome === 'ok' && s.brands && s.brands.changed) {
+    lines.push('Nothing is applied automatically. Postures are set on the Monthly Review page.');
+  } else if (outcome !== 'ok') {
+    lines.push('Re-run it from the Monthly Review page.');
+  }
+
+  return { outcome, text: lines.join('\n') };
+}
+
+async function moCronNotify(summary, pending) {
+  const { outcome, text } = moCronReport(summary);
+  console.log(`[MONTHLY CRON] ${outcome}:\n${text}`);
+  await adsCronSlack(text);
+  if (pending) {
+    try {
+      await kv.set(MO_CRON_KEY, {
+        ...pending, notified: true, notifiedAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('[MONTHLY CRON] could not record the notification:', err.message);
+    }
+  }
+  return outcome;
+}
+
+async function handleCronMonthlyRequest(req, res) {
+  try {
+    // The schedule already says the 15th. This refuses a hand-fired call
+    // earlier in the month, which would quietly store a two-month-old window
+    // because the previous month has not settled yet.
+    const day = Number(_ptDate(new Date()).slice(8, 10));
+    if (day < MO_CONFIG.SETTLE_DAY) {
+      return res.status(200).json({ success: true,
+        skipped: `day ${day}: the previous month does not settle until the ${MO_CONFIG.SETTLE_DAY}th` });
+    }
+
+    const missing = missingAdsCredentials();
+    if (missing.length) {
+      const why = `Missing Advertising API credentials: ${missing.join(', ')}`;
+      await moCronNotify({ blocked: why }, null);
+      return res.status(500).json({ error: why });
+    }
+
+    // Brands and margins are read from the census, and it decides which
+    // campaigns are evaluated at all.
+    let censusError = null;
+    try {
+      await acRunSync({});
+    } catch (err) {
+      censusError = err.message;
+      console.error('[MONTHLY CRON] census refresh failed:', err.message);
+    }
+
+    const window = resolveMonthlyWindow(new Date());
+    const accessToken = await getAdsAccessToken();
+    const { reports, failures, notes } = await moRequestReports(accessToken, window);
+
+    if (!reports.length) {
+      await moCronNotify({
+        month: window.month,
+        blocked: 'No report could be requested. ' +
+                 failures.map(f => `${ADS_CRON_LABELS[f.key] || f.key}: ${f.error}`).join('; ')
+      }, null);
+      return res.status(200).json({ success: false, requested: 0, failures, censusError });
+    }
+
+    await kv.set(MO_CRON_KEY, {
+      window, reports, failures, notes, censusError,
+      ptDate: _ptDate(new Date()),
+      requestedAt: new Date().toISOString(), collected: false, notified: false
+    });
+
+    return res.status(200).json({ success: true, window, requested: reports.length,
+                                  failures, notes, censusError });
+  } catch (error) {
+    console.error('[MONTHLY CRON REQUEST] Error:', error);
+    await moCronNotify({ blocked: 'Could not request the reports: ' + error.message }, null);
+    return res.status(500).json({ error: 'Monthly cron request failed: ' + error.message });
+  }
+}
+
+// Idempotent, and scheduled twice so a slow queue is picked up by the later
+// slot. Only the slot carrying final=1 reports a failure: every earlier one
+// still has a retry behind it.
+async function handleCronMonthlyCollect(req, res) {
+  const final = String(req.query.final || '') === '1';
+  let pending = null;
+  try {
+    pending = await kv.get(MO_CRON_KEY);
+    if (!pending || !Array.isArray(pending.reports) || !pending.reports.length) {
+      return res.status(200).json({ success: true, skipped: 'nothing pending' });
+    }
+    if (pending.collected || pending.notified) {
+      return res.status(200).json({ success: true, skipped: 'already finished' });
+    }
+    // The record outlives the day it was written, and a month-old report id
+    // would store the wrong month as if it were current.
+    const today = _ptDate(new Date());
+    if (pending.ptDate && pending.ptDate !== today) {
+      return res.status(200).json({ success: true,
+                                    skipped: `pending batch is from ${pending.ptDate}` });
+    }
+
+    const window = pending.window;
+    const census = await loadCensus();
+    if (!census.campaigns.length) {
+      if (final) {
+        await moCronNotify({
+          month: window.month,
+          blocked: 'No campaign snapshot to evaluate against. Every brand and margin is ' +
+                   'read from it. Refresh Campaign Overview, then re-run.'
+        }, pending);
+      }
+      return res.status(200).json({ success: false, error: 'no campaign snapshot to evaluate against' });
+    }
+
+    const accessToken = await getAdsAccessToken();
+    const rowsByKey = {};
+    const notReady = [];
+    for (const { key, reportId } of pending.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const url = status.url || status.location;
+        if (!url) { notReady.push({ key, status: status.status || 'unknown' }); continue; }
+        const raw = await withAdsRetry(() => downloadReport(url));
+        rowsByKey[key] = rfNormalizeRows(raw, key === 'sbMonth' ? 'SB' : 'SP');
+      } catch (err) {
+        console.error(`[MONTHLY CRON] ${key} download failed:`, err.message);
+        notReady.push({ key, status: 'error: ' + err.message });
+      }
+    }
+
+    // Both Sponsored Products months or nothing: without the prior month every
+    // brand's trend is missing, which is half of what the posture reads.
+    const summary = {
+      month: window.month,
+      notReady,
+      failures: pending.failures || [],
+      censusError: pending.censusError || null
+    };
+    let stored = false;
+
+    if (rowsByKey.spMonth && rowsByKey.spPrior) {
+      const rows = [...rowsByKey.spMonth, ...rowsByKey.spPrior, ...(rowsByKey.sbMonth || [])];
+      const { inputs } = moBuildInputs({ census, rows, window });
+      await moSaveRun(window, inputs);
+      stored = true;
+
+      const [brandSales, postures] = await Promise.all([moLoadBrandSales(window), bwLoadPostures()]);
+      const result = moDecideAll({ inputs, census, window, brandSales: brandSales.byBrand, postures });
+      summary.brands = {
+        count: result.counts.brands, changed: result.counts.changed,
+        scale: result.counts.scale, hold: result.counts.hold, constrain: result.counts.constrain
+      };
+      if (rowsByKey.sbMonth) {
+        const sb = result.sbRows || [];
+        const orders = sb.reduce((n, r) => n + (r.orders || 0), 0);
+        const ntb = sb.reduce((n, r) => n + (r.ntbOrders || 0), 0);
+        summary.sb = {
+          campaigns: sb.length,
+          spend: sb.reduce((n, r) => n + (r.spend || 0), 0),
+          // null, never 0, when Amazon refused the columns.
+          ntbOrderShare: (orders > 0 && sb.some(r => r.ntbOrders !== null)) ? ntb / orders : null
+        };
+      }
+    }
+
+    const done = stored && !notReady.length;
+    const record = { ...pending, collected: done, lastCollectAt: new Date().toISOString() };
+
+    let outcome = null;
+    if (done || final) outcome = await moCronNotify(summary, record);
+    else await kv.set(MO_CRON_KEY, record);
+
+    return res.status(200).json({ success: true, stored, notReady, collected: done,
+                                  notified: outcome });
+  } catch (error) {
+    console.error('[MONTHLY CRON COLLECT] Error:', error);
+    if (final) {
+      await moCronNotify({ month: pending?.window?.month,
+                           blocked: 'Could not collect the reports: ' + error.message }, pending);
+    }
+    return res.status(500).json({ error: 'Monthly cron collect failed: ' + error.message });
+  }
+}
+
 export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
@@ -3738,6 +4067,7 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
          bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay, adsCronReport,
          moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
-         moLoadBrandSales,
+         moLoadBrandSales, moIsWholeMonth, moShiftMonth, moMonthBounds,
+         moCronReport, moMonthLabel,
          MO_CONFIG, MO_REPORT_KEYS, MO_SPEC_DEVIATIONS, TARGET_ACOS,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
