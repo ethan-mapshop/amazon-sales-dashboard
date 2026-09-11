@@ -32,6 +32,7 @@
     let bwBulkBusy = false;
     let bwBulkConfirm = false;
     let bwBulkProgress = '';
+    let bwRecomputing = false;
 
     function loadAdBiweekly() {
       const container = document.getElementById('adbiweekly-content');
@@ -343,10 +344,23 @@
 
     function bwTable(rows, data) {
       const total = (data.rows || []).length;
+      // Recompute re-runs the decision tree against the data this run already
+      // fetched. It refreshes DECISIONS, not DATA - the reports are what take
+      // half an hour, and they are unchanged.
+      const canRecompute = Array.isArray(data.inputs) && data.inputs.length > 0;
       const toggle = `
         <div class="bw-filter">
           <button class="arf-btn${bwFilter === 'moves' ? ' arf-btn-go' : ''}" data-bw-filter="moves">Changes only</button>
           <button class="arf-btn${bwFilter === 'all' ? ' arf-btn-go' : ''}" data-bw-filter="all">All ${total}</button>
+          <span class="bw-spacer"></span>
+          ${canRecompute
+            ? `<button class="arf-btn" data-bw-recompute${bwRecomputing ? ' disabled' : ''}
+                  title="Re-run the decision tree on this run's data. Picks up posture and threshold changes without a new report."
+               >${bwRecomputing ? 'Recomputing' : 'Refresh recommendations'}</button>`
+            : ''}
+          ${data.recomputedAt
+            ? `<span class="arf-muted">recommendations refreshed ${escapeHtml(_svTimeAgo(data.recomputedAt))}</span>`
+            : ''}
         </div>`;
 
       if (!rows.length) {
@@ -515,9 +529,11 @@
       if (!el) return;
       el.addEventListener('click', e => {
         const btn = e.target.closest(
-          '[data-bw-apply], [data-bw-confirm], [data-bw-cancel], [data-bw-filter], [data-bw-bulk]');
+          '[data-bw-apply], [data-bw-confirm], [data-bw-cancel], [data-bw-filter], ' +
+          '[data-bw-bulk], [data-bw-recompute]');
         if (!btn) return;
         const d = btn.dataset;
+        if (d.bwRecompute !== undefined) return bwRecompute();
         if (d.bwFilter) { bwFilter = d.bwFilter; bwRerender(); }
         else if (d.bwApply) bwSetApplyStage(d.bwApply, 'confirm');
         else if (d.bwCancel) bwSetApplyStage(d.bwCancel, null);
@@ -585,7 +601,7 @@
         bwBulkProgress = `${done} of ${picked.length}`;
         bwRender(data);
         // eslint-disable-next-line no-await-in-loop
-        const ok = await bwWriteBudget(row);
+        const ok = await bwWriteBudget(row, data);
         if (ok) bwSelected.delete(row.campaignId);
         done++;
       }
@@ -608,15 +624,20 @@
       if (!row || !accessToken) return;
 
       bwSetApplyStage(campaignId, 'busy');
-      await bwWriteBudget(row);
+      await bwWriteBudget(row, cached);
       bwCacheSave(cached);
       bwRender(cached);
     }
 
-    // The single write. Mutates `row` in place so a bulk caller can save the
-    // cache once rather than after every campaign, returns whether it landed,
-    // and never throws — a batch must not stop because one row was rejected.
-    async function bwWriteBudget(row) {
+    // The single write. Mutates `row` AND the matching stored input in place,
+    // both belonging to `run`, so a bulk caller can save the cache once rather
+    // than after every campaign. Returns whether it landed and never throws —
+    // a batch must not stop because one row was rejected.
+    //
+    // `run` is not optional: reloading the cache in here would mutate a
+    // different object from the one the caller is about to save, and the
+    // caller's stale copy would win.
+    async function bwWriteBudget(row, run) {
       const campaignId = row.campaignId;
       bwApply[campaignId] = { stage: 'busy' };
       try {
@@ -648,11 +669,52 @@
         row.pct = 0;
         row.delta = 0;
         row.reason = 'Applied this run';
+        // The stored input still holds the OLD budget, so a later recompute
+        // would recommend the same change over again. Keep it in step.
+        const input = (run?.inputs || []).find(i => String(i.campaignId) === String(campaignId));
+        if (input) input.dailyBudget = row.newBudget;
         return true;
       } catch (err) {
         console.error('[BW] apply failed:', err);
         bwApply[campaignId] = { stage: 'error', message: err.message };
         return false;
+      }
+    }
+
+    async function bwRecompute() {
+      const cached = bwCacheLoad();
+      if (bwRecomputing || !accessToken || !cached || !Array.isArray(cached.inputs)) return;
+      bwRecomputing = true;
+      bwSetStatus('Re-running the decision tree on this run\u2019s data\u2026');
+      bwRender(cached);
+      try {
+        const res = await fetch('/api/adspend?action=biweekly-recompute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ inputs: cached.inputs, window: cached.window })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || `Recompute failed (${res.status})`);
+
+        // Only the decisions change. The inputs, and the timestamp saying when
+        // the DATA was fetched, are carried forward so the page never implies
+        // it has fresher numbers than it does.
+        const next = { ...cached, ...data, inputs: cached.inputs, generatedAt: cached.generatedAt };
+        // A selection made against the old recommendations may no longer point
+        // at a change, so it is dropped rather than silently re-aimed.
+        bwSelected.clear();
+        bwBulkConfirm = false;
+        bwCacheSave(next);
+        bwSetStatus('');
+        // Clear the flag BEFORE rendering, or the button paints itself as
+        // still running and stays that way until the next render.
+        bwRecomputing = false;
+        bwRender(next);
+      } catch (err) {
+        console.error('[BW] recompute failed:', err);
+        bwSetStatus('', err.message);
+        bwRecomputing = false;
+        bwRender(cached);
       }
     }
 
@@ -665,9 +727,11 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
-        // The posture changes what the tree recommends, so the stored run is
-        // now out of date. Saying so beats quietly showing stale advice.
-        bwSetStatus(`Posture saved. Re-run to apply ${escapeHtml(brand)} = ${escapeHtml(posture)} to the recommendations.`);
+        // The posture changes what the tree recommends, and the tree can now be
+        // re-run without a report, so this applies immediately rather than
+        // telling you to wait half an hour for one.
+        bwSetStatus(`Posture saved \u2014 ${escapeHtml(brand)} is now ${escapeHtml(posture)}.`);
+        await bwRecompute();
       } catch (err) {
         console.error('[BW] posture save failed:', err);
         bwSetStatus('', err.message);

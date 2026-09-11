@@ -69,6 +69,7 @@ export default async function handler(req, res) {
     if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
     if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
+    if (action === 'biweekly-recompute')      return handleBiweeklyRecompute(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -1969,7 +1970,16 @@ function bwNewBudget(current, decision) {
 // ─── EVALUATE ────────────────────────────────────────────────────────────────
 // Every enabled campaign gets a row — the doc's output is the whole account,
 // not a flag list. Pure, so the tree can be exercised against the doc offline.
-function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = {} }) {
+// Split in two so the decision tree can be re-run without re-fetching reports.
+// Reports are the expensive half - a queue that has run half an hour - and the
+// tree is the half that keeps changing as thresholds and postures are tuned.
+//
+//   bwBuildInputs  aggregates report rows onto the census spine, once per run
+//   bwDecideAll    applies the tree to those inputs, as often as you like
+//
+// The inputs are compact on purpose: everything the tree reads and nothing
+// else, about 200 bytes a campaign, so a whole run travels in ~30KB.
+function bwBuildInputs({ census, rows, window }) {
   const campaigns = new Map();
   for (const row of census.campaigns) {
     if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
@@ -1977,14 +1987,13 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
     // no report behind it shows zero spend and zero orders, which trips the
     // significance floor and reads as "insufficient data" forever.
     if (row.adProduct !== 'SP') continue;
-    const brand = row.brand || null;
-    const segment = brand ? rfSegment(brand, row.name) : null;
     campaigns.set(String(row.campaignId), {
       campaignId: String(row.campaignId),
       name: row.name || '',
       adProduct: row.adProduct || '',
-      brand, segment,
-      grossMargin: segment ? MARGINS[segment] : null,
+      // Brand is stored, segment and margin are not: deriving them at decide
+      // time means a margin-table change takes effect on a recompute too.
+      brand: row.brand || null,
       dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
       budgetType: row.budgetType || '',
       portfolioId: row.portfolioId || null,
@@ -1992,46 +2001,70 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
       // The prior fortnight confirms (or fails to confirm) a Tier 1 problem,
       // so it needs orders as well as money.
       priorSpend: 0, priorSales: 0, priorOrders: 0,
-      spendByDate: new Map()
+      // Daily spends, values only. The dates do not matter to the capped-day
+      // count, and keeping the raw values means the at-cap threshold can be
+      // retuned on a recompute rather than being baked in here.
+      daily: []
     });
   }
 
   let orphanRows = 0;
+  const byDate = new Map();
   for (const r of rows) {
     const c = campaigns.get(r.campaignId);
     if (!c) { orphanRows++; continue; }
     if (r.date >= window.start && r.date <= window.end) {
       c.spend += r.cost; c.orders += r.orders; c.sales += r.sales;
       c.clicks += r.clicks; c.impressions += r.impressions;
-      c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
+      const key = c.campaignId + '|' + r.date;
+      byDate.set(key, (byDate.get(key) || 0) + r.cost);
     } else if (r.date >= window.priorStart && r.date <= window.priorEnd) {
       c.priorSpend += r.cost; c.priorSales += r.sales; c.priorOrders += r.orders;
     }
   }
+  for (const [key, spend] of byDate) {
+    const c = campaigns.get(key.slice(0, key.indexOf('|')));
+    if (c) c.daily.push(r2(spend));
+  }
 
+  for (const c of campaigns.values()) {
+    c.spend = r2(c.spend); c.sales = r2(c.sales); c.orders = Math.round(c.orders);
+    c.clicks = Math.round(c.clicks); c.impressions = Math.round(c.impressions);
+    c.priorSpend = r2(c.priorSpend); c.priorSales = r2(c.priorSales);
+    c.priorOrders = Math.round(c.priorOrders);
+  }
+
+  return { inputs: [...campaigns.values()], orphanRows };
+}
+
+// Every enabled campaign gets a row - the doc's output is the whole account,
+// not a flag list. Pure, so the tree can be exercised against the doc offline
+// and re-run against stored inputs without touching Amazon.
+function bwDecideAll({ inputs, window, postures = {}, recentRaises = {} }) {
   const retentionOf = (margin, spend, sales) => {
     if (!margin || !(sales > 0)) return null;
     return r4((margin - spend / sales) / margin);
   };
 
   const out = [];
-  for (const c of campaigns.values()) {
-    c.acos = c.sales > 0 ? r4(c.spend / c.sales) : null;
-    c.retention = retentionOf(c.grossMargin, c.spend, c.sales);
-    c.priorRetention = retentionOf(c.grossMargin, c.priorSpend, c.priorSales);
-    const priorRetention = c.priorRetention;
-    c.trendingDown = (c.retention !== null && priorRetention !== null) &&
-                     (priorRetention - c.retention) > BW_CONFIG.TRENDING_DOWN;
+  for (const i of inputs) {
+    const segment = i.brand ? rfSegment(i.brand, i.name) : null;
+    const grossMargin = segment ? MARGINS[segment] : null;
 
-    // Capped, by days rather than a period total — a campaign clipped on 8 days
-    // and idle on 6 is constrained even though the fortnight total is not.
+    const c = { ...i, segment, grossMargin };
+    c.acos = c.sales > 0 ? r4(c.spend / c.sales) : null;
+    c.retention = retentionOf(grossMargin, c.spend, c.sales);
+    c.priorRetention = retentionOf(grossMargin, c.priorSpend, c.priorSales);
+    c.trendingDown = (c.retention !== null && c.priorRetention !== null) &&
+                     (c.priorRetention - c.retention) > BW_CONFIG.TRENDING_DOWN;
+
+    // Capped by days rather than a period total - a campaign clipped on eight
+    // days and idle on six is constrained even though the fortnight is not.
     const lifetime = /LIFETIME/i.test(c.budgetType);
     if (c.dailyBudget > 0 && !lifetime) {
       const atCap = c.dailyBudget * BW_CONFIG.CAP_DAY_RATIO;
-      let days = 0;
-      for (const daySpend of c.spendByDate.values()) if (daySpend >= atCap) days++;
-      c.cappedDays = days;
-      c.capped = days >= BW_CONFIG.CAP_DAYS_MIN;
+      c.cappedDays = (c.daily || []).filter(v => v >= atCap).length;
+      c.capped = c.cappedDays >= BW_CONFIG.CAP_DAYS_MIN;
     } else {
       c.cappedDays = null;
       c.capped = false;
@@ -2046,9 +2079,9 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
       campaignId: c.campaignId, campaign: c.name, adProduct: c.adProduct,
       brand: c.brand, posture,
       dailyBudget: c.dailyBudget,
-      spend: r2(c.spend), sales: r2(c.sales), orders: Math.round(c.orders),
+      spend: c.spend, sales: c.sales, orders: c.orders,
       acos: c.acos, retention: c.retention,
-      priorRetention, trendingDown: c.trendingDown,
+      priorRetention: c.priorRetention, trendingDown: c.trendingDown,
       cappedDays: c.cappedDays, weekDays: BW_CONFIG.WINDOW_DAYS, capped: c.capped,
       action: decision.action, pct: decision.pct, tier: decision.tier,
       reason: decision.reason,
@@ -2067,10 +2100,8 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
   const counts = { increase: 0, decrease: 0, hold: 0, cut: 0 };
   for (const r of out) counts[r.action]++;
 
-  // Brand Summary — SP and SB split per brand, as the doc specifies.
-  // The doc asks for an SP/SB split per brand. With SB reviewed monthly there
-  // is nothing to split, so the columns are gone rather than sitting at zero
-  // and implying Sponsored Brands spent nothing.
+  // Brand summary. The doc asks for an SP/SB split, but with SB reviewed
+  // monthly there is nothing to split.
   const brands = new Map();
   for (const r of out) {
     if (!r.brand) continue;
@@ -2092,13 +2123,24 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
   return {
     rows: out, counts, brandSummary,
     coverage: {
-      enabled: campaigns.size,
-      orphanRows,
+      enabled: inputs.length,
+      orphanRows: 0,
       unmapped: out.filter(r => !r.brand && r.spend > 0).length,
       noBudget: out.filter(r => r.dailyBudget === null).length
     }
   };
 }
+
+function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = {} }) {
+  const { inputs, orphanRows } = bwBuildInputs({ census, rows, window });
+  const result = bwDecideAll({ inputs, window, postures, recentRaises });
+  result.coverage.orphanRows = orphanRows;
+  // Returned so the client can ask for a re-decision later without a report.
+  result.inputs = inputs;
+  return result;
+}
+
+
 
 // Budget raises this tool made in the last fortnight, so the bi-weekly can say
 // so before recommending another. Read from the census change log, which
@@ -2253,6 +2295,51 @@ async function handleBiweeklyCollect(req, res) {
   }
 }
 
+// Re-runs the decision tree against inputs the browser already holds, with no
+// report request. The reports are the expensive half of a run - a queue that
+// has taken half an hour - while the tree is the half that keeps changing as
+// thresholds and postures are tuned. Without this, every threshold change
+// needed a fresh half-hour wait to see.
+//
+// It refreshes DECISIONS, never DATA. The window travels with the inputs and
+// is echoed back so the page can say which run it is re-deciding.
+async function handleBiweeklyRecompute(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const inputs = req.body && req.body.inputs;
+    if (!Array.isArray(inputs) || !inputs.length) {
+      return res.status(400).json({ error: 'No stored run to recompute. Run the bi-weekly first.' });
+    }
+    const window = (req.body && req.body.window) || {};
+    for (const k of ['start', 'end', 'priorStart', 'priorEnd']) {
+      if (!DATE_RE.test(String(window[k] || ''))) {
+        return res.status(400).json({ error: `window.${k} must be YYYY-MM-DD` });
+      }
+    }
+
+    // Postures and recent raises are read fresh rather than taken from the
+    // client: the whole point is to pick up changes made since the run.
+    const [postures, census] = await Promise.all([bwLoadPostures(), loadCensus()]);
+    const result = bwDecideAll({
+      inputs, window, postures,
+      recentRaises: bwRecentRaises(census.changes, window)
+    });
+
+    return res.status(200).json({
+      success: true, window, config: BW_CONFIG, postures,
+      deviations: BW_SPEC_DEVIATIONS,
+      censusSyncedAt: census.syncedAt,
+      ...result,
+      recomputedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[BIWEEKLY RECOMPUTE] Error:', error);
+    return res.status(500).json({ error: 'Recompute failed: ' + error.message });
+  }
+}
+
 // The monthly posture per brand. Monthly is advisory and produces these by
 // judgement, not computation, so they are set here rather than derived.
 async function bwLoadPostures() {
@@ -2301,4 +2388,5 @@ export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColum
          rfRecommendBid, rfDecomposeSpend,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
-         bwRecentRaises, BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
+         bwRecentRaises, bwBuildInputs, bwDecideAll,
+         BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };

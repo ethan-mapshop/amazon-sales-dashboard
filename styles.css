@@ -1972,3 +1972,5 @@
       z-index: 20;
       margin-top: 1rem;
     }
+
+    .bw-spacer { flex: 1; }
