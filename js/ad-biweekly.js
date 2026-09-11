@@ -37,7 +37,7 @@
 
       const state = bwRunLoad();
       if (state && !bwPollTimer) {
-        bwSetStatus('Resuming report run started ' + _svTimeAgo(state.startedAt) + '…');
+        bwSetStatus(bwStatusLine(state.lastStatuses, state.startedAt));
         bwSchedulePoll(0);
       }
     }
@@ -52,9 +52,10 @@
       const state = bwRunLoad();
       if (!state) return bwRun();
       state.pollUntil = Date.now() + BW_MAX_WAIT_MS;
+      state.pollErrors = 0;
       bwRunSave(state);
       bwSetBusy(true);
-      bwSetStatus('Still waiting on Amazon. Checking again…');
+      bwSetStatus(bwStatusLine(state.lastStatuses, state.startedAt));
       bwSchedulePoll(0);
     }
 
@@ -115,7 +116,9 @@
       const state = bwRunLoad();
       if (!state) return;
       if (Date.now() > state.pollUntil) {
-        bwSetStatus('', 'Reports are taking longer than expected. Press Run bi-weekly to keep waiting.');
+        bwSetStatus('', 'Gave up waiting after 45 minutes. ' +
+          bwStatusLine(state.lastStatuses, state.startedAt) +
+          ' Press Check again to keep waiting — the reports are still queued at Amazon.');
         bwSetBusy(false);
         return;
       }
@@ -127,15 +130,52 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Status failed (${res.status})`);
 
-        const done = (data.statuses || []).filter(s => s.done).length;
         if (data.allDone) return bwCollect(state);
-        bwSetStatus(`${done} of ${state.reports.length} reports ready…`);
+        // Remembered so the give-up message can say what Amazon was doing, and
+        // so a resume shows something truer than "0 of 2 ready".
+        state.lastStatuses = data.statuses || [];
+        state.pollErrors = 0;
+        bwRunSave(state);
+        bwSetStatus(bwStatusLine(state.lastStatuses, state.startedAt));
         bwSchedulePoll(BW_POLL_MS);
       } catch (err) {
+        // A dropped request is not a dead run. Stopping here made one blip look
+        // identical to Amazon being slow, with nothing on screen saying polling
+        // had stopped.
         console.error('[BW] poll failed:', err);
-        bwSetStatus('', err.message);
-        bwSetBusy(false);
+        state.pollErrors = (state.pollErrors || 0) + 1;
+        bwRunSave(state);
+        if (state.pollErrors >= 5) {
+          bwSetStatus('', `Could not reach the status endpoint after 5 tries: ${err.message}. ` +
+                          'Press Check again when your connection is back.');
+          bwSetBusy(false);
+          return;
+        }
+        bwSetStatus(`Status check failed (attempt ${state.pollErrors} of 5), retrying…`);
+        bwSchedulePoll(BW_POLL_MS * state.pollErrors);
       }
+    }
+
+    // What Amazon is actually doing, rather than a count of what is finished.
+    // PENDING means queued and not yet started; PROCESSING means generating.
+    // The difference decides whether waiting is reasonable, and it was only
+    // visible from the browser console before.
+    function bwStatusLine(statuses, startedAt) {
+      const mins = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 60000));
+      const list = statuses || [];
+      if (!list.length) return `Waiting on Amazon — ${mins} min elapsed.`;
+
+      const byState = {};
+      for (const s of list) byState[s.status || 'UNKNOWN'] = (byState[s.status || 'UNKNOWN'] || 0) + 1;
+      const parts = Object.entries(byState).map(([k, n]) => `${n} ${k.toLowerCase()}`);
+      let line = `${parts.join(' · ')} — ${mins} min elapsed.`;
+
+      // Queued for a long time is a fact about Amazon's queue, not about us,
+      // and saying so is the difference between waiting and debugging.
+      if (list.every(s => s.status === 'PENDING') && mins >= 10) {
+        line += ' Amazon has not started these yet; its report queue is backed up.';
+      }
+      return line;
     }
 
     async function bwCollect(state) {
