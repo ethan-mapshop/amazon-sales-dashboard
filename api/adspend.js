@@ -70,6 +70,7 @@ export default async function handler(req, res) {
     if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
     if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
+    if (action === 'biweekly-adopt')          return handleBiweeklyAdopt(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -2383,6 +2384,53 @@ async function handleBiweeklyGet(req, res) {
   } catch (error) {
     console.error('[BIWEEKLY GET] Error:', error);
     return res.status(500).json({ error: 'Biweekly-get failed: ' + error.message });
+  }
+}
+
+// Takes a run the browser is still holding from before the store moved to KV
+// and adopts it, so a move of storage does not cost a half-hour report queue.
+//
+// The old inputs carried name, brand and budget alongside the metrics. Those
+// fields are simply ignored now - config is joined from the census - so an old
+// record decides correctly without needing to be rewritten.
+async function handleBiweeklyAdopt(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const inputs = req.body && req.body.inputs;
+    const window = (req.body && req.body.window) || {};
+    if (!Array.isArray(inputs) || !inputs.length) {
+      return res.status(400).json({ error: 'Nothing to adopt' });
+    }
+    for (const k of ['start', 'end', 'priorStart', 'priorEnd']) {
+      if (!DATE_RE.test(String(window[k] || ''))) {
+        return res.status(400).json({ error: `window.${k} must be YYYY-MM-DD` });
+      }
+    }
+    // Refuse to overwrite a real run with an older one.
+    const existing = await bwLoadRun();
+    if (existing) return res.status(200).json({ success: true, alreadyStored: true });
+
+    // Keep only what a run is now: the metrics. Anything configurational in an
+    // old record is dropped rather than stored and later trusted.
+    const cleaned = inputs
+      .filter(i => i && i.campaignId)
+      .map(i => ({
+        campaignId: String(i.campaignId),
+        spend: num(i.spend), orders: num(i.orders), sales: num(i.sales),
+        clicks: num(i.clicks), impressions: num(i.impressions),
+        priorSpend: num(i.priorSpend), priorOrders: num(i.priorOrders),
+        priorSales: num(i.priorSales),
+        daily: Array.isArray(i.daily) ? i.daily.map(num) : []
+      }));
+    if (!cleaned.length) return res.status(400).json({ error: 'No usable rows to adopt' });
+
+    await bwSaveRun(window, cleaned);
+    return res.status(200).json({ success: true, adopted: cleaned.length });
+  } catch (error) {
+    console.error('[BIWEEKLY ADOPT] Error:', error);
+    return res.status(500).json({ error: 'Adopt failed: ' + error.message });
   }
 }
 

@@ -66,7 +66,14 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Load failed (${res.status})`);
-        if (data.empty) { bwData = null; return bwRenderIdle(); }
+        if (data.empty) {
+          // The store moved from the browser to KV. Rather than making a moved
+          // storage location cost a half-hour report queue, take the run the
+          // browser is still holding, hand it to the server once, and read back.
+          if (await bwAdoptLegacyRun()) return bwFetch('Recovered your last run \u2014 no re-run needed.');
+          bwData = null;
+          return bwRenderIdle();
+        }
         bwData = data;
         bwRender(data);
         if (after) bwSetStatus(after);
@@ -138,6 +145,30 @@
         bwSetBusy(false);
       } finally {
         bwBusy = false;
+      }
+    }
+
+    // One-time, and silent when there is nothing to take.
+    async function bwAdoptLegacyRun() {
+      let legacy = null;
+      try { legacy = JSON.parse(localStorage.getItem('bwLastResult') || 'null'); } catch (e) { /* ignore */ }
+      if (!legacy || !Array.isArray(legacy.inputs) || !legacy.inputs.length || !legacy.window) {
+        return false;
+      }
+      try {
+        const res = await fetch('/api/adspend?action=biweekly-adopt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ inputs: legacy.inputs, window: legacy.window })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || `Adopt failed (${res.status})`);
+        // Only once it is safely on the server.
+        try { localStorage.removeItem('bwLastResult'); } catch (e) { /* ignore */ }
+        return true;
+      } catch (err) {
+        console.error('[BW] could not adopt the stored run:', err);
+        return false;
       }
     }
 
