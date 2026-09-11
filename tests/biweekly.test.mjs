@@ -176,58 +176,84 @@ ok(specs.every(sp => sp.product === 'sp'), 'and it asks for SP');
 ok(specs.every(sp => sp.start === w.priorStart && sp.end === w.end),
    'covering the full 28 days');
 
-console.log('\nSORT  [alphabetical: documented deviation]');
-// The doc sorts by magnitude of change. Alphabetical instead, because the list
-// is worked down with checkboxes rather than skimmed - and the naming
-// convention already groups each brand together.
-const mkInput = (id, name, brand) => ({
-  campaignId: id, name, adProduct: 'SP', brand,
-  dailyBudget: 10, budgetType: 'DAILY',
-  spend: 100, orders: 10, sales: 500,
-  priorSpend: 100, priorOrders: 10, priorSales: 500, daily: []
+console.log('\nCONFIG IS JOINED AT DECIDE TIME, NEVER STORED');
+// The stored run holds METRICS only. Budget, brand, name and margin come from
+// the census on every read, so a budget applied since the reports were pulled,
+// a brand override, or a margin change all take effect with no new report -
+// and there is no saved decision that can disagree with the current rules.
+const metrics = (id, o = {}) => ({
+  campaignId: id,
+  spend: o.spend === undefined ? 100 : o.spend,
+  orders: o.orders === undefined ? 10 : o.orders,
+  sales: o.sales === undefined ? 500 : o.sales,
+  clicks: 50, impressions: 9000,
+  priorSpend: 100, priorOrders: 10, priorSales: 500,
+  daily: o.daily || []
 });
-const sorted = M.bwDecideAll({
-  inputs: [mkInput('1', 'SOK World Blank (Auto)', 'South of Kings'),
-           mkInput('2', 'BW PACK Rivers (Exact)', 'BrightWay Educational'),
-           mkInput('3', 'RR California (Exact)', 'Hubbard Scientific')],
-  window: w
-}).rows.map(r => r.campaign);
-ok(sorted[0].startsWith('BW') && sorted[2].startsWith('SOK'),
-   'rows come back alphabetically by campaign name', sorted.join(' | '));
+const cfgRow = (id, name, brand, budget) => ({
+  campaignId: id, name, adProduct: 'SP', state: 'ENABLED',
+  dailyBudget: budget, budgetType: 'DAILY', brand, portfolioId: 'pf1'
+});
+const decide = (inputs, campaigns, postures) =>
+  M.bwDecideAll({ inputs, census: { campaigns }, window: w, postures });
 
-console.log('\nRECOMPUTE  - the tree re-runs without a report');
-// Build once, decide as often as needed. This is what lets a threshold or a
-// posture change take effect without another half-hour report queue.
+ok(decide([metrics('1')], [cfgRow('1', 'RR Test (Exact)', 'Hubbard Scientific', 10)])
+     .rows[0].dailyBudget === 10,
+   'the budget on a row comes from the census, not the stored run');
+ok(decide([metrics('1')], [cfgRow('1', 'RR Test (Exact)', 'Hubbard Scientific', 42)])
+     .rows[0].dailyBudget === 42,
+   'change the census and the same stored metrics decide against the new budget',
+   'which is what applying a budget then reloading relies on');
+ok(decide([metrics('1')], [cfgRow('1', 'RR Test (Exact)', null, 10)]).rows[0].retention === null,
+   'an unmapped brand in the census means no margin and no retention');
+// A campaign that has left the census, or been paused, cannot be judged.
+ok(decide([metrics('1')], []).rows.length === 0,
+   'metrics with no matching census row are dropped, not guessed at');
+const paused = [{ ...cfgRow('1', 'RR Test (Exact)', 'Hubbard Scientific', 10), state: 'PAUSED' }];
+ok(decide([metrics('1')], paused).rows.length === 0, 'and a paused campaign is dropped too');
+
+console.log('\nSORT');
+// Server order is a sensible default; the page sorts at render time so a stored
+// run cannot carry a stale order.
+const sortRows = decide(
+  [metrics('1'), metrics('2'), metrics('3')],
+  [cfgRow('1', 'SOK World Blank (Auto)', 'South of Kings', 10),
+   cfgRow('2', 'BW PACK Rivers (Exact)', 'BrightWay Educational', 10),
+   cfgRow('3', 'RR California (Exact)', 'Hubbard Scientific', 10)]
+).rows.map(r => r.campaign);
+ok(sortRows[0].startsWith('BW') && sortRows[2].startsWith('SOK'),
+   'rows come back alphabetically by campaign name', sortRows.join(' | '));
+
+console.log('\nDECIDING IS PURE AND POSTURE-SENSITIVE');
+// Same inputs, same answer - and a posture supplied at decide time changes it.
+// That is what lets a posture change take effect on the next page load.
+const capped = [metrics('1', { daily: [10, 10, 10, 10, 10, 10, 10, 10, 10, 10] })];
+const cfg = [cfgRow('1', 'RR Test (Exact)', 'Hubbard Scientific', 10)];
+ok(decide(capped, cfg).rows[0].action === decide(capped, cfg).rows[0].action,
+   'deciding twice gives the same answer');
+ok(decide(capped, cfg).rows[0].action === 'increase',
+   'a capped, profitable campaign is an increase');
+ok(decide(capped, cfg, { 'Hubbard Scientific': 'constrain' }).rows[0].action !== 'increase',
+   'and a constrain posture suppresses it', 'no report needed to see the change');
+
+console.log('\nBUILDING A RUN  - metrics only');
 const built = M.bwBuildInputs({
-  census: { campaigns: [{ campaignId: '1', name: 'RR Test (Exact)', adProduct: 'SP',
-                          state: 'ENABLED', dailyBudget: 10, budgetType: 'DAILY',
-                          brand: 'Hubbard Scientific', portfolioId: 'pf1' }] },
+  census: { campaigns: [cfgRow('1', 'RR Test (Exact)', 'Hubbard Scientific', 10)] },
   rows: [{ date: w.start, adProduct: 'SP', campaignId: '1', cost: 10, clicks: 5,
            impressions: 500, orders: 2, sales: 100 },
          { date: w.priorStart, adProduct: 'SP', campaignId: '1', cost: 8, clicks: 4,
            impressions: 400, orders: 2, sales: 90 }],
   window: w
 });
-ok(built.inputs.length === 1, 'one input per enabled campaign');
 const one = built.inputs[0];
+ok(built.inputs.length === 1, 'one input per enabled campaign');
 ok(one.spend === 10 && one.priorSpend === 8, 'both halves are kept separate',
    `now $${one.spend}, prior $${one.priorSpend}`);
 ok(Array.isArray(one.daily) && one.daily.length === 1,
    'daily spends are kept, so the at-cap threshold can be retuned later');
-ok(one.brand === 'Hubbard Scientific' && one.grossMargin === undefined,
-   'brand is stored but margin is not',
-   'so a margin-table change also takes effect on a recompute');
-
-// Deciding is pure: same inputs, same answer - and a posture supplied at decide
-// time changes it, which is what makes the recompute button worth having.
-const plain = M.bwDecideAll({ inputs: built.inputs, window: w });
-const again = M.bwDecideAll({ inputs: built.inputs, window: w });
-ok(plain.rows[0].action === again.rows[0].action, 'deciding twice gives the same answer');
-const constrained = M.bwDecideAll({ inputs: built.inputs, window: w,
-                                    postures: { 'Hubbard Scientific': 'constrain' } });
-ok(constrained.rows[0].action !== 'increase',
-   'a posture applied at decide time changes the outcome',
-   'no report needed to see it');
+ok(one.dailyBudget === undefined && one.brand === undefined && one.name === undefined,
+   'and nothing configurational is stored',
+   'budget, brand and name are joined from the census on every read');
 
 
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}`);

@@ -14,8 +14,13 @@
     // loadAdBiweekly() NEVER starts a run. showPage() and triggerCurrentPageLoad()
     // both fire on restore and after sign-in.
 
+    // Only the in-flight report IDs live in localStorage, and only because a
+    // poll has to survive a reload. THE RESULT IS NEVER CACHED: the server
+    // stores what the reports said and decides afresh on every read, so a
+    // budget applied a minute ago, a posture just changed or an edited
+    // threshold all show up on the next load. Every stale-result bug this page
+    // had came from keeping decisions around.
     const BW_RUN_KEY = 'bwRunState';
-    const BW_RESULT_KEY = 'bwLastResult';
     const BW_POLL_MS = 20000;
     const BW_MAX_WAIT_MS = 45 * 60 * 1000;
 
@@ -33,7 +38,8 @@
     let bwBulkBusy = false;
     let bwBulkConfirm = false;
     let bwBulkProgress = '';
-    let bwRecomputing = false;
+    // In memory for the life of the page, never written to storage.
+    let bwData = null;
 
     function loadAdBiweekly() {
       const container = document.getElementById('adbiweekly-content');
@@ -42,13 +48,31 @@
         container.innerHTML = '<div style="padding: 4rem; text-align: center; color: var(--text-secondary);">Sign in to view bi-weekly budgets.</div>';
         return;
       }
-      const cached = bwCacheLoad();
-      if (cached) bwRender(cached); else bwRenderIdle();
+      bwFetch();
 
       const state = bwRunLoad();
       if (state && !bwPollTimer) {
         bwSetStatus(bwStatusLine(state.lastStatuses, state.startedAt));
         bwSchedulePoll(0);
+      }
+    }
+
+    // Decisions are made server-side on every read, so this is the only way the
+    // page gets a result. There is nothing to invalidate.
+    async function bwFetch(after) {
+      try {
+        const res = await fetch('/api/adspend?action=biweekly-get', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Load failed (${res.status})`);
+        if (data.empty) { bwData = null; return bwRenderIdle(); }
+        bwData = data;
+        bwRender(data);
+        if (after) bwSetStatus(after);
+      } catch (err) {
+        console.error('[BW] load failed:', err);
+        bwSetStatus('', err.message);
       }
     }
 
@@ -204,7 +228,7 @@
         bwApply = {};
         bwSelected.clear();
         bwBulkConfirm = false;
-        bwCacheSave(data);
+        bwData = data;
         bwRunClear();
         bwSetStatus('');
         bwSetBusy(false);
@@ -364,10 +388,6 @@
       const total = bwBrand === 'all'
         ? (data.rows || []).length
         : (data.rows || []).filter(r => bwBrandOf(r) === bwBrand).length;
-      // Recompute re-runs the decision tree against the data this run already
-      // fetched. It refreshes DECISIONS, not DATA - the reports are what take
-      // half an hour, and they are unchanged.
-      const canRecompute = Array.isArray(data.inputs) && data.inputs.length > 0;
       const toggle = `
         <div class="bw-filter">
           <select data-bw-brand title="Narrow to one brand">
@@ -378,20 +398,8 @@
           <button class="arf-btn${bwFilter === 'moves' ? ' arf-btn-go' : ''}" data-bw-filter="moves">Changes only</button>
           <button class="arf-btn${bwFilter === 'all' ? ' arf-btn-go' : ''}" data-bw-filter="all">All ${total}</button>
           <span class="bw-spacer"></span>
-          ${canRecompute
-            ? `<button class="arf-btn" data-bw-recompute${bwRecomputing ? ' disabled' : ''}
-                  title="Re-run the decision tree on this run's data. Picks up posture and threshold changes without a new report."
-               >${bwRecomputing ? 'Recomputing' : 'Refresh recommendations'}</button>`
-            // A run collected before recompute existed has no stored inputs, so
-            // there is nothing to re-decide. Say so rather than rendering
-            // nothing and leaving the control to be hunted for.
-            : `<button class="arf-btn" disabled
-                  title="This run was collected before recommendations could be refreshed. The next run will store what is needed."
-               >Refresh recommendations</button>
-               <span class="arf-muted">needs a run from after this update</span>`}
-          ${data.recomputedAt
-            ? `<span class="arf-muted">recommendations refreshed ${escapeHtml(_svTimeAgo(data.recomputedAt))}</span>`
-            : ''}
+          <span class="arf-muted">decided just now from reports pulled ${
+            data.collectedAt ? escapeHtml(_svTimeAgo(data.collectedAt)) : 'earlier'}</span>
         </div>`;
 
       if (!rows.length) {
@@ -561,10 +569,9 @@
       el.addEventListener('click', e => {
         const btn = e.target.closest(
           '[data-bw-apply], [data-bw-confirm], [data-bw-cancel], [data-bw-filter], ' +
-          '[data-bw-bulk], [data-bw-recompute]');
+          '[data-bw-bulk]');
         if (!btn) return;
         const d = btn.dataset;
-        if (d.bwRecompute !== undefined) return bwRecompute();
         if (d.bwFilter) { bwFilter = d.bwFilter; bwRerender(); }
         else if (d.bwApply) bwSetApplyStage(d.bwApply, 'confirm');
         else if (d.bwCancel) bwSetApplyStage(d.bwCancel, null);
@@ -597,9 +604,8 @@
         if (all) {
           // Only what is on screen. Ticking a header box must never select
           // rows the current filter is hiding.
-          const data = bwCacheLoad();
-          if (!data) return;
-          for (const r of bwVisibleRows(data).filter(bwApplicable)) {
+          if (!bwData) return;
+          for (const r of bwVisibleRows(bwData).filter(bwApplicable)) {
             if (all.checked) bwSelected.add(r.campaignId);
             else bwSelected.delete(r.campaignId);
           }
@@ -611,8 +617,7 @@
     }
 
     function bwRerender() {
-      const cached = bwCacheLoad();
-      if (cached) bwRender(cached);
+      if (bwData) bwRender(bwData);
     }
 
     function bwBulkClick(what) {
@@ -628,7 +633,7 @@
     // rows that fail stay in it so a retry is one click rather than a hunt.
     async function bwApplySelected() {
       if (bwBulkBusy || !accessToken) return;
-      const data = bwCacheLoad();
+      const data = bwData;
       if (!data) return;
       const picked = (data.rows || []).filter(r => bwSelected.has(r.campaignId) && bwApplicable(r));
       if (!picked.length) return;
@@ -646,26 +651,27 @@
       }
       bwBulkBusy = false;
       bwBulkProgress = '';
-      bwCacheSave(data);
-      bwRender(data);
+      // Re-read rather than trusting what was patched locally: the server
+      // re-decides from the census, which now holds the budgets just written.
+      await bwFetch();
     }
 
     function bwSetApplyStage(campaignId, stage, extra) {
       if (!stage) delete bwApply[campaignId];
       else bwApply[campaignId] = { stage, ...(extra || {}) };
-      const cached = bwCacheLoad();
-      if (cached) bwRender(cached);
+      bwRerender();
     }
 
     async function bwApplyBudget(campaignId) {
-      const cached = bwCacheLoad();
-      const row = (cached?.rows || []).find(r => String(r.campaignId) === String(campaignId));
+      const row = (bwData?.rows || []).find(r => String(r.campaignId) === String(campaignId));
       if (!row || !accessToken) return;
 
       bwSetApplyStage(campaignId, 'busy');
-      await bwWriteBudget(row, cached);
-      bwCacheSave(cached);
-      bwRender(cached);
+      await bwWriteBudget(row, bwData);
+      // Re-read: the update handler writes the new budget back into the census,
+      // and the server decides from the census, so this row will come back as a
+      // hold without the page having to fake it.
+      await bwFetch();
     }
 
     // The single write. Mutates `row` AND the matching stored input in place,
@@ -720,43 +726,6 @@
       }
     }
 
-    async function bwRecompute() {
-      const cached = bwCacheLoad();
-      if (bwRecomputing || !accessToken || !cached || !Array.isArray(cached.inputs)) return;
-      bwRecomputing = true;
-      bwSetStatus('Re-running the decision tree on this run\u2019s data\u2026');
-      bwRender(cached);
-      try {
-        const res = await fetch('/api/adspend?action=biweekly-recompute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({ inputs: cached.inputs, window: cached.window })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.success) throw new Error(data.error || `Recompute failed (${res.status})`);
-
-        // Only the decisions change. The inputs, and the timestamp saying when
-        // the DATA was fetched, are carried forward so the page never implies
-        // it has fresher numbers than it does.
-        const next = { ...cached, ...data, inputs: cached.inputs, generatedAt: cached.generatedAt };
-        // A selection made against the old recommendations may no longer point
-        // at a change, so it is dropped rather than silently re-aimed.
-        bwSelected.clear();
-        bwBulkConfirm = false;
-        bwCacheSave(next);
-        bwSetStatus('');
-        // Clear the flag BEFORE rendering, or the button paints itself as
-        // still running and stays that way until the next render.
-        bwRecomputing = false;
-        bwRender(next);
-      } catch (err) {
-        console.error('[BW] recompute failed:', err);
-        bwSetStatus('', err.message);
-        bwRecomputing = false;
-        bwRender(cached);
-      }
-    }
-
     async function bwSavePosture(brand, posture) {
       try {
         const res = await fetch('/api/adspend?action=biweekly-posture', {
@@ -766,11 +735,9 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
-        // The posture changes what the tree recommends, and the tree can now be
-        // re-run without a report, so this applies immediately rather than
-        // telling you to wait half an hour for one.
-        bwSetStatus(`Posture saved \u2014 ${escapeHtml(brand)} is now ${escapeHtml(posture)}.`);
-        await bwRecompute();
+        // Re-read rather than patching locally: the server decides from the
+        // stored postures, so this picks up the change it just saved.
+        await bwFetch(`Posture saved \u2014 ${brand} is now ${posture}.`);
       } catch (err) {
         console.error('[BW] posture save failed:', err);
         bwSetStatus('', err.message);
@@ -812,17 +779,6 @@
       btn.disabled = busy;
       btn.innerHTML = busy ? 'Running<span class="loading"></span>'
                            : (bwRunLoad() ? 'Check again' : 'Run bi-weekly');
-    }
-
-    function bwCacheSave(data) {
-      try { localStorage.setItem(BW_RESULT_KEY, JSON.stringify(data)); } catch (e) { /* quota */ }
-    }
-
-    function bwCacheLoad() {
-      try {
-        const raw = localStorage.getItem(BW_RESULT_KEY);
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) { return null; }
     }
 
     function bwRunSave(state) {

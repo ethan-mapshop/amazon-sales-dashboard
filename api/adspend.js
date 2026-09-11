@@ -62,6 +62,7 @@ export default async function handler(req, res) {
     if (action === 'biweekly-request')    return handleBiweeklyRequest(req, res);
     if (action === 'biweekly-status')     return handleBiweeklyStatus(req, res);
     if (action === 'biweekly-collect')    return handleBiweeklyCollect(req, res);
+    if (action === 'biweekly-get')        return handleBiweeklyGet(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
@@ -69,7 +70,6 @@ export default async function handler(req, res) {
     if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
     if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
-    if (action === 'biweekly-recompute')      return handleBiweeklyRecompute(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -1991,16 +1991,12 @@ function bwBuildInputs({ census, rows, window }) {
     // no report behind it shows zero spend and zero orders, which trips the
     // significance floor and reads as "insufficient data" forever.
     if (row.adProduct !== 'SP') continue;
+    // METRICS ONLY. Name, brand, budget and budget type are deliberately absent:
+    // they are joined from the census at decide time, so a budget applied since
+    // the run, a brand override, or a margin change is picked up without the
+    // stored run knowing anything about it.
     campaigns.set(String(row.campaignId), {
       campaignId: String(row.campaignId),
-      name: row.name || '',
-      adProduct: row.adProduct || '',
-      // Brand is stored, segment and margin are not: deriving them at decide
-      // time means a margin-table change takes effect on a recompute too.
-      brand: row.brand || null,
-      dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
-      budgetType: row.budgetType || '',
-      portfolioId: row.portfolioId || null,
       spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0,
       // The prior fortnight confirms (or fails to confirm) a Tier 1 problem,
       // so it needs orders as well as money.
@@ -2044,18 +2040,40 @@ function bwBuildInputs({ census, rows, window }) {
 // Every enabled campaign gets a row - the doc's output is the whole account,
 // not a flag list. Pure, so the tree can be exercised against the doc offline
 // and re-run against stored inputs without touching Amazon.
-function bwDecideAll({ inputs, window, postures = {}, recentRaises = {} }) {
+function bwDecideAll({ inputs, census, window, postures = {}, recentRaises = {} }) {
   const retentionOf = (margin, spend, sales) => {
     if (!margin || !(sales > 0)) return null;
     return r4((margin - spend / sales) / margin);
   };
 
+  // Configuration comes from the census on every read, never from the stored
+  // run. That is the whole point: budgets applied since the reports were
+  // pulled, brand overrides and margin changes all take effect immediately,
+  // and nothing decided is ever written down to go stale.
+  const config = new Map();
+  for (const row of (census?.campaigns || [])) {
+    config.set(String(row.campaignId), row);
+  }
+
   const out = [];
   for (const i of inputs) {
-    const segment = i.brand ? rfSegment(i.brand, i.name) : null;
+    const cfg = config.get(String(i.campaignId));
+    // A campaign that has left the census cannot be judged: no budget to
+    // change, no brand, no margin.
+    if (!cfg || String(cfg.state || '').toUpperCase() !== 'ENABLED') continue;
+
+    const name = cfg.name || '';
+    const brand = cfg.brand || null;
+    const segment = brand ? rfSegment(brand, name) : null;
     const grossMargin = segment ? MARGINS[segment] : null;
 
-    const c = { ...i, segment, grossMargin };
+    const c = {
+      ...i, name, brand, segment, grossMargin,
+      adProduct: cfg.adProduct || '',
+      dailyBudget: typeof cfg.dailyBudget === 'number' ? cfg.dailyBudget : null,
+      budgetType: cfg.budgetType || '',
+      portfolioId: cfg.portfolioId || null
+    };
     c.acos = c.sales > 0 ? r4(c.spend / c.sales) : null;
     c.retention = retentionOf(grossMargin, c.spend, c.sales);
     c.priorRetention = retentionOf(grossMargin, c.priorSpend, c.priorSales);
@@ -2130,7 +2148,7 @@ function bwDecideAll({ inputs, window, postures = {}, recentRaises = {} }) {
   return {
     rows: out, counts, brandSummary,
     coverage: {
-      enabled: inputs.length,
+      enabled: out.length,
       orphanRows: 0,
       unmapped: out.filter(r => !r.brand && r.spend > 0).length,
       noBudget: out.filter(r => r.dailyBudget === null).length
@@ -2140,11 +2158,29 @@ function bwDecideAll({ inputs, window, postures = {}, recentRaises = {} }) {
 
 function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = {} }) {
   const { inputs, orphanRows } = bwBuildInputs({ census, rows, window });
-  const result = bwDecideAll({ inputs, window, postures, recentRaises });
+  const result = bwDecideAll({ inputs, census, window, postures, recentRaises });
   result.coverage.orphanRows = orphanRows;
-  // Returned so the client can ask for a re-decision later without a report.
   result.inputs = inputs;
   return result;
+}
+
+// The stored run: what the reports said, and nothing else. Recommendations are
+// never written down - they are computed on every read, so there is no cached
+// decision that can disagree with the current rules.
+const BW_RUN_KEY = 'biweekly:lastrun';
+
+async function bwSaveRun(window, inputs) {
+  await kv.set(BW_RUN_KEY, { window, inputs, collectedAt: new Date().toISOString() });
+}
+
+async function bwLoadRun() {
+  try {
+    const run = await kv.get(BW_RUN_KEY);
+    return (run && Array.isArray(run.inputs) && run.inputs.length) ? run : null;
+  } catch (err) {
+    console.error('[BIWEEKLY] stored run load failed:', err.message);
+    return null;
+  }
 }
 
 
@@ -2285,16 +2321,22 @@ async function handleBiweeklyCollect(req, res) {
     }
     if (!rows.length) return res.status(502).json({ error: 'No report rows could be downloaded.', notes });
 
-    const result = evaluateBiweekly({
-      census, rows, window, postures,
+    const { inputs, orphanRows } = bwBuildInputs({ census, rows, window });
+    // What the reports said is stored. What to do about it is not: that is
+    // decided on every read, so it can never disagree with the current rules.
+    await bwSaveRun(window, inputs);
+
+    const result = bwDecideAll({
+      inputs, census, window, postures,
       recentRaises: bwRecentRaises(census.changes, window)
     });
+    result.coverage.orphanRows = orphanRows;
 
     return res.status(200).json({
       success: true, window, config: BW_CONFIG, postures,
       deviations: BW_SPEC_DEVIATIONS,
       censusSyncedAt: census.syncedAt, ...result, notes,
-      generatedAt: new Date().toISOString()
+      collectedAt: new Date().toISOString()
     });
   } catch (error) {
     console.error('[BIWEEKLY COLLECT] Error:', error);
@@ -2302,48 +2344,45 @@ async function handleBiweeklyCollect(req, res) {
   }
 }
 
-// Re-runs the decision tree against inputs the browser already holds, with no
-// report request. The reports are the expensive half of a run - a queue that
-// has taken half an hour - while the tree is the half that keeps changing as
-// thresholds and postures are tuned. Without this, every threshold change
-// needed a fresh half-hour wait to see.
+// The page's only read. It decides afresh every time from the stored metrics,
+// the current census, and the current postures — so a budget applied a minute
+// ago, a posture just changed, or a threshold edited in this file all show up
+// on the next load with no report and nothing to refresh.
 //
-// It refreshes DECISIONS, never DATA. The window travels with the inputs and
-// is echoed back so the page can say which run it is re-deciding.
-async function handleBiweeklyRecompute(req, res) {
+// Nothing about a recommendation is ever persisted. Every stale-result bug this
+// page had came from storing decisions; storing only the reports removes the
+// category.
+async function handleBiweeklyGet(req, res) {
   try {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
 
-    const inputs = req.body && req.body.inputs;
-    if (!Array.isArray(inputs) || !inputs.length) {
-      return res.status(400).json({ error: 'No stored run to recompute. Run the bi-weekly first.' });
-    }
-    const window = (req.body && req.body.window) || {};
-    for (const k of ['start', 'end', 'priorStart', 'priorEnd']) {
-      if (!DATE_RE.test(String(window[k] || ''))) {
-        return res.status(400).json({ error: `window.${k} must be YYYY-MM-DD` });
-      }
+    const [run, census, postures] = await Promise.all([
+      bwLoadRun(), loadCensus(), bwLoadPostures()
+    ]);
+    if (!run) return res.status(200).json({ success: true, empty: true });
+    if (!census.campaigns.length) {
+      return res.status(409).json({
+        error: 'No campaign snapshot stored. Refresh Campaign Overview first — ' +
+               'budgets, brands and portfolios are read from it on every load.'
+      });
     }
 
-    // Postures and recent raises are read fresh rather than taken from the
-    // client: the whole point is to pick up changes made since the run.
-    const [postures, census] = await Promise.all([bwLoadPostures(), loadCensus()]);
     const result = bwDecideAll({
-      inputs, window, postures,
-      recentRaises: bwRecentRaises(census.changes, window)
+      inputs: run.inputs, census, window: run.window, postures,
+      recentRaises: bwRecentRaises(census.changes, run.window)
     });
 
     return res.status(200).json({
-      success: true, window, config: BW_CONFIG, postures,
+      success: true, window: run.window, config: BW_CONFIG, postures,
       deviations: BW_SPEC_DEVIATIONS,
       censusSyncedAt: census.syncedAt,
-      ...result,
-      recomputedAt: new Date().toISOString()
+      collectedAt: run.collectedAt,
+      ...result
     });
   } catch (error) {
-    console.error('[BIWEEKLY RECOMPUTE] Error:', error);
-    return res.status(500).json({ error: 'Recompute failed: ' + error.message });
+    console.error('[BIWEEKLY GET] Error:', error);
+    return res.status(500).json({ error: 'Biweekly-get failed: ' + error.message });
   }
 }
 
@@ -2395,5 +2434,5 @@ export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColum
          rfRecommendBid, rfDecomposeSpend,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
-         bwRecentRaises, bwBuildInputs, bwDecideAll,
+         bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
