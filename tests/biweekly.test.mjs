@@ -24,7 +24,12 @@ const c = (o = {}) => ({
   orders: o.orders === undefined ? 10 : o.orders,
   retention: o.retention === undefined ? 0.60 : o.retention,
   capped: o.capped || false,
-  trendingDown: o.trendingDown || false
+  trendingDown: o.trendingDown || false,
+  // The prior fortnight. Tier 1 pulls back harder when the same problem was
+  // already present, so by default the prior half is healthy and unconfirming.
+  priorRetention: o.priorRetention === undefined ? 0.60 : o.priorRetention,
+  priorOrders: o.priorOrders === undefined ? 10 : o.priorOrders,
+  priorSpend: o.priorSpend === undefined ? 100 : o.priorSpend
 });
 const d = (o, posture) => M.bwDecide(c(o), posture);
 
@@ -45,7 +50,23 @@ ok(d({ spend: 10, orders: 2, retention: 0.9, capped: true }).action === 'increas
 ok(d({ spend: 9, orders: 0, retention: -1 }).action === 'hold',
    'a tiny loss-maker still holds', 'below both Tier 1 spend bars regardless');
 
-console.log('\nTIER 1  — hard stops');
+console.log('\nTIER 1  — hard stops  [staged, not floored: documented deviation]');
+// The doc cuts straight to $1. That is 94% on one fortnight of evidence, and a
+// floored campaign generates too little data to ever prove a recovery. Staged
+// instead: -40% for a bad fortnight, -70% when the prior one was bad too.
+ok(d({ spend: 21, retention: -0.01 }).pct === -0.40,
+   'one bad fortnight pulls back 40%, not to the floor',
+   'the campaign can still spend enough to prove itself next time');
+ok(d({ spend: 21, retention: -0.01, priorRetention: -0.05 }).pct === -0.70,
+   'below break-even two fortnights running pulls back 70%', 'a bad month, not a bad fortnight');
+ok(d({ spend: 21, retention: -0.01, priorRetention: null }).pct === -0.40,
+   'an absent prior fortnight is never confirmation',
+   'a campaign that was not running then has proved nothing');
+ok(d({ spend: 16, orders: 0, retention: null, priorOrders: 0, priorSpend: 100 }).pct === -0.70,
+   'no orders for a month pulls back 70%');
+ok(d({ spend: 16, orders: 0, retention: null, priorOrders: 0, priorSpend: 2 }).pct === -0.40,
+   'zero prior orders on no prior spend is not confirmation',
+   'there, "no orders" only means "not running"');
 // "14-day spend > $20 AND profit retention < 0 → Cut to $1 floor"
 ok(d({ spend: 21, retention: -0.01 }).action === 'cut', 'over $20 and below break-even cuts');
 ok(d({ spend: 20, retention: -0.5 }).action !== 'cut', 'exactly $20 does not — the doc says MORE than $20');
@@ -125,7 +146,12 @@ console.log('\nNEW BUDGET  — "round to the nearest dollar, never below the $1 
 const nb = (cur, dec) => M.bwNewBudget(cur, dec);
 ok(nb(10, { action: 'increase', pct: 0.30 }) === 13, "$10 at +30% is $13  [doc's example]");
 ok(nb(10, { action: 'decrease', pct: -0.40 }) === 6, '$10 at -40% is $6');
-ok(nb(10, { action: 'cut' }) === 1, 'a cut goes to the $1 floor');
+ok(nb(10, { action: 'cut', pct: -0.70 }) === 3, 'a 70% cut on $10 is $3');
+// Repeated, it converges on the floor without ever jumping there.
+ok(nb(17, { action: 'cut', pct: -0.70 }) === 5 &&
+   nb(5, { action: 'cut', pct: -0.70 }) === 2 &&
+   nb(2, { action: 'cut', pct: -0.70 }) === 1,
+   '$17 reaches the floor in three fortnights', '17 to 5 to 2 to 1');
 ok(nb(1.2, { action: 'decrease', pct: -0.40 }) === 1, 'rounding never lands below $1');
 ok(nb(10, { action: 'hold', pct: 0 }) === 10, 'a hold does not move the budget');
 ok(nb(null, { action: 'increase', pct: 0.5 }) === null, 'no current budget, no new one');

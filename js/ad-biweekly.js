@@ -1,7 +1,7 @@
     // ─── BI-WEEKLY BUDGETS ───────────────────────────────────────────────────
     // Tactical budget management. Unlike the weekly, this cadence ACTS: every
-    // enabled campaign gets Increase, Decrease, Hold or Cut to Floor, and each
-    // row can be written to Amazon.
+    // enabled campaign gets Increase, Decrease, Hold or Cut, and each row can
+    // be written to Amazon.
     //
     // The window is lagged 8 days on purpose — see the server section. Amazon
     // leaves conversions incomplete for a week, always understating them, and
@@ -215,7 +215,7 @@
         <div class="card card-flat" style="text-align: center; padding: 4rem 2rem;">
           <div style="font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem;">💰</div>
           <div style="color: var(--text-secondary); max-width: 44rem; margin: 0 auto; line-height: 1.6;">
-            Every enabled Sponsored Products campaign gets one of Increase, Decrease, Hold or Cut to Floor,
+            Every enabled Sponsored Products campaign gets one of Increase, Decrease, Hold or Cut,
             from a four-tier decision tree keyed on profit retention. The 14-day window
             ends eight days ago so every conversion has landed &mdash; this cadence writes
             budgets, and a fresh window would cut healthy campaigns whose sales had not
@@ -253,7 +253,7 @@
           <div class="bw-pills">
             ${pill(c.increase, 'increase', 'bw-up')}
             ${pill(c.decrease, 'decrease', 'bw-down')}
-            ${pill(c.cut, 'cut to floor', 'bw-cut')}
+            ${pill(c.cut, 'cut', 'bw-cut')}
             ${pill(c.hold, 'hold', 'bw-hold')}
           </div>
           <div class="bw-window">
@@ -344,8 +344,11 @@
         </div>`;
     }
 
+    // Cut and Decrease are both reductions; the distinction is why. Cut means
+    // losing money or not converting at all, Decrease means underperforming.
+    // Neither goes straight to the floor any more.
     const BW_ACTION_LABEL = {
-      increase: 'Increase', decrease: 'Decrease', hold: 'Hold', cut: 'Cut to floor'
+      increase: 'Increase', decrease: 'Decrease', hold: 'Hold', cut: 'Cut'
     };
 
     function bwRow(r) {
@@ -374,9 +377,9 @@
       </tr>`;
     }
 
-    // A cut to the $1 floor is a 90%-plus reduction on a live campaign, so it
-    // gets the same two-step as everything else and is never swept into a
-    // bulk action — there is no bulk action.
+    // Every write is two clicks, one row at a time. There is no bulk apply: a
+    // run can recommend reductions across dozens of live campaigns, and one
+    // button that moves all of them is not something worth having.
     function bwApplyCell(r) {
       const st = bwApply[r.campaignId] || {};
       const id = escapeHtml(r.campaignId);
@@ -411,6 +414,8 @@
           <div>${escapeHtml(bits.join(' · '))}</div>
           ${(data.notes || []).map(n =>
             `<div class="arf-warn">${escapeHtml(n.key)}: ${escapeHtml(n.note)}</div>`).join('')}
+          ${(data.deviations || []).map(d =>
+            `<div class="arf-muted">Deviation from the cadence doc: ${escapeHtml(d)}</div>`).join('')}
           ${data.censusSyncedAt
             ? `<div class="arf-muted">Campaign configuration synced ${escapeHtml(_svTimeAgo(data.censusSyncedAt))}</div>`
             : ''}

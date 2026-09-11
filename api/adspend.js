@@ -916,6 +916,27 @@ const RF_SPEC_DEVIATIONS = [
   'which already has a dedicated section for it.'
 ];
 
+// Tier 1 in the doc cuts straight to a $1 floor. It is staged here instead:
+// -40% on one bad fortnight, -70% when the prior fortnight was bad too. These
+// campaigns are volatile enough that one fortnight is not proof, and a floored
+// campaign produces too little data to ever demonstrate a recovery. Repeated,
+// -70% reaches the floor on its own.
+const BW_SPEC_DEVIATIONS = [
+  'Tier 1 stages its response rather than cutting straight to the $1 floor: ' +
+  '-40% on a single bad fortnight, -70% when the prior fortnight was bad too. ' +
+  'Repeated, that reaches the floor anyway, with a chance to recover at each step.',
+
+  'Sponsored Brands is not evaluated. Its 14-day attribution window does not ' +
+  'settle inside the 8-day lag this cadence uses, so retention would read low — and ' +
+  'Tier 1 acts on exactly that. SB is reviewed monthly.',
+
+  'Capped campaigns under 25% retention hold, per the strict first-match rule ' +
+  'the doc states. The Tier 3 scope line ("not capped or retention too low to ' +
+  'scale") could ' +
+  'be read as sending them to a decrease instead; holding never cuts a budget on ' +
+  'an interpretation.'
+];
+
 // Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
 // applies the prefix table AND any manual override set on the Campaign
 // Overview page — so there is no second brand table here. Only the BrightWay
@@ -1751,7 +1772,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ═════════════════════════════════════════════════════════════════════════════
 // Implements Amazon_Ad_Management_BiWeekly.docx — the Thursday, every-other-week
 // cadence. Unlike the weekly, this one ACTS: every enabled campaign gets one of
-// Increase, Decrease, Hold or Cut to Floor, and the page can write them.
+// Increase, Decrease, Hold or Cut, and the page can write them.
 //
 // THE WINDOW IS LAGGED BY DESIGN. Amazon credits a sale to the click date and
 // leaves it incomplete for 7 days, biased downward. The weekly could live with
@@ -1779,7 +1800,15 @@ const BW_CONFIG = {
   // Tier 1 — hard stops
   T1_LOSS_SPEND:       20,    // spend > $20 AND retention < 0
   T1_NOORDER_SPEND:    15,    // spend > $15 AND zero orders
-  FLOOR:               1,     // cut to $1
+  // The doc cuts straight to a $1 floor. That is a 94% reduction on one
+  // fortnight of evidence, and a floored campaign generates almost no data, so
+  // it can never demonstrate a recovery — the cut becomes self-reinforcing.
+  // Staged instead: a bad fortnight pulls back hard, a bad MONTH pulls back
+  // harder. Repeated, -70% reaches the floor anyway ($17 → $5 → $2 → $1) with
+  // a chance to recover at each step.
+  T1_SINGLE:           -0.40, // the problem appeared this fortnight only
+  T1_CONFIRMED:        -0.70, // ... and was there the fortnight before too
+  FLOOR:               1,     // no budget ever rounds below this
   // Tier 2 — scale up, capped campaigns only
   T2_HIGH:             0.75,  // >= 75% retention
   T2_MID:              0.50,  // 50-74%
@@ -1844,6 +1873,10 @@ function bwReportSpec(key, window) {
 function bwDecide(c, posture = 'hold') {
   const cfg = BW_CONFIG;
   const decide = (action, pct, tier, reason) => ({ action, pct, tier, reason });
+  // Tier 1 is still a distinct action from a Tier 3 decrease — "losing money"
+  // reads differently from "underperforming" — it simply no longer goes
+  // straight to the floor.
+  const cut = (pct, tier, reason) => ({ action: 'cut', pct, tier, reason });
 
   // ── significance floor, before the tiers ──
   if (c.spend < cfg.MIN_SPEND && c.orders < cfg.MIN_ORDERS) {
@@ -1852,11 +1885,25 @@ function bwDecide(c, posture = 'hold') {
   }
 
   // ── Tier 1, hard stops ──
+  // Confirmation means the same problem was present in the PRIOR fortnight, so
+  // these campaigns have been failing for a month rather than a bad two weeks.
+  // An absent prior half is never confirmation — a campaign that was not
+  // running then has proved nothing.
   if (c.spend > cfg.T1_LOSS_SPEND && c.retention !== null && c.retention < 0) {
-    return decide('cut', null, 1, 'Above break-even — losing money on every ad sale');
+    const confirmed = c.priorRetention !== null && c.priorRetention < 0;
+    return cut(confirmed ? cfg.T1_CONFIRMED : cfg.T1_SINGLE, 1,
+      confirmed
+        ? 'Below break-even two fortnights running — losing money on every ad sale'
+        : 'Below break-even this fortnight — losing money on every ad sale');
   }
   if (c.spend > cfg.T1_NOORDER_SPEND && c.orders === 0) {
-    return decide('cut', null, 1, 'Not converting — burning budget with nothing to show');
+    // Zero prior orders only counts when the campaign was actually spending
+    // then; otherwise "no orders" just means "not running".
+    const confirmed = c.priorOrders === 0 && c.priorSpend > cfg.T1_NOORDER_SPEND;
+    return cut(confirmed ? cfg.T1_CONFIRMED : cfg.T1_SINGLE, 1,
+      confirmed
+        ? 'No orders for a month — burning budget with nothing to show'
+        : 'No orders this fortnight — burning budget with nothing to show');
   }
 
   // Retention drives Tiers 2 and 3, so a campaign without one cannot be placed.
@@ -1915,7 +1962,6 @@ function bwDecide(c, posture = 'hold') {
 // "Round to the nearest dollar (never round below the $1 floor)."
 function bwNewBudget(current, decision) {
   if (!(current > 0)) return null;
-  if (decision.action === 'cut') return BW_CONFIG.FLOOR;
   if (decision.action === 'hold' || !decision.pct) return current;
   return Math.max(BW_CONFIG.FLOOR, Math.round(current * (1 + decision.pct)));
 }
@@ -1943,7 +1989,9 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
       budgetType: row.budgetType || '',
       portfolioId: row.portfolioId || null,
       spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0,
-      priorSpend: 0, priorSales: 0,
+      // The prior fortnight confirms (or fails to confirm) a Tier 1 problem,
+      // so it needs orders as well as money.
+      priorSpend: 0, priorSales: 0, priorOrders: 0,
       spendByDate: new Map()
     });
   }
@@ -1957,7 +2005,7 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
       c.clicks += r.clicks; c.impressions += r.impressions;
       c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
     } else if (r.date >= window.priorStart && r.date <= window.priorEnd) {
-      c.priorSpend += r.cost; c.priorSales += r.sales;
+      c.priorSpend += r.cost; c.priorSales += r.sales; c.priorOrders += r.orders;
     }
   }
 
@@ -1970,7 +2018,8 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
   for (const c of campaigns.values()) {
     c.acos = c.sales > 0 ? r4(c.spend / c.sales) : null;
     c.retention = retentionOf(c.grossMargin, c.spend, c.sales);
-    const priorRetention = retentionOf(c.grossMargin, c.priorSpend, c.priorSales);
+    c.priorRetention = retentionOf(c.grossMargin, c.priorSpend, c.priorSales);
+    const priorRetention = c.priorRetention;
     c.trendingDown = (c.retention !== null && priorRetention !== null) &&
                      (priorRetention - c.retention) > BW_CONFIG.TRENDING_DOWN;
 
@@ -2194,6 +2243,7 @@ async function handleBiweeklyCollect(req, res) {
 
     return res.status(200).json({
       success: true, window, config: BW_CONFIG, postures,
+      deviations: BW_SPEC_DEVIATIONS,
       censusSyncedAt: census.syncedAt, ...result, notes,
       generatedAt: new Date().toISOString()
     });
@@ -2251,4 +2301,4 @@ export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColum
          rfRecommendBid, rfDecomposeSpend,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
-         bwRecentRaises, BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS };
+         bwRecentRaises, BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
