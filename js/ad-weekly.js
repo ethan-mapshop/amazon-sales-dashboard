@@ -137,8 +137,10 @@
         ? `${s.length} weeks · ${s[0].week} to ${s[s.length - 1].weekEnd}`
         : 'no weeks in range');
 
+      // Charts first: the shape of the year is what the page is for, and the
+      // table is what you drop to when a curve raises a question.
       container.innerHTML =
-        wkControls(data) + wkSummary(data) + wkTable(data) + wkChartFrames() + wkFooter(data);
+        wkControls(data) + wkSummary(data) + wkChartFrames() + wkTable(data) + wkFooter(data);
       wkBindActions();
       wkDrawCharts(data);
     }
