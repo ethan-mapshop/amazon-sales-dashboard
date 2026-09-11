@@ -2038,10 +2038,19 @@
       background: var(--bg-secondary, #1c1c1c);
     }
 
+    /* Two across, never more. auto-fit let a four-chart group spread to three
+       or four on a wide screen while the two-chart group stayed at two, so the
+       same chart changed size depending on which section it sat in.
+       minmax(0, ...) rather than 1fr so a responsive canvas can shrink below
+       its own intrinsic width instead of forcing the column open. */
     .wk-charts {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 1.25rem;
+    }
+
+    @media (max-width: 1024px) {
+      .wk-charts { grid-template-columns: minmax(0, 1fr); }
     }
 
     .wk-chart { min-width: 0; }
