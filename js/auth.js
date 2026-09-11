@@ -240,6 +240,9 @@
         case 'adcampaigns':
           if (typeof loadAdCampaigns === 'function') loadAdCampaigns();
           break;
+        case 'adbiweekly':
+          if (typeof loadAdBiweekly === 'function') loadAdBiweekly();
+          break;
         // upload page has no data fetch
       }
     }

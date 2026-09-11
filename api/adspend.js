@@ -58,12 +58,17 @@ export default async function handler(req, res) {
     if (action === 'weekly-request')      return handleWeeklyRequest(req, res);
     if (action === 'weekly-status')       return handleWeeklyStatus(req, res);
     if (action === 'weekly-collect')      return handleWeeklyCollect(req, res);
+    // Bi-weekly tactical budget management — see the section at the bottom.
+    if (action === 'biweekly-request')    return handleBiweeklyRequest(req, res);
+    if (action === 'biweekly-status')     return handleBiweeklyStatus(req, res);
+    if (action === 'biweekly-collect')    return handleBiweeklyCollect(req, res);
   }
   if (req.method === 'POST') {
     if (action === 'migrate-from-sheets')     return handleMigrateFromSheets(req, res);
     if (action === 'dedupe-sheets-vs-api')    return handleDedupeSheetsVsApi(req, res);
     if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
     if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
+    if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -1680,11 +1685,11 @@ async function withAdsRetry(fn, attempts = 3) {
 // Report IDs are interpolated into an Amazon API URL, so they are validated
 // before any fetch — an ID carrying path traversal would re-target an
 // authenticated request at a different endpoint using the account credentials.
-function parseReportsParam(raw) {
+function parseReportsParam(raw, allowed = REPORT_KEYS) {
   if (!raw) return { error: 'reports parameter required (key:reportId,...)' };
   const parts = String(raw).split(',').map(s => s.trim()).filter(Boolean);
   if (!parts.length) return { error: 'reports parameter is empty' };
-  if (parts.length > REPORT_KEYS.length) return { error: 'too many report IDs' };
+  if (parts.length > allowed.length) return { error: 'too many report IDs' };
 
   const reports = [];
   const seen = new Set();
@@ -1693,7 +1698,7 @@ function parseReportsParam(raw) {
     if (idx < 1) return { error: `malformed report entry: ${part}` };
     const key = part.slice(0, idx);
     const reportId = part.slice(idx + 1);
-    if (!REPORT_KEYS.includes(key)) return { error: `unknown report key: ${key}` };
+    if (!allowed.includes(key)) return { error: `unknown report key: ${key}` };
     if (seen.has(key)) return { error: `duplicate report key: ${key}` };
     if (!REPORT_ID_RE.test(reportId)) return { error: `invalid report id for ${key}` };
     seen.add(key);
@@ -1725,7 +1730,508 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Exported for the offline cadence tests. Vercel only invokes the default
 // export, so these are inert in production.
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BI-WEEKLY TACTICAL BUDGET MANAGEMENT
+// ═════════════════════════════════════════════════════════════════════════════
+// Implements Amazon_Ad_Management_BiWeekly.docx — the Thursday, every-other-week
+// cadence. Unlike the weekly, this one ACTS: every enabled campaign gets one of
+// Increase, Decrease, Hold or Cut to Floor, and the page can write them.
+//
+// THE WINDOW IS LAGGED BY DESIGN. Amazon credits a sale to the click date and
+// leaves it incomplete for 7 days, biased downward. The weekly could live with
+// that because it only observed. This cadence cuts campaigns to a $1 floor on
+// "zero orders", so a fresh window would floor healthy campaigns whose orders
+// simply had not landed. The 14 days evaluated therefore END 8 DAYS AGO, and
+// every day in them is past its attribution window.
+//
+// The prior 14 days come along for "trending down", so the whole pull is 28
+// contiguous days — inside Amazon's 31-day report cap, one report per ad
+// product.
+//
+// It reads the same census as the weekly for budgets, brands and portfolios,
+// and writes through the same campaign update path. It stores one key of its
+// own: the per-brand monthly posture.
+
+// Every threshold is from the doc's Decision Tree section, applied in strict
+// tier order, first match wins.
+const BW_CONFIG = {
+  LAG_DAYS:            8,     // days between the end of the window and today
+  WINDOW_DAYS:         14,
+  // Statistical significance floor, applied BEFORE the tiers
+  MIN_SPEND:           10,    // "no increase or decrease if spend under $10..."
+  MIN_ORDERS:          3,     // "...AND orders are under 3"
+  // Tier 1 — hard stops
+  T1_LOSS_SPEND:       20,    // spend > $20 AND retention < 0
+  T1_NOORDER_SPEND:    15,    // spend > $15 AND zero orders
+  FLOOR:               1,     // cut to $1
+  // Tier 2 — scale up, capped campaigns only
+  T2_HIGH:             0.75,  // >= 75% retention
+  T2_MID:              0.50,  // 50-74%
+  T2_LOW:              0.25,  // 25-49%; below this, Hold even when capped
+  // Tier 3 — scale down
+  T3_BARELY:           0.10,  // 0-10% retention
+  T3_WEAK:             0.25,  // 10-25%
+  T3_MEDIOCRE:         0.50,  // 25-50% AND trending down
+  // "Trending down" is undefined in the doc. Retention has to fall by more than
+  // this against the prior 14 days, so ordinary week-to-week noise does not
+  // trip a decrease.
+  TRENDING_DOWN:       0.05,
+  // Capped, carried over from the weekly: the doc asks for time-in-budget,
+  // which Amazon exposes only in the console Budget Report.
+  CAP_DAY_RATIO:       0.95,
+  CAP_DAYS_MIN:        8      // of 14, the same proportion the weekly uses
+};
+
+// The ladders the monthly posture shifts along. "Scale brands get one tier of
+// additional scaling (a 25-49% campaign that would normally get +15% gets
+// +30%)"; constrain brands "skip Tier 2 increases and accept more aggressive
+// Tier 3 decreases".
+const BW_INCREASES = [0.15, 0.30, 0.50];
+const BW_DECREASES = [0.15, 0.25, 0.40];
+
+const BW_POSTURES = ['scale', 'hold', 'constrain'];
+const BW_POSTURE_KEY = 'biweekly:posture';
+
+const BW_REPORT_KEYS = ['spBw', 'sbBw'];
+
+// ─── WINDOW ──────────────────────────────────────────────────────────────────
+// Two 14-day halves, both fully attributed, ending LAG_DAYS before today.
+function resolveBiweeklyWindow(nowInstant) {
+  const today = _ptDate(nowInstant);
+  const end = _addDays(today, -BW_CONFIG.LAG_DAYS);
+  const start = _addDays(end, -(BW_CONFIG.WINDOW_DAYS - 1));
+  const priorEnd = _addDays(start, -1);
+  const priorStart = _addDays(priorEnd, -(BW_CONFIG.WINDOW_DAYS - 1));
+  return { start, end, priorStart, priorEnd, asOf: today };
+}
+
+function bwReportSpec(key, window) {
+  return {
+    product: key.startsWith('sp') ? 'sp' : 'sb',
+    // Both halves in one request: 28 contiguous days, under the 31-day cap.
+    start: window.priorStart, end: window.end
+  };
+}
+
+// ─── DECISION TREE ───────────────────────────────────────────────────────────
+// Pure, and the whole point of the cadence. Every branch here is a line in the
+// doc; nothing is inferred.
+//
+// `posture` is the brand's most recent monthly priority. Hold Steady is the
+// documented default and means the standard tree, so a run with no monthly
+// priorities behaves exactly as specified rather than approximating.
+function bwDecide(c, posture = 'hold') {
+  const cfg = BW_CONFIG;
+  const decide = (action, pct, tier, reason) => ({ action, pct, tier, reason });
+
+  // ── significance floor, before the tiers ──
+  if (c.spend < cfg.MIN_SPEND && c.orders < cfg.MIN_ORDERS) {
+    return decide('hold', 0, 'floor',
+      'Insufficient data — review structurally in monthly, not here');
+  }
+
+  // ── Tier 1, hard stops ──
+  if (c.spend > cfg.T1_LOSS_SPEND && c.retention !== null && c.retention < 0) {
+    return decide('cut', null, 1, 'Above break-even — losing money on every ad sale');
+  }
+  if (c.spend > cfg.T1_NOORDER_SPEND && c.orders === 0) {
+    return decide('cut', null, 1, 'Not converting — burning budget with nothing to show');
+  }
+
+  // Retention drives Tiers 2 and 3, so a campaign without one cannot be placed.
+  // An unmapped brand has no margin; a campaign with no sales has no ACoS.
+  // Holding is the honest answer — treating unknown as 0% would land it in the
+  // most aggressive decrease band.
+  if (c.retention === null) {
+    return decide('hold', 0, 4, 'No profit retention available — brand unmapped or no sales');
+  }
+
+  // ── Tier 2, scale up, capped only ──
+  // A constrain brand skips this tier entirely, per the doc.
+  if (c.capped && posture !== 'constrain') {
+    let step = null;
+    if (c.retention >= cfg.T2_HIGH) step = 2;
+    else if (c.retention >= cfg.T2_MID) step = 1;
+    else if (c.retention >= cfg.T2_LOW) step = 0;
+
+    if (step === null) {
+      return decide('hold', 0, 2, 'Capped but under 25% retention — not worth feeding');
+    }
+    // Scale brands get one tier of extra aggressiveness.
+    const idx = Math.min(step + (posture === 'scale' ? 1 : 0), BW_INCREASES.length - 1);
+    return decide('increase', BW_INCREASES[idx], 2,
+      `Capped at ${Math.round(c.retention * 100)}% retention` +
+      (posture === 'scale' && idx !== step ? ' — scale brand, one tier up' : ''));
+  }
+
+  // ── Tier 3, scale down ──
+  let step = null;
+  if (c.retention >= 0 && c.retention < cfg.T3_BARELY) step = 2;
+  else if (c.retention >= cfg.T3_BARELY && c.retention < cfg.T3_WEAK) step = 1;
+  else if (c.retention >= cfg.T3_WEAK && c.retention < cfg.T3_MEDIOCRE && c.trendingDown) step = 0;
+  // Retention below zero that did not clear Tier 1's spend bar still belongs in
+  // the most aggressive decrease band rather than falling through to Hold.
+  else if (c.retention < 0) step = 2;
+
+  if (step !== null) {
+    const idx = Math.min(step + (posture === 'constrain' ? 1 : 0), BW_DECREASES.length - 1);
+    const pct = BW_DECREASES[idx];
+    const why = c.retention < 0 ? 'Below break-even'
+              : step === 2 ? 'Barely profitable'
+              : step === 1 ? 'Weak'
+              : 'Mediocre and weakening';
+    return decide('decrease', -pct, 3,
+      `${why} at ${Math.round(c.retention * 100)}% retention` +
+      (posture === 'constrain' && idx !== step ? ' — constrain brand, one tier down' : ''));
+  }
+
+  // ── Tier 4 ──
+  return decide('hold', 0, 4,
+    c.capped ? 'Healthy and capped, but posture is constrain'
+             : 'Healthy retention and not capped');
+}
+
+// "Round to the nearest dollar (never round below the $1 floor)."
+function bwNewBudget(current, decision) {
+  if (!(current > 0)) return null;
+  if (decision.action === 'cut') return BW_CONFIG.FLOOR;
+  if (decision.action === 'hold' || !decision.pct) return current;
+  return Math.max(BW_CONFIG.FLOOR, Math.round(current * (1 + decision.pct)));
+}
+
+// ─── EVALUATE ────────────────────────────────────────────────────────────────
+// Every enabled campaign gets a row — the doc's output is the whole account,
+// not a flag list. Pure, so the tree can be exercised against the doc offline.
+function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = {} }) {
+  const campaigns = new Map();
+  for (const row of census.campaigns) {
+    if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
+    const brand = row.brand || null;
+    const segment = brand ? rfSegment(brand, row.name) : null;
+    campaigns.set(String(row.campaignId), {
+      campaignId: String(row.campaignId),
+      name: row.name || '',
+      adProduct: row.adProduct || '',
+      brand, segment,
+      grossMargin: segment ? MARGINS[segment] : null,
+      dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
+      budgetType: row.budgetType || '',
+      portfolioId: row.portfolioId || null,
+      spend: 0, orders: 0, sales: 0, clicks: 0, impressions: 0,
+      priorSpend: 0, priorSales: 0,
+      spendByDate: new Map()
+    });
+  }
+
+  let orphanRows = 0;
+  for (const r of rows) {
+    const c = campaigns.get(r.campaignId);
+    if (!c) { orphanRows++; continue; }
+    if (r.date >= window.start && r.date <= window.end) {
+      c.spend += r.cost; c.orders += r.orders; c.sales += r.sales;
+      c.clicks += r.clicks; c.impressions += r.impressions;
+      c.spendByDate.set(r.date, (c.spendByDate.get(r.date) || 0) + r.cost);
+    } else if (r.date >= window.priorStart && r.date <= window.priorEnd) {
+      c.priorSpend += r.cost; c.priorSales += r.sales;
+    }
+  }
+
+  const retentionOf = (margin, spend, sales) => {
+    if (!margin || !(sales > 0)) return null;
+    return r4((margin - spend / sales) / margin);
+  };
+
+  const out = [];
+  for (const c of campaigns.values()) {
+    c.acos = c.sales > 0 ? r4(c.spend / c.sales) : null;
+    c.retention = retentionOf(c.grossMargin, c.spend, c.sales);
+    const priorRetention = retentionOf(c.grossMargin, c.priorSpend, c.priorSales);
+    c.trendingDown = (c.retention !== null && priorRetention !== null) &&
+                     (priorRetention - c.retention) > BW_CONFIG.TRENDING_DOWN;
+
+    // Capped, by days rather than a period total — a campaign clipped on 8 days
+    // and idle on 6 is constrained even though the fortnight total is not.
+    const lifetime = /LIFETIME/i.test(c.budgetType);
+    if (c.dailyBudget > 0 && !lifetime) {
+      const atCap = c.dailyBudget * BW_CONFIG.CAP_DAY_RATIO;
+      let days = 0;
+      for (const daySpend of c.spendByDate.values()) if (daySpend >= atCap) days++;
+      c.cappedDays = days;
+      c.capped = days >= BW_CONFIG.CAP_DAYS_MIN;
+    } else {
+      c.cappedDays = null;
+      c.capped = false;
+    }
+
+    const posture = BW_POSTURES.includes(postures[c.brand]) ? postures[c.brand] : 'hold';
+    const decision = bwDecide(c, posture);
+    const newBudget = bwNewBudget(c.dailyBudget, decision);
+    const delta = (newBudget !== null && c.dailyBudget !== null) ? r2(newBudget - c.dailyBudget) : 0;
+
+    out.push({
+      campaignId: c.campaignId, campaign: c.name, adProduct: c.adProduct,
+      brand: c.brand, posture,
+      dailyBudget: c.dailyBudget,
+      spend: r2(c.spend), sales: r2(c.sales), orders: Math.round(c.orders),
+      acos: c.acos, retention: c.retention,
+      priorRetention, trendingDown: c.trendingDown,
+      cappedDays: c.cappedDays, weekDays: BW_CONFIG.WINDOW_DAYS, capped: c.capped,
+      action: decision.action, pct: decision.pct, tier: decision.tier,
+      reason: decision.reason,
+      newBudget, delta,
+      // The weekly can raise a budget on the same campaign from a different
+      // window. Applying both compounds them, so a recent raise is surfaced
+      // rather than left for you to remember.
+      raisedRecently: recentRaises[c.campaignId] || null
+    });
+  }
+
+  // "Sorted by recommended magnitude of change so biggest moves are visible first."
+  out.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) ||
+                     String(a.brand || '').localeCompare(String(b.brand || '')));
+
+  const counts = { increase: 0, decrease: 0, hold: 0, cut: 0 };
+  for (const r of out) counts[r.action]++;
+
+  // Brand Summary — SP and SB split per brand, as the doc specifies.
+  const brands = new Map();
+  for (const r of out) {
+    if (!r.brand) continue;
+    let b = brands.get(r.brand);
+    if (!b) {
+      b = { brand: r.brand, posture: r.posture,
+            sp: { spend: 0, sales: 0, orders: 0 },
+            sb: { spend: 0, sales: 0, orders: 0 } };
+      brands.set(r.brand, b);
+    }
+    const side = r.adProduct === 'SB' ? b.sb : b.sp;
+    side.spend += r.spend; side.sales += r.sales; side.orders += r.orders;
+  }
+  const brandSummary = [...brands.values()].map(b => {
+    const spend = b.sp.spend + b.sb.spend;
+    const sales = b.sp.sales + b.sb.sales;
+    const segment = BRAND_SEGMENT[b.brand] || null;
+    const margin = segment ? MARGINS[segment] : null;
+    return {
+      brand: b.brand, posture: b.posture,
+      sp: { spend: r2(b.sp.spend), sales: r2(b.sp.sales), orders: b.sp.orders },
+      sb: { spend: r2(b.sb.spend), sales: r2(b.sb.sales), orders: b.sb.orders },
+      spend: r2(spend), sales: r2(sales), orders: b.sp.orders + b.sb.orders,
+      acos: sales > 0 ? r4(spend / sales) : null,
+      retention: retentionOf(margin, spend, sales)
+    };
+  }).sort((a, b) => b.spend - a.spend);
+
+  return {
+    rows: out, counts, brandSummary,
+    coverage: {
+      enabled: campaigns.size,
+      orphanRows,
+      unmapped: out.filter(r => !r.brand && r.spend > 0).length,
+      noBudget: out.filter(r => r.dailyBudget === null).length
+    }
+  };
+}
+
+// Budget raises this tool made in the last fortnight, so the bi-weekly can say
+// so before recommending another. Read from the census change log, which
+// records dashboard edits with source 'edit'.
+function bwRecentRaises(changes, window) {
+  const out = {};
+  for (const r of (changes || [])) {
+    if (!r || r.field !== 'dailyBudget') continue;
+    if (String(r.ptDate || '') < window.priorStart) continue;
+    const from = Number(r.from), to = Number(r.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) continue;
+    const prev = out[String(r.campaignId)];
+    if (!prev || String(r.ptDate) > prev.ptDate) {
+      out[String(r.campaignId)] = { from, to, ptDate: r.ptDate };
+    }
+  }
+  return out;
+}
+
+// ─── HANDLERS ────────────────────────────────────────────────────────────────
+
+async function handleBiweeklyRequest(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const missing = missingAdsCredentials();
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing Advertising API credentials: ${missing.join(', ')}` });
+    }
+
+    const window = resolveBiweeklyWindow(new Date());
+    const accessToken = await getAdsAccessToken();
+    const reports = [];
+    const failures = [];
+
+    for (const key of BW_REPORT_KEYS) {
+      const spec = bwReportSpec(key, window);
+      try {
+        const r = await requestCampaignReport(accessToken, spec);
+        reports.push({ key, ...r });
+      } catch (err) {
+        console.error(`[BIWEEKLY REQUEST] ${key} failed:`, err.message);
+        failures.push({ key, error: err.message, window: `${spec.start}..${spec.end}`,
+                        invalidColumns: rfInvalidColumns(err.message) });
+      }
+      await sleep(600);
+    }
+
+    if (!reports.length) {
+      return res.status(502).json({
+        error: 'No report could be requested. ' + (failures[0] ? failures[0].error : ''),
+        failures
+      });
+    }
+    return res.status(200).json({ success: true, window, reports, failures,
+                                  requestedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('[BIWEEKLY REQUEST] Error:', error);
+    return res.status(500).json({ error: 'Biweekly-request failed: ' + error.message });
+  }
+}
+
+async function handleBiweeklyStatus(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const parsed = parseReportsParam(req.query.reports, BW_REPORT_KEYS);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+    const accessToken = await getAdsAccessToken();
+    const statuses = [];
+    for (const { key, reportId } of parsed.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const norm = (status.status || '').toUpperCase();
+        statuses.push({ key, reportId, status: norm,
+                        done: norm === 'COMPLETED' || norm === 'SUCCESS',
+                        failed: norm === 'FAILURE' || norm === 'FAILED' || norm === 'CANCELLED' });
+      } catch (err) {
+        statuses.push({ key, reportId, status: 'ERROR', done: false, failed: false, error: err.message });
+      }
+    }
+    return res.status(200).json({ success: true, statuses,
+      allDone: statuses.every(s => s.done || s.failed), checkedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('[BIWEEKLY STATUS] Error:', error);
+    return res.status(500).json({ error: 'Biweekly-status failed: ' + error.message });
+  }
+}
+
+async function handleBiweeklyCollect(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const parsed = parseReportsParam(req.query.reports, BW_REPORT_KEYS);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+    const window = {
+      start: String(req.query.start || ''), end: String(req.query.end || ''),
+      priorStart: String(req.query.priorStart || ''), priorEnd: String(req.query.priorEnd || '')
+    };
+    for (const [k, v] of Object.entries(window)) {
+      if (!DATE_RE.test(v)) return res.status(400).json({ error: `${k} must be YYYY-MM-DD` });
+    }
+    if (daySpan(window.start, window.end) !== BW_CONFIG.WINDOW_DAYS ||
+        daySpan(window.priorStart, window.priorEnd) !== BW_CONFIG.WINDOW_DAYS) {
+      return res.status(400).json({ error: `both windows must span exactly ${BW_CONFIG.WINDOW_DAYS} days` });
+    }
+
+    const [census, postures] = await Promise.all([loadCensus(), bwLoadPostures()]);
+    if (!census.campaigns.length) {
+      return res.status(409).json({
+        error: 'No campaign snapshot stored. Refresh Campaign Overview first — ' +
+               'the tree reads budgets, brands and portfolios from it.'
+      });
+    }
+
+    const accessToken = await getAdsAccessToken();
+    const rows = [];
+    const notes = [];
+    for (const { key, reportId } of parsed.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const url = status.url || status.location;
+        if (!url) { notes.push({ key, note: `report not ready (${status.status || 'unknown'})` }); continue; }
+        const raw = await withAdsRetry(() => downloadReport(url));
+        rows.push(...rfNormalizeRows(raw, key.startsWith('sp') ? 'SP' : 'SB'));
+      } catch (err) {
+        console.error(`[BIWEEKLY COLLECT] ${key} failed:`, err.message);
+        notes.push({ key, note: 'download failed: ' + err.message });
+      }
+    }
+    if (!rows.length) return res.status(502).json({ error: 'No report rows could be downloaded.', notes });
+
+    const result = evaluateBiweekly({
+      census, rows, window, postures,
+      recentRaises: bwRecentRaises(census.changes, window)
+    });
+
+    return res.status(200).json({
+      success: true, window, config: BW_CONFIG, postures,
+      censusSyncedAt: census.syncedAt, ...result, notes,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[BIWEEKLY COLLECT] Error:', error);
+    return res.status(500).json({ error: 'Biweekly-collect failed: ' + error.message });
+  }
+}
+
+// The monthly posture per brand. Monthly is advisory and produces these by
+// judgement, not computation, so they are set here rather than derived.
+async function bwLoadPostures() {
+  try {
+    const stored = await kv.get(BW_POSTURE_KEY);
+    const out = {};
+    for (const [brand, posture] of Object.entries(stored || {})) {
+      if (BW_POSTURES.includes(posture)) out[brand] = posture;
+    }
+    return out;
+  } catch (err) {
+    console.error('[BIWEEKLY] posture load failed:', err.message);
+    return {};
+  }
+}
+
+async function handleBiweeklyPosture(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const brand = String(req.body?.brand || '');
+    const posture = String(req.body?.posture || '');
+    if (!brand) return res.status(400).json({ error: 'brand required' });
+    if (!BW_POSTURES.includes(posture)) {
+      return res.status(400).json({ error: `posture must be one of: ${BW_POSTURES.join(', ')}` });
+    }
+
+    const current = await bwLoadPostures();
+    // 'hold' IS the documented default, so storing it would only freeze a brand
+    // against a later change in what the default means. Record a departure.
+    const next = { ...current };
+    if (posture === 'hold') delete next[brand];
+    else next[brand] = posture;
+
+    await kv.set(BW_POSTURE_KEY, next);
+    return res.status(200).json({ success: true, postures: next });
+  } catch (error) {
+    console.error('[BIWEEKLY POSTURE] Error:', error);
+    return res.status(500).json({ error: 'Posture update failed: ' + error.message });
+  }
+}
+
 export { evaluateWeek, rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
          rfRecommendBid, rfDecomposeSpend,
-         RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS };
+         RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
+         bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
+         bwRecentRaises, BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS };

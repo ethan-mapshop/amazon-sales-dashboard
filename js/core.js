@@ -225,6 +225,11 @@ if (pageName === 'salesvolume' && accessToken) {
         loadAdRedFlags();
       }
 
+      // Same: the cached run, never an automatic one. This cadence writes.
+      if (pageName === 'adbiweekly' && accessToken) {
+        loadAdBiweekly();
+      }
+
       // Reads the stored snapshot only — refreshing from Amazon is explicit.
       if (pageName === 'adcampaigns' && accessToken) {
         loadAdCampaigns();
