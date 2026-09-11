@@ -7,6 +7,10 @@
 // literals properly, collects every declared name across all the scripts plus
 // the standard built-ins, then reports any identifier that is read but never
 // declared anywhere.
+//
+// It also checks the other half of that seam: an action a page fetches but the
+// API routes under a different HTTP method is equally invisible until someone
+// clicks the button and gets a 405.
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -267,6 +271,104 @@ ok(!bwWrites.some(k => /result|lastrun/i.test(k)),
 ok(/action=biweekly-get/.test(bwRaw), 'and reads its result from the server');
 ok(/action=biweekly-import/.test(bwRaw), 'with an import path for an off-cycle run');
 ok(/data\.newer/.test(bwRaw), 'and a banner driven by what the server says is newer');
+
+console.log('\nROUTING  \u2014 every action the pages call is reachable by the method they use');
+
+// A handler routed under the wrong HTTP method is invisible until someone
+// clicks the button: the file loads, the function exists, and the request comes
+// back 405. That is exactly how monthly-request shipped, routed under POST
+// while the page fetched it with GET.
+
+// Every `fetch('/api/<file>?action=<name>')` in the client, with whether that
+// call sets method: 'POST'. The options object is scanned from the call site
+// to its closing brace.
+function clientCalls(src) {
+  const out = [];
+  const re = /fetch\(\s*[`'"]\/api\/(\w+)\?action=([\w-]+)/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const tail = src.slice(m.index, m.index + 500);
+    out.push({ api: m[1], action: m[2], post: /method:\s*'POST'/.test(tail) });
+  }
+  return out;
+}
+
+// Each block is read by matching its own braces rather than by assuming one
+// comes before the other. api/adcampaigns.js puts POST first, which an
+// order-dependent parse reported as six routing errors that were not there.
+function methodBlock(src, method) {
+  const at = src.indexOf(`if (req.method === '${method}') {`);
+  if (at === -1) return null;
+  let i = src.indexOf('{', at);
+  let depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '{') depth++;
+    else if (src[j] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(i, j + 1);
+    }
+  }
+  return null;
+}
+
+function routeBlocks(src) {
+  const GET = methodBlock(src, 'GET');
+  const POST = methodBlock(src, 'POST');
+  if (!GET && !POST) return null;
+  return { GET: GET || '', POST: POST || '' };
+}
+
+const apiCache = new Map();
+function apiSource(name) {
+  if (!apiCache.has(name)) {
+    const f = path.join(root, 'api', `${name}.js`);
+    apiCache.set(name, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null);
+  }
+  return apiCache.get(name);
+}
+
+// Raw sources, not the stripped ones: the URL lives inside a string literal,
+// which stripping blanks out.
+const calls = [];
+for (const [rel, src] of sources) {
+  for (const c of clientCalls(src)) calls.push({ ...c, file: rel });
+}
+ok(calls.length > 0, `${calls.length} API calls found across the pages`);
+
+const misrouted = [];
+const unrouted = [];
+for (const c of calls) {
+  const src = apiSource(c.api);
+  if (!src) { unrouted.push(`${c.file}: no api/${c.api}.js`); continue; }
+  const blocks = routeBlocks(src);
+  // A single-method endpoint with no method blocks at all routes everything.
+  if (!blocks) continue;
+
+  // Both router shapes in this codebase: an if-chain and a switch.
+  const names = (text) =>
+    new RegExp(`action === '${c.action}'|case '${c.action}'`).test(text || '');
+
+  const want = c.post ? 'POST' : 'GET';
+  const other = c.post ? 'GET' : 'POST';
+  if (names(blocks[want])) continue;
+
+  // Only a positive sighting inside the OTHER method's block is evidence of
+  // misrouting. Anything else is a router shape this check cannot read, and a
+  // test that guesses there would cry wolf on files it does not understand.
+  if (names(blocks[other])) {
+    misrouted.push(`${c.file} calls ${c.api}?action=${c.action} with ${want}, ` +
+                   `but it is routed under ${other}`);
+  } else if (!names(src)) {
+    unrouted.push(`${c.file} calls ${c.api}?action=${c.action}, which the API never names`);
+  }
+}
+
+ok(misrouted.length === 0,
+   'no page calls an action under a method it is not routed for',
+   misrouted.length ? '\n      ' + misrouted.join('\n      ') : '');
+ok(unrouted.length === 0,
+   'and every action the pages call exists on the server',
+   unrouted.length ? '\n      ' + unrouted.join('\n      ') : '');
 
 console.log('\nNO POPUPS  — inline UI only');
 for (const rel of AD_PAGES) {

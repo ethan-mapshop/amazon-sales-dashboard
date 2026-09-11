@@ -68,6 +68,11 @@ export default async function handler(req, res) {
     if (action === 'biweekly-status')     return handleBiweeklyStatus(req, res);
     if (action === 'biweekly-collect')    return handleBiweeklyCollect(req, res);
     if (action === 'biweekly-get')        return handleBiweeklyGet(req, res);
+    // Monthly brand posture review — see the section at the bottom.
+    if (action === 'monthly-request')      return handleMonthlyRequest(req, res);
+    if (action === 'monthly-status')       return handleMonthlyStatus(req, res);
+    if (action === 'monthly-collect')      return handleMonthlyCollect(req, res);
+    if (action === 'monthly-get')          return handleMonthlyGet(req, res);
     // Vercel cron. Unauthenticated by the convention every other cron here
     // follows; nothing in them writes a budget.
     if (action === 'cron-ads-request')    return handleCronAdsRequest(req, res);
@@ -81,10 +86,6 @@ export default async function handler(req, res) {
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
     if (action === 'biweekly-adopt')          return handleBiweeklyAdopt(req, res);
     if (action === 'biweekly-import')         return handleBiweeklyImport(req, res);
-    if (action === 'monthly-request')     return handleMonthlyRequest(req, res);
-    if (action === 'monthly-status')      return handleMonthlyStatus(req, res);
-    if (action === 'monthly-collect')     return handleMonthlyCollect(req, res);
-    if (action === 'monthly-get')         return handleMonthlyGet(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
