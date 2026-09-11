@@ -28,7 +28,7 @@ const files = [...html.matchAll(/<script src="(js\/[^"]+)"><\/script>/g)].map(m 
 
 // The ad pages this suite is scoped to. Everything else is inventory.
 const AD_PAGES = ['js/ad-redflags.js', 'js/ad-biweekly.js', 'js/ad-monthly.js',
-                  'js/ad-campaigns.js'];
+                  'js/ad-weekly.js', 'js/ad-campaigns.js'];
 
 console.log('\nSCRIPT INVENTORY');
 ok(files.length >= 14, `index.html loads ${files.length} local scripts, one shared scope`);

@@ -2,7 +2,7 @@ import { kv } from '@vercel/kv';
 // The campaign census. Imported rather than re-implemented: the cron needs to
 // refresh it before fetching reports, and there is exactly one correct way to
 // do that. Vercel bundles the module; it does not add a serverless function.
-import { acRunSync } from './adcampaigns.js';
+import { acRunSync, acBrandFromPrefix } from './adcampaigns.js';
 import { gunzip } from 'zlib';
 import { promisify } from 'util';
 
@@ -73,6 +73,9 @@ export default async function handler(req, res) {
     if (action === 'monthly-status')       return handleMonthlyStatus(req, res);
     if (action === 'monthly-collect')      return handleMonthlyCollect(req, res);
     if (action === 'monthly-get')          return handleMonthlyGet(req, res);
+    // Weekly history — the continuous series, see the section at the bottom.
+    if (action === 'weeks-get')            return handleWeeksGet(req, res);
+    if (action === 'weeks-rebuild')        return handleWeeksRebuild(req, res);
     // Vercel cron. Unauthenticated by the convention every other cron here
     // follows; nothing in them writes a budget.
     if (action === 'cron-ads-request')    return handleCronAdsRequest(req, res);
@@ -1183,6 +1186,10 @@ async function handleWeeklyCollect(req, res) {
     const { inputs, orphanRows } = rfBuildInputs({ census, rows, window });
     // Stored: what the reports said. Never: what to do about it.
     await rfSaveRun(window, inputs);
+    // The same rows also feed the continuous series. The baseline is four whole
+    // settled weeks, which is the only place the recent end of that series can
+    // come from: the month buckets are a month behind by construction.
+    const weeksWritten = await whIngestWeeklyRun({ rows, census, window });
 
     const result = rfDecideAll({ inputs, census, window });
     result.coverage.orphanRows += orphanRows;
@@ -1195,6 +1202,7 @@ async function handleWeeklyCollect(req, res) {
       censusSyncedAt: census.syncedAt,
       ...result,
       notes,
+      weeksWritten,
       collectedAt: new Date().toISOString()
     });
   } catch (error) {
@@ -3856,6 +3864,8 @@ async function handleCronAdsCollect(req, res) {
         census, rows: [...rowsByKey.spWeek, ...rowsByKey.spBase], window: pending.weekly
       });
       await rfSaveRun(pending.weekly, inputs);
+      await whIngestWeeklyRun({ rows: [...rowsByKey.spWeek, ...rowsByKey.spBase],
+                                census, window: pending.weekly });
       stored.push('weekly');
       // Decided here only to say how much there is to look at. Nothing is
       // stored from it: the page re-decides on every read.
@@ -4169,6 +4179,380 @@ async function handleCronMonthlyCollect(req, res) {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// WEEKLY HISTORY — the continuous series the cadence pages never kept
+// ═════════════════════════════════════════════════════════════════════════════
+// Every other page here answers "what should I do this week". This one answers
+// "what has been happening", which nothing did: the weekly, bi-weekly and
+// monthly runs each store one window and overwrite it, so the series they build
+// every Tuesday was discarded every Tuesday.
+//
+// Two feeds, both of them data already being fetched, binned into the same
+// Monday-to-Sunday weeks the weekly cadence uses:
+//
+//   month buckets   adspend:sp:raw:YYYY-MM holds daily rows per campaign per
+//                   SKU. Complete from 2026-03; spend-only before that, which
+//                   is why the series starts there.
+//   weekly collect  its 28-day baseline is exactly four whole settled weeks
+//                   sitting immediately before the current one, so each Tuesday
+//                   tops up the recent end. The month buckets cannot: September
+//                   is not written until October 3rd.
+//
+// A WEEK IS ONLY EVER WRITTEN ONCE IT HAS SETTLED. Sponsored Products keeps
+// crediting sales to a click date for seven days, so a week read straight after
+// it closes is understated and nothing would ever go back to correct it. Both
+// feeds are filtered to weeks lying entirely inside a covered, settled span,
+// which is also why each week arrives a week later than it could.
+//
+// Stored per campaign rather than per brand: brand comes from the census and
+// the name prefix on every read, the same discipline as everywhere else, so a
+// re-mapped campaign corrects its own history instead of freezing it.
+
+const WH_KEY = (year) => `adspend:weeks:${year}`;
+
+// Sponsored Products only, matching every other cadence. Sponsored Brands has
+// no conversion history stored at all.
+const WH_SETTLE_DAYS = 7;
+
+// Monday of the week containing this date.
+function whMonday(iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  const dow = d.getUTCDay();                 // 0=Sun … 6=Sat
+  d.setUTCDate(d.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+  return d.toISOString().slice(0, 10);
+}
+
+// The last week whose final day is far enough back to have finished attributing.
+function whSettledThrough(nowInstant) {
+  const cutoff = _addDays(_ptDate(nowInstant || new Date()), -WH_SETTLE_DAYS);
+  let monday = whMonday(cutoff);
+  // A week counts only if its Sunday is on or before the cutoff.
+  if (_addDays(monday, 6) > cutoff) monday = _addDays(monday, -7);
+  return monday;
+}
+
+// Daily rows to weekly per-campaign totals. `coverStart`/`coverEnd` are the
+// span the rows actually came from; a week not wholly inside it would be
+// counted short, so it is dropped rather than written wrong.
+//
+// Pure, and the reason both feeds can share one path despite arriving in
+// different shapes.
+function whBinWeeks(rows, coverStart, coverEnd, settledThrough) {
+  const weeks = new Map();
+  for (const r of (rows || [])) {
+    const date = String(r.date || '').slice(0, 10);
+    const campaign = String(r.campaign || '').trim();
+    if (!DATE_RE.test(date) || !campaign) continue;
+    if (date < coverStart || date > coverEnd) continue;
+
+    const week = whMonday(date);
+    // The WHOLE week has to sit inside the covered span. Comparing against the
+    // Monday of coverStart instead of coverStart itself let through a week that
+    // began in the previous, uncovered month and so was counted short.
+    if (week < coverStart || _addDays(week, 6) > coverEnd) continue;
+    if (settledThrough && week > settledThrough) continue;
+
+    let byCampaign = weeks.get(week);
+    if (!byCampaign) { byCampaign = new Map(); weeks.set(week, byCampaign); }
+    let c = byCampaign.get(campaign);
+    if (!c) {
+      c = { campaign, impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0 };
+      byCampaign.set(campaign, c);
+    }
+    c.impressions += num(r.impressions);
+    c.clicks += num(r.clicks);
+    c.orders += num(rfPick(r, ['orders', 'purchases7d', 'purchases']));
+    c.spend += num(rfPick(r, ['spend', 'cost']));
+    c.sales += num(rfPick(r, ['sales', 'sales7d']));
+  }
+
+  const out = [];
+  for (const [week, byCampaign] of weeks) {
+    for (const c of byCampaign.values()) {
+      out.push({
+        week,
+        campaign: c.campaign,
+        impressions: Math.round(c.impressions),
+        clicks: Math.round(c.clicks),
+        orders: Math.round(c.orders),
+        spend: r2(c.spend),
+        sales: r2(c.sales)
+      });
+    }
+  }
+  return out;
+}
+
+// Upsert by (week, campaign). Every write is settled data, so a later write
+// agreeing with an earlier one is the normal case rather than a conflict, and
+// re-running a backfill is free.
+async function whUpsert(binned) {
+  if (!binned.length) return { weeks: 0, rows: 0, years: [] };
+  const byYear = new Map();
+  for (const row of binned) {
+    const y = row.week.slice(0, 4);
+    if (!byYear.has(y)) byYear.set(y, []);
+    byYear.get(y).push(row);
+  }
+
+  const years = [];
+  for (const [year, rows] of byYear) {
+    const stored = await kv.get(WH_KEY(year));
+    const existing = (stored && Array.isArray(stored.rows)) ? stored.rows : [];
+    const index = new Map(existing.map(r => [`${r.week}|${r.campaign}`, r]));
+    for (const r of rows) index.set(`${r.week}|${r.campaign}`, r);
+    const merged = [...index.values()].sort(
+      (a, b) => a.week.localeCompare(b.week) || a.campaign.localeCompare(b.campaign));
+    await kv.set(WH_KEY(year), { rows: merged, updatedAt: new Date().toISOString() });
+    years.push(year);
+  }
+  return {
+    weeks: new Set(binned.map(r => r.week)).size,
+    rows: binned.length,
+    years
+  };
+}
+
+async function whLoadRange(from, to) {
+  const years = [];
+  for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y++) years.push(String(y));
+  const stores = await Promise.all(years.map(y => kv.get(WH_KEY(y))));
+  const rows = [];
+  for (const s of stores) {
+    for (const r of ((s && s.rows) || [])) {
+      if (r.week >= from && r.week <= to) rows.push(r);
+    }
+  }
+  return rows;
+}
+
+// ─── DECIDE ──────────────────────────────────────────────────────────────────
+// Nothing is stored but the five measured numbers. The five ratios your sheet
+// tracked are arithmetic on those and are computed here on every read, so a
+// corrected brand mapping or a re-pulled month shows up without a rebuild.
+
+function whBrandOf(name, byName) {
+  const known = byName.get(String(name || '').trim());
+  if (known) return known;
+  return acBrandFromPrefix(name);
+}
+
+function whSeries({ rows, census, brand }) {
+  // The census is the authority on which campaign belongs to which brand,
+  // including a manual override. The name prefix only answers for campaigns it
+  // no longer carries, which is every renamed or archived one.
+  const byName = new Map();
+  for (const c of (census.campaigns || [])) {
+    if (c.name && c.brand) byName.set(String(c.name).trim(), c.brand);
+  }
+
+  const weeks = new Map();
+  const brands = new Set();
+  let unmappedSpend = 0;
+  const unmappedNames = new Set();
+
+  for (const r of rows) {
+    const b = whBrandOf(r.campaign, byName);
+    if (b) brands.add(b);
+    else { unmappedSpend += r.spend; unmappedNames.add(r.campaign); }
+    if (brand && brand !== 'all' && b !== brand) continue;
+
+    let w = weeks.get(r.week);
+    if (!w) {
+      w = { week: r.week, weekEnd: _addDays(r.week, 6),
+            impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0, campaigns: 0 };
+      weeks.set(r.week, w);
+    }
+    w.impressions += r.impressions;
+    w.clicks += r.clicks;
+    w.orders += r.orders;
+    w.spend += r.spend;
+    w.sales += r.sales;
+    w.campaigns++;
+  }
+
+  const series = [...weeks.values()]
+    .sort((a, b) => a.week.localeCompare(b.week))
+    .map(w => ({
+      ...w,
+      spend: r2(w.spend),
+      sales: r2(w.sales),
+      acos: w.sales > 0 ? r4(w.spend / w.sales) : null,
+      roas: w.spend > 0 ? r2(w.sales / w.spend) : null,
+      cpc: w.clicks > 0 ? r2(w.spend / w.clicks) : null,
+      ctr: w.impressions > 0 ? r4(w.clicks / w.impressions) : null,
+      cvr: w.clicks > 0 ? r4(w.orders / w.clicks) : null
+    }));
+
+  const totals = series.reduce((t, w) => {
+    t.impressions += w.impressions; t.clicks += w.clicks; t.orders += w.orders;
+    t.spend += w.spend; t.sales += w.sales;
+    return t;
+  }, { impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0 });
+  totals.spend = r2(totals.spend);
+  totals.sales = r2(totals.sales);
+  totals.acos = totals.sales > 0 ? r4(totals.spend / totals.sales) : null;
+  totals.roas = totals.spend > 0 ? r2(totals.sales / totals.spend) : null;
+  totals.cpc = totals.clicks > 0 ? r2(totals.spend / totals.clicks) : null;
+  totals.ctr = totals.impressions > 0 ? r4(totals.clicks / totals.impressions) : null;
+  totals.cvr = totals.clicks > 0 ? r4(totals.orders / totals.clicks) : null;
+
+  return {
+    series,
+    totals,
+    brands: [...brands].sort(),
+    coverage: {
+      unmappedCampaigns: unmappedNames.size,
+      unmappedSpend: r2(unmappedSpend)
+    }
+  };
+}
+
+// ─── HANDLERS ────────────────────────────────────────────────────────────────
+
+async function handleWeeksGet(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const to = DATE_RE.test(String(req.query.to || '')) ? req.query.to : whSettledThrough(new Date());
+    const weeksBack = Math.min(260, Math.max(1, Number(req.query.weeks) || 52));
+    const from = DATE_RE.test(String(req.query.from || ''))
+      ? req.query.from : _addDays(whMonday(to), -7 * (weeksBack - 1));
+
+    const [rows, census] = await Promise.all([whLoadRange(from, to), loadCensus()]);
+    if (!rows.length) {
+      return res.status(200).json({ success: true, empty: true, from, to });
+    }
+
+    const brand = String(req.query.brand || 'all');
+    const result = whSeries({ rows, census, brand });
+
+    return res.status(200).json({
+      success: true, from, to, brand,
+      settledThrough: whSettledThrough(new Date()),
+      censusSyncedAt: census.syncedAt,
+      ...result
+    });
+  } catch (error) {
+    console.error('[WEEKS GET] Error:', error);
+    return res.status(500).json({ error: 'Weeks-get failed: ' + error.message });
+  }
+}
+
+// Rebuilds weeks from the stored month buckets. Idempotent: every week it
+// writes is settled, so running it twice changes nothing. Months that only ever
+// held spend are refused rather than written as a week with no clicks in it,
+// which would read as a collapse that never happened.
+async function handleWeeksRebuild(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const index = (await kv.get('adspend:sp:index')) || [];
+    if (!Array.isArray(index) || !index.length) {
+      return res.status(409).json({ error: 'No monthly ad spend data is stored.' });
+    }
+    const startMonth = /^\d{4}-\d{2}$/.test(String(req.query.startMonth || ''))
+      ? req.query.startMonth : index[0];
+    const endMonth = /^\d{4}-\d{2}$/.test(String(req.query.endMonth || ''))
+      ? req.query.endMonth : index[index.length - 1];
+    const months = index.filter(m => m >= startMonth && m <= endMonth);
+    if (!months.length) return res.status(400).json({ error: 'No stored months in that range.' });
+
+    // Read one month at a time rather than all of them at once. Most of the
+    // stored months carry spend and nothing else, and pulling every bucket into
+    // memory before looking at any of them was the difference between a few
+    // megabytes and most of ten.
+    //
+    // Weeks are only trustworthy inside a CONTIGUOUS run of usable months: a gap
+    // would silently halve whichever week spans it. So rows accumulate for the
+    // current run, and the run is binned and written the moment it ends.
+    const settled = whSettledThrough(new Date());
+    const usable = [];
+    const skipped = [];
+    const runs = [];
+    const written = { weeks: 0, rows: 0, years: [] };
+
+    let run = [];
+    let runRows = [];
+
+    const flush = async () => {
+      if (!run.length) return;
+      const coverStart = moMonthBounds(run[0]).start;
+      const coverEnd = moMonthBounds(run[run.length - 1]).end;
+      const binned = whBinWeeks(runRows, coverStart, coverEnd, settled);
+      const w = await whUpsert(binned);
+      written.weeks += w.weeks;
+      written.rows += w.rows;
+      for (const y of w.years) if (!written.years.includes(y)) written.years.push(y);
+      runs.push(`${run[0]}..${run[run.length - 1]}`);
+      run = [];
+      runRows = [];
+    };
+
+    for (const month of months) {
+      const bucket = await kv.get(`adspend:sp:raw:${month}`);
+      const monthRows = ((bucket && bucket.rows) || []);
+      // A month written before the API sync took over carries spend and nothing
+      // else. Binning it would invent a week of zero clicks and zero orders,
+      // which reads as a collapse that never happened.
+      const hasMetrics = monthRows.some(r => r.clicks !== undefined && r.sales7d !== undefined);
+      if (!monthRows.length || !hasMetrics) {
+        skipped.push({ month, reason: monthRows.length ? 'spend only' : 'empty' });
+        await flush();
+        continue;
+      }
+      if (run.length && moShiftMonth(run[run.length - 1], 1) !== month) await flush();
+      run.push(month);
+      runRows.push(...monthRows);
+      usable.push(month);
+    }
+    await flush();
+
+    if (!usable.length) {
+      return res.status(409).json({
+        error: 'None of those months carry clicks and sales, only spend. ' +
+               'The API sync began writing full rows in 2026-03.',
+        skipped
+      });
+    }
+
+    return res.status(200).json({
+      success: true, months: usable, skipped, runs, ...written
+    });
+  } catch (error) {
+    console.error('[WEEKS REBUILD] Error:', error);
+    return res.status(500).json({ error: 'Weeks-rebuild failed: ' + error.message });
+  }
+}
+
+// Called from the weekly collect, manual and cron alike. The baseline is four
+// whole settled weeks, so this is where the recent end of the series comes
+// from — the month buckets are a month behind by construction.
+async function whIngestWeeklyRun({ rows, census, window }) {
+  try {
+    const nameById = new Map();
+    for (const c of (census.campaigns || [])) {
+      if (c.campaignId && c.name) nameById.set(String(c.campaignId), c.name);
+    }
+    // The report knows campaign ids; the month buckets know names. One key, so
+    // a week can arrive from either feed without splitting in two.
+    const named = [];
+    for (const r of rows) {
+      const name = nameById.get(String(r.campaignId));
+      if (name) named.push({ ...r, campaign: name });
+    }
+    const binned = whBinWeeks(named, window.baseStart, window.baseEnd,
+                              whSettledThrough(new Date()));
+    return await whUpsert(binned);
+  } catch (err) {
+    // Never fails the run that produced the data.
+    console.error('[WEEKS] ingest from weekly run failed:', err.message);
+    return { weeks: 0, rows: 0, years: [], error: err.message };
+  }
+}
+
 export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
@@ -4180,6 +4564,7 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
          moLoadBrandSales, moIsWholeMonth, moShiftMonth, moMonthBounds,
          moCronReport, moMonthLabel, moAvailability, moUnavailableReason,
+         whMonday, whSettledThrough, whBinWeeks, whSeries,
          reportRetentionStart, REPORT_RETENTION_DAYS,
          MO_CONFIG, MO_REPORT_KEYS, MO_SPEC_DEVIATIONS, TARGET_ACOS,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };

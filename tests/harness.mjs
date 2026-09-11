@@ -23,18 +23,34 @@ export function memoryKv(seed = {}) {
   };
 }
 
+const stubKv = (src) =>
+  // The stub is reached through globalThis so the test can hand one in.
+  src.replace(/^import \{ kv \} from '@vercel\/kv';$/m,
+              'const kv = globalThis.__TEST_KV__ || null;');
+
 export async function loadAdspend(tag, kv) {
-  const src = fs.readFileSync(path.join(here, '..', 'api', 'adspend.js'), 'utf8')
-    // The stub is reached through globalThis so the test can hand one in.
-    .replace(/^import \{ kv \} from '@vercel\/kv';$/m,
-             'const kv = globalThis.__TEST_KV__ || null;')
-    // The census sync is only called by the cron handler, which no suite drives.
-    .replace(/^import \{ acRunSync \} from '\.\/adcampaigns\.js';$/m,
-             'const acRunSync = async () => { throw new Error("acRunSync is not stubbed"); };');
+  // adcampaigns.js is copied and stubbed too, rather than having its imports
+  // faked. adspend.js borrows real logic from it, the brand-prefix table among
+  // it, and a hand-written stand-in here could drift from the real table
+  // without any test noticing.
+  const campaignsFile = path.join(here, `.${tag}_adcampaigns_testable.mjs`);
+  fs.writeFileSync(campaignsFile,
+    stubKv(fs.readFileSync(path.join(here, '..', 'api', 'adcampaigns.js'), 'utf8')));
+
+  const src = stubKv(fs.readFileSync(path.join(here, '..', 'api', 'adspend.js'), 'utf8'))
+    .replace(/^import \{([^}]*)\} from '\.\/adcampaigns\.js';$/m,
+             `import {$1} from './${path.basename(campaignsFile)}';`);
 
   const f = path.join(here, `.${tag}_testable.mjs`);
   fs.writeFileSync(f, src);
   globalThis.__TEST_KV__ = kv || null;
   const M = await import(pathToFileURL(f).href);
-  return { M, cleanup: () => { try { fs.unlinkSync(f); } catch { /* already gone */ } } };
+  return {
+    M,
+    cleanup: () => {
+      for (const x of [f, campaignsFile]) {
+        try { fs.unlinkSync(x); } catch { /* already gone */ }
+      }
+    }
+  };
 }

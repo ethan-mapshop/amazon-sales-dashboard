@@ -236,6 +236,12 @@ if (pageName === 'salesvolume' && accessToken) {
         loadAdMonthly();
       }
 
+      // Pure read. Weekly Trends requests no reports of its own; it reads a
+      // series built from data the other cadences already fetched.
+      if (pageName === 'adweekly' && accessToken) {
+        loadAdWeekly();
+      }
+
       // Reads the stored snapshot only — refreshing from Amazon is explicit.
       if (pageName === 'adcampaigns' && accessToken) {
         loadAdCampaigns();

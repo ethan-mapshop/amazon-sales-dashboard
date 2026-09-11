@@ -1982,6 +1982,79 @@
 
     .bw-warn { color: var(--warning); }
 
+    /* Weekly Trends. The table is the spreadsheet it replaces: metrics down the
+       side, weeks across the top, so it scrolls sideways by design and the
+       label column has to stay put. */
+    .wk-controls {
+      display: flex;
+      align-items: flex-end;
+      gap: 1.25rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .wk-field { display: flex; flex-direction: column; gap: 0.25rem; }
+
+    .wk-field > span {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+    }
+
+    .wk-field select { width: auto; }
+
+    .wk-spacer { flex: 1; }
+
+    .wk-stats {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+      padding: 0.875rem 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .wk-stat { display: flex; flex-direction: column; gap: 0.15rem; }
+
+    .wk-stat-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+    }
+
+    .wk-stat-value { font-size: 1.05rem; font-weight: 600; }
+
+    .wk-table th, .wk-table td { white-space: nowrap; }
+
+    .wk-table th { font-size: 0.7rem; }
+
+    /* 52 columns is a long way to scroll back to find out which row you are on. */
+    .wk-sticky {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: var(--bg-secondary, #1c1c1c);
+    }
+
+    .wk-charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+      gap: 1.25rem;
+    }
+
+    .wk-chart { min-width: 0; }
+
+    .wk-chart-title {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.35rem;
+    }
+
+    /* Chart.js needs a bounded box to size a responsive canvas against. */
+    .wk-chart canvas { height: 13rem !important; }
+
     /* Offered, not imposed: newer data sits above the table until you take it. */
     .bw-newer {
       display: flex;
