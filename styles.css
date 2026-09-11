@@ -1956,7 +1956,24 @@
       cursor: pointer; font-size: 0.8125rem; color: var(--text-secondary);
     }
 
-    .bw-filter { display: flex; gap: 0.4rem; margin-bottom: 0.75rem; }
+    .bw-filter {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-bottom: 0.75rem;
+    }
+
+    /* The global select rule is built for forms: full width, 0.75rem padding,
+       monospace. Sitting in a row of small buttons that reads as a different
+       species, so this matches .arf-btn instead. */
+    .bw-filter select {
+      width: auto;
+      padding: 0.15rem 0.45rem;
+      font-family: inherit;
+      font-size: 0.7rem;
+      border-radius: 4px;
+      background: var(--bg-primary);
+    }
 
     .bw-warn { color: var(--warning); }
 

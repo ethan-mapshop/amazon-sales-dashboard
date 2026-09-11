@@ -329,6 +329,14 @@
     // have no margin, so no retention, so the tree can only ever hold them.
     function bwBrandOf(r) { return r.brand || '(unmapped)'; }
 
+    // The short forms the rest of the app uses, and the same prefixes the
+    // campaign names carry - so the filter reads like the column beside it
+    // rather than being four times wider than everything else on the row.
+    function bwBrandLabel(brand) {
+      if (brand === '(unmapped)') return 'Unmapped';
+      return typeof productBrandShort === 'function' ? productBrandShort(brand) : brand;
+    }
+
     // Holds and already-applied rows have nothing to write.
     function bwApplicable(r) {
       const st = bwApply[r.campaignId] || {};
@@ -422,9 +430,9 @@
       const toggle = `
         <div class="bw-filter">
           <select data-bw-brand title="Narrow to one brand">
-            <option value="all"${bwBrand === 'all' ? ' selected' : ''}>All brands</option>
+            <option value="all"${bwBrand === 'all' ? ' selected' : ''}>All</option>
             ${brands.map(b => `<option value="${escapeHtml(b)}"${
-              bwBrand === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+              bwBrand === b ? ' selected' : ''}>${escapeHtml(bwBrandLabel(b))}</option>`).join('')}
           </select>
           <button class="arf-btn${bwFilter === 'moves' ? ' arf-btn-go' : ''}" data-bw-filter="moves">Changes only</button>
           <button class="arf-btn${bwFilter === 'all' ? ' arf-btn-go' : ''}" data-bw-filter="all">All ${total}</button>
