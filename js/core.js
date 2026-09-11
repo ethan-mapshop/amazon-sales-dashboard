@@ -230,6 +230,12 @@ if (pageName === 'salesvolume' && accessToken) {
         loadAdBiweekly();
       }
 
+      // Same again. Monthly's only write is the brand posture, and that is a
+      // deliberate click rather than anything a page load does.
+      if (pageName === 'admonthly' && accessToken) {
+        loadAdMonthly();
+      }
+
       // Reads the stored snapshot only — refreshing from Amazon is explicit.
       if (pageName === 'adcampaigns' && accessToken) {
         loadAdCampaigns();

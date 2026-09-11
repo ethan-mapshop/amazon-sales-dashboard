@@ -81,6 +81,10 @@ export default async function handler(req, res) {
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
     if (action === 'biweekly-adopt')          return handleBiweeklyAdopt(req, res);
     if (action === 'biweekly-import')         return handleBiweeklyImport(req, res);
+    if (action === 'monthly-request')     return handleMonthlyRequest(req, res);
+    if (action === 'monthly-status')      return handleMonthlyStatus(req, res);
+    if (action === 'monthly-collect')     return handleMonthlyCollect(req, res);
+    if (action === 'monthly-get')         return handleMonthlyGet(req, res);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
@@ -1737,7 +1741,14 @@ function rfNormalizeRows(rawRows, adProduct) {
     clicks:     num(rfPick(r, ['clicks'])),
     impressions: num(rfPick(r, ['impressions'])),
     orders:     num(rfPick(r, ['purchases7d', 'purchases', 'purchases14d'])),
-    sales:      num(rfPick(r, ['sales7d', 'sales', 'sales14d']))
+    sales:      num(rfPick(r, ['sales7d', 'sales', 'sales14d'])),
+    // Sponsored Brands only, and only when Amazon returned the columns. null
+    // rather than 0 throughout: unknown is not the same as none, and the
+    // Sponsored Products path simply never reads these.
+    ntbOrders:  rfPick(r, ['newToBrandPurchases']) === undefined
+                  ? null : num(rfPick(r, ['newToBrandPurchases'])),
+    ntbSales:   rfPick(r, ['newToBrandSales']) === undefined
+                  ? null : num(rfPick(r, ['newToBrandSales']))
   })).filter(r => r.date && r.campaignId);
 }
 
@@ -1755,20 +1766,26 @@ function missingAdsCredentials() {
     .filter(k => !process.env[k]);
 }
 
-function buildReportBody(product, start, end) {
+function buildReportBody(product, start, end, columns) {
   if (daySpan(start, end) > MAX_REPORT_DAYS) {
     // Caught here rather than at Amazon, where it surfaces as an opaque 4xx.
     throw new Error(`report window ${start}..${end} is ${daySpan(start, end)} days, ` +
                     `over Amazon's ${MAX_REPORT_DAYS}-day limit`);
   }
+  // RF_COLUMNS has no Sponsored Brands set any more, so an SB report must name
+  // its own columns. Caught here rather than sending `columns: undefined`.
+  const cols = columns || RF_COLUMNS[product];
+  if (!Array.isArray(cols) || !cols.length) {
+    throw new Error(`no column set for ${product} reports \u2014 pass one explicitly`);
+  }
   return {
-    name: `RedFlags ${product.toUpperCase()} ${start}..${end}`,
+    name: `Ads ${product.toUpperCase()} ${start}..${end}`,
     startDate: start,
     endDate: end,
     configuration: {
       adProduct: product === 'sp' ? 'SPONSORED_PRODUCTS' : 'SPONSORED_BRANDS',
       groupBy: ['campaign'],
-      columns: RF_COLUMNS[product],
+      columns: cols,
       reportTypeId: product === 'sp' ? 'spCampaigns' : 'sbCampaigns',
       timeUnit: 'DAILY',
       format: 'GZIP_JSON'
@@ -1779,12 +1796,13 @@ function buildReportBody(product, start, end) {
 // One column set, no fallback. Every column here is a metric Amazon documents
 // for this report type; a refusal means something changed and the run should
 // say so rather than quietly proceed on less data.
-async function requestCampaignReport(accessToken, { product, start, end }) {
+async function requestCampaignReport(accessToken, { product, start, end, columns }) {
+  const cols = columns || RF_COLUMNS[product];
   try {
     const reportId = await withAdsRetry(
-      () => requestReport(accessToken, buildReportBody(product, start, end))
+      () => requestReport(accessToken, buildReportBody(product, start, end, cols))
     );
-    return { reportId, columns: RF_COLUMNS[product] };
+    return { reportId, columns: cols };
   } catch (err) {
     // 425 means an identical report is already generating. Adopting the id
     // Amazon names recovers a run that would otherwise be orphaned —
@@ -1792,7 +1810,7 @@ async function requestCampaignReport(accessToken, { product, start, end }) {
     // every retry for as long as it lives.
     if (/\(425\)/.test(err.message)) {
       const adopted = rfDuplicateReportId(err.message);
-      if (adopted) return { reportId: adopted, columns: RF_COLUMNS[product], adopted: true };
+      if (adopted) return { reportId: adopted, columns: cols, adopted: true };
     }
     throw err;
   }
@@ -2668,6 +2686,674 @@ async function handleBiweeklyPosture(req, res) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// MONTHLY — BRAND POSTURE REVIEW
+// ═════════════════════════════════════════════════════════════════════════════
+// Deliberately a fraction of what Amazon_Ad_Management_Monthly.docx describes.
+// That doc was written for a chat workflow: paste reports, get back a written
+// review with narrative per brand. Four of its six sections ask for prose a
+// page cannot produce, and two more collapse into one another. What survives
+// is the part with an action attached.
+//
+// This cadence does exactly two things:
+//
+//   1. Recommends a BRAND POSTURE, with the evidence for it on screen. The
+//      posture is the only thing monthly has ever fed into another cadence:
+//      the bi-weekly reads it to decide how hard to push each brand. Until
+//      now it was set by hand with nothing in front of you.
+//
+//   2. Shows the two Sponsored Brands campaigns. We pulled SB from the weekly
+//      and the bi-weekly because two campaigns out of ~142 were gating both
+//      runs. That left a hole, and this is the only place it gets covered.
+//
+// Search term harvesting, negatives and keyword bids are the natural monthly
+// work, and they are all blocked on the same thing: no report tells you what
+// keywords exist or what they are bid at, so they need a keyword census the
+// way campaigns needed a campaign census. That is the Ad Badger migration,
+// targeted for March 2027, and this page is built to grow into it.
+
+const MO_CONFIG = {
+  WINDOW_DAYS: 30,
+  // ONE lag for both ad products, set by the slower of the two. Sponsored
+  // Brands keeps crediting sales to a click date for 14 days; Sponsored
+  // Products for 7. Holding both to the same window means every number on the
+  // page covers the same days, and at a monthly cadence looking at a 30-day
+  // trend, a week of extra lag costs nothing.
+  LAG_DAYS: 15,
+
+  // Below this a brand has not transacted enough in a month for a posture
+  // change to be anything but noise.
+  MIN_SPEND:  100,
+  MIN_ORDERS: 10,
+
+  // The doc's own retention bands: 50%+ is "healthy, grow carefully", under
+  // 25% is "weak, candidate for decrease".
+  SCALE_RETENTION:     0.50,
+  CONSTRAIN_RETENTION: 0.25,
+
+  // Retention points of month-over-month change worth reacting to.
+  TREND_MATERIAL: 0.10,
+
+  // Spend share minus sales share. Past this a brand is drawing more of the
+  // budget than it returns.
+  SHARE_GAP: 0.10,
+
+  // Ad-attributed share of the brand's total sales. Past this, ads are not
+  // supplementing organic rank, they are carrying the brand — which makes a
+  // constrain riskier than the retention number alone suggests.
+  AD_DEPENDENT: 0.70
+};
+
+// Target ACoS per segment, from the April 2026 program config. DISPLAY ONLY:
+// profit retention is the decision metric in every cadence, and nothing in
+// moRecommend reads these. They are here because the gap against target is
+// what you actually think in when reading a brand row.
+const TARGET_ACOS = {
+  BW_PACKS:   0.15,
+  BW_SETS:    0.05,
+  BW_BLENDED: 0.15,
+  HUBBARD:    0.10,
+  MAPSHOP:    0.17,
+  SOK:        0.125
+};
+
+const MO_SPEC_DEVIATIONS = [
+  'Sections 1, 4 and 5 of the doc are one table here. Brand performance, budget ' +
+  'share and next-month priorities all answer the same question, and the doc\'s own ' +
+  'worked example states a rebalance and a posture in the same sentence.',
+  'Funnel health (section 2) is not built. Campaign structure changes when you ' +
+  'change it, not monthly, and its recommendations are campaign creation rather ' +
+  'than anything a page can apply.',
+  'Search term intelligence (section 3) is not built. It needs a keyword census ' +
+  'first, for the same reason campaign budgets needed a campaign census.',
+  'The Sponsored Brands review carries no purpose labels. The doc reads them from ' +
+  'a catalog field that does not exist, and two campaigns do not justify building ' +
+  'and maintaining one.',
+  'Brand rows are Sponsored Products only. SB is 2 campaigns of ~142, it is broken ' +
+  'out below, and the posture governs SP budgets in the bi-weekly. Ad-attributed ' +
+  'share does include SB, because understating it there would flatter organic.',
+  'BW_BLENDED has no target ACoS in the program config; it follows Packs at 15%. ' +
+  'Display only, so no recommendation depends on it.'
+];
+
+const MO_REPORT_KEYS = ['spMonth', 'spPrior', 'sbMonth'];
+const MO_RUN_KEY = 'monthly:lastrun';
+
+// Sponsored Brands columns, requested nowhere else. New-to-brand is the reason
+// SB is worth running at all, so it is asked for first; if Amazon refuses those
+// two columns the run falls back to the base set and says so, rather than
+// losing the whole report to a guess about a column name.
+const MO_SB_COLUMNS = ['date', 'campaignId', 'cost', 'clicks', 'impressions',
+                       'purchases', 'sales', 'newToBrandPurchases', 'newToBrandSales'];
+const MO_SB_COLUMNS_BASE = ['date', 'campaignId', 'cost', 'clicks', 'impressions',
+                            'purchases', 'sales'];
+
+// Both 30-day windows end well clear of the attribution tail, and each is
+// inside Amazon's 31-day report cap on its own. They are contiguous, so they
+// cannot be one request.
+function resolveMonthlyWindow(nowInstant) {
+  const today = _ptDate(nowInstant);
+  const end = _addDays(today, -MO_CONFIG.LAG_DAYS);
+  const start = _addDays(end, -(MO_CONFIG.WINDOW_DAYS - 1));
+  const priorEnd = _addDays(start, -1);
+  const priorStart = _addDays(priorEnd, -(MO_CONFIG.WINDOW_DAYS - 1));
+  return { start, end, priorStart, priorEnd };
+}
+
+function moReportSpec(key, window) {
+  if (key === 'spPrior') return { product: 'sp', start: window.priorStart, end: window.priorEnd };
+  if (key === 'sbMonth') {
+    return { product: 'sb', start: window.start, end: window.end,
+             columns: MO_SB_COLUMNS, fallbackColumns: MO_SB_COLUMNS_BASE };
+  }
+  return { product: 'sp', start: window.start, end: window.end };
+}
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+// Metrics only, the same discipline as the other two cadences. Nothing about a
+// brand, a margin or a posture is written down, so changing a threshold or a
+// brand mapping is reflected on the next read with no report to re-run.
+
+function moBuildInputs({ census, rows, window }) {
+  const spEnabled = new Set();
+  const sbEnabled = new Set();
+  for (const row of (census.campaigns || [])) {
+    if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
+    if (row.adProduct === 'SP') spEnabled.add(String(row.campaignId));
+    else if (row.adProduct === 'SB') sbEnabled.add(String(row.campaignId));
+  }
+
+  const sp = new Map();
+  const sb = new Map();
+  let orphanRows = 0;
+
+  const blankSp = (id) => ({
+    campaignId: id,
+    spend: 0, clicks: 0, impressions: 0, orders: 0, sales: 0,
+    priorSpend: 0, priorClicks: 0, priorImpressions: 0, priorOrders: 0, priorSales: 0
+  });
+  // New-to-brand starts null and stays null unless a row actually carried it.
+  // Amazon may refuse those two columns, and unknown must never read as none.
+  const blankSb = (id) => ({
+    campaignId: id,
+    spend: 0, clicks: 0, impressions: 0, orders: 0, sales: 0,
+    ntbOrders: null, ntbSales: null
+  });
+
+  for (const r of rows) {
+    const id = String(r.campaignId);
+    if (r.adProduct === 'SB') {
+      if (!sbEnabled.has(id)) { orphanRows++; continue; }
+      if (r.date < window.start || r.date > window.end) continue;
+      let c = sb.get(id);
+      if (!c) { c = blankSb(id); sb.set(id, c); }
+      c.spend += r.cost; c.clicks += r.clicks; c.impressions += r.impressions;
+      c.orders += r.orders; c.sales += r.sales;
+      if (r.ntbOrders !== null && r.ntbOrders !== undefined) {
+        c.ntbOrders = (c.ntbOrders || 0) + r.ntbOrders;
+      }
+      if (r.ntbSales !== null && r.ntbSales !== undefined) {
+        c.ntbSales = (c.ntbSales || 0) + r.ntbSales;
+      }
+      continue;
+    }
+    if (!spEnabled.has(id)) { orphanRows++; continue; }
+    let c = sp.get(id);
+    if (!c) { c = blankSp(id); sp.set(id, c); }
+    if (r.date >= window.start && r.date <= window.end) {
+      c.spend += r.cost; c.clicks += r.clicks; c.impressions += r.impressions;
+      c.orders += r.orders; c.sales += r.sales;
+    } else if (r.date >= window.priorStart && r.date <= window.priorEnd) {
+      c.priorSpend += r.cost; c.priorClicks += r.clicks; c.priorImpressions += r.impressions;
+      c.priorOrders += r.orders; c.priorSales += r.sales;
+    }
+  }
+
+  // A campaign the reports never mentioned spent nothing, which is a fact about
+  // the month rather than an absence of one.
+  for (const id of spEnabled) if (!sp.has(id)) sp.set(id, blankSp(id));
+  for (const id of sbEnabled) if (!sb.has(id)) sb.set(id, blankSb(id));
+
+  const round = (c) => {
+    for (const k of Object.keys(c)) {
+      if (k === 'campaignId' || c[k] === null) continue;
+      c[k] = /clicks|impressions|orders/i.test(k) ? Math.round(c[k]) : r2(c[k]);
+    }
+    return c;
+  };
+
+  return {
+    inputs: { sp: [...sp.values()].map(round), sb: [...sb.values()].map(round) },
+    orphanRows
+  };
+}
+
+// ─── ORDERS ──────────────────────────────────────────────────────────────────
+// Total sales per brand, which the ad reports cannot give: they only know sales
+// they were credited for. The ratio of the two is the only number on this page
+// that says whether ads are carrying a brand or supplementing it.
+//
+// Two caveats worth holding. Orders are dated by PURCHASE, ad sales by CLICK,
+// so the two disagree slightly at the window edges. And the join is by SKU
+// through the product catalog, so a SKU missing a brand there is missing from
+// the denominator; that count is reported rather than absorbed.
+async function moLoadBrandSales(window) {
+  const [products, index] = await Promise.all([
+    kv.get('products'),
+    kv.get('orders:v2:index')
+  ]);
+  const catalog = Array.isArray(products) ? products : [];
+  if (!catalog.length || !Array.isArray(index) || !index.length) {
+    return { byBrand: {}, available: false, unmappedSkus: 0, unmappedSales: 0 };
+  }
+
+  const brandBySku = new Map();
+  for (const p of catalog) {
+    const sku = String(p?.sku || '').trim();
+    const brand = String(p?.brand || '').trim();
+    if (sku && brand) brandBySku.set(sku, brand);
+  }
+
+  const months = [...new Set([window.start.slice(0, 7), window.end.slice(0, 7)])]
+    .filter(m => index.includes(m));
+  if (!months.length) {
+    return { byBrand: {}, available: false, unmappedSkus: 0, unmappedSales: 0 };
+  }
+
+  const buckets = await Promise.all(months.map(m => kv.get(`orders:v2:${m}`)));
+  const byBrand = {};
+  const unmapped = new Set();
+  let unmappedSales = 0;
+  for (const rows of buckets) {
+    for (const row of (Array.isArray(rows) ? rows : [])) {
+      if (!row || row.orderDate < window.start || row.orderDate > window.end) continue;
+      const brand = brandBySku.get(String(row.sku || '').trim());
+      const amount = Number(row.itemTotal) || 0;
+      if (!brand) { unmapped.add(row.sku); unmappedSales += amount; continue; }
+      byBrand[brand] = (byBrand[brand] || 0) + amount;
+    }
+  }
+  for (const b of Object.keys(byBrand)) byBrand[b] = r2(byBrand[b]);
+  return { byBrand, available: true, unmappedSkus: unmapped.size, unmappedSales: r2(unmappedSales) };
+}
+
+const pct = (n) => (n === null || n === undefined || !Number.isFinite(n))
+  ? '—' : `${Math.round(n * 100)}%`;
+
+// ─── THE RECOMMENDATION ──────────────────────────────────────────────────────
+// Pure, ordered, and every branch says why in plain words. Profit retention is
+// the metric, as in every other cadence — not ACoS against target.
+function moRecommend(b, config = MO_CONFIG) {
+  if (b.spend < config.MIN_SPEND && b.orders < config.MIN_ORDERS) {
+    return { posture: 'hold', basis: 'floor',
+             reason: `Under $${config.MIN_SPEND} and ${config.MIN_ORDERS} orders in the month. ` +
+                     'Too little to move a posture on.' };
+  }
+  if (b.retention === null) {
+    return { posture: 'hold', basis: 'unknown',
+             reason: b.grossMargin === null
+               ? 'No gross margin for this brand, so retention cannot be computed.'
+               : 'No attributed sales in the month, so retention cannot be computed.' };
+  }
+
+  // null, not 0, when there is no prior month: a brand that was not running
+  // then has not improved or declined, it has simply no comparison.
+  const fell = (b.priorRetention === null || b.priorRetention === undefined)
+    ? null : b.priorRetention - b.retention;
+  const shareGap = (b.spendShare !== null && b.salesShare !== null)
+    ? b.spendShare - b.salesShare : null;
+
+  if (b.retention < config.CONSTRAIN_RETENTION) {
+    return { posture: 'constrain', basis: 'retention',
+             reason: `Retention ${pct(b.retention)} is below ${pct(config.CONSTRAIN_RETENTION)}. ` +
+                     'The doc calls this weak and a candidate for decrease.' };
+  }
+  if (fell !== null && fell >= config.TREND_MATERIAL && b.retention < config.SCALE_RETENTION) {
+    return { posture: 'constrain', basis: 'trend',
+             reason: `Retention fell ${pct(fell)} from last month to ${pct(b.retention)}, ` +
+                     'and is no longer in the healthy band.' };
+  }
+  if (shareGap !== null && shareGap > config.SHARE_GAP && b.retention < config.SCALE_RETENTION) {
+    return { posture: 'constrain', basis: 'share',
+             reason: `Takes ${pct(b.spendShare)} of spend and returns ${pct(b.salesShare)} of ` +
+                     `ad sales, at ${pct(b.retention)} retention. The money works harder elsewhere.` };
+  }
+  if (b.retention >= config.SCALE_RETENTION) {
+    return { posture: 'scale', basis: 'retention',
+             reason: `Retention ${pct(b.retention)} is healthy` +
+                     (fell !== null && fell >= config.TREND_MATERIAL
+                       ? `, though it fell ${pct(fell)} from last month.`
+                       : '.') };
+  }
+  return { posture: 'hold', basis: 'mediocre',
+           reason: `Retention ${pct(b.retention)} sits between the bands. ` +
+                   'The standard tree is the right treatment.' };
+}
+
+// ─── DECIDE ──────────────────────────────────────────────────────────────────
+// Everything is joined here, on every read: brands and margins from the census,
+// total sales from orders, the current posture from its own store. Nothing
+// below is ever written down.
+function moDecideAll({ inputs, census, window, brandSales = {}, postures = {} }) {
+  const config = new Map();
+  for (const row of (census.campaigns || [])) config.set(String(row.campaignId), row);
+
+  const brands = new Map();
+  const unmapped = [];
+  let orphanRows = 0;
+
+  const blank = (brand) => ({
+    brand,
+    spend: 0, clicks: 0, impressions: 0, orders: 0, sales: 0,
+    priorSpend: 0, priorOrders: 0, priorSales: 0,
+    // Gross profit is accumulated per campaign, because BrightWay's Packs and
+    // Sets carry different margins and a brand-level margin constant would be
+    // method-dependent. Summing the dollars removes the question.
+    grossProfit: 0, priorGrossProfit: 0, allowedSpend: 0,
+    campaigns: 0, sbSales: 0, sbSpend: 0
+  });
+
+  for (const i of (inputs.sp || [])) {
+    const row = config.get(String(i.campaignId));
+    if (!row || String(row.state || '').toUpperCase() !== 'ENABLED' || row.adProduct !== 'SP') {
+      orphanRows++;
+      continue;
+    }
+    const brand = row.brand || null;
+    if (!brand) {
+      if (i.spend > 0) unmapped.push({ campaign: row.name || '', spend: i.spend });
+      continue;
+    }
+    const segment = rfSegment(brand, row.name);
+    const margin = segment ? MARGINS[segment] : null;
+    const target = segment ? TARGET_ACOS[segment] : null;
+
+    let b = brands.get(brand);
+    if (!b) { b = blank(brand); brands.set(brand, b); }
+    b.campaigns++;
+    b.spend += i.spend; b.clicks += i.clicks; b.impressions += i.impressions;
+    b.orders += i.orders; b.sales += i.sales;
+    b.priorSpend += i.priorSpend; b.priorOrders += i.priorOrders; b.priorSales += i.priorSales;
+    if (margin !== null && margin !== undefined) {
+      b.grossProfit += i.sales * margin;
+      b.priorGrossProfit += i.priorSales * margin;
+    }
+    if (target !== null && target !== undefined) b.allowedSpend += i.sales * target;
+  }
+
+  // Sponsored Brands rows, kept out of the brand performance columns but
+  // counted into ad-attributed sales — leaving them out would flatter organic.
+  const sbRows = [];
+  for (const i of (inputs.sb || [])) {
+    const row = config.get(String(i.campaignId));
+    if (!row || String(row.state || '').toUpperCase() !== 'ENABLED' || row.adProduct !== 'SB') {
+      orphanRows++;
+      continue;
+    }
+    const brand = row.brand || null;
+    const segment = brand ? rfSegment(brand, row.name) : null;
+    const margin = segment ? MARGINS[segment] : null;
+    const acos = i.sales > 0 ? r4(i.spend / i.sales) : null;
+    sbRows.push({
+      campaignId: i.campaignId,
+      campaign: row.name || '',
+      brand,
+      dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
+      spend: r2(i.spend), clicks: i.clicks, impressions: i.impressions,
+      orders: i.orders, sales: r2(i.sales),
+      acos,
+      retention: (margin && acos !== null) ? r4((margin - acos) / margin) : null,
+      // New-to-brand is the whole case for running Sponsored Brands. Null,
+      // never zero, when Amazon refused the columns: unknown is not "none".
+      ntbOrders: i.ntbOrders === null ? null : i.ntbOrders,
+      ntbSales: i.ntbSales === null ? null : r2(i.ntbSales),
+      ntbOrderShare: (i.orders > 0 && i.ntbOrders !== null) ? r4(i.ntbOrders / i.orders) : null,
+      ntbSalesShare: (i.sales > 0 && i.ntbSales !== null) ? r4(i.ntbSales / i.sales) : null
+    });
+    if (brand) {
+      let b = brands.get(brand);
+      if (!b) { b = blank(brand); brands.set(brand, b); }
+      b.sbSales += i.sales;
+      b.sbSpend += i.spend;
+    }
+  }
+  sbRows.sort((a, b) => String(a.campaign).localeCompare(String(b.campaign), 'en', { numeric: true }));
+
+  // Shares are computed across the brands actually evaluated, so they always
+  // total 100% of what is on screen rather than of something unseen.
+  let totalSpend = 0, totalSales = 0;
+  for (const b of brands.values()) { totalSpend += b.spend; totalSales += b.sales; }
+
+  const rows = [...brands.values()].map(b => {
+    const acos = b.sales > 0 ? r4(b.spend / b.sales) : null;
+    const priorAcos = b.priorSales > 0 ? r4(b.priorSpend / b.priorSales) : null;
+    // Retention as dollars: the share of gross margin left after ad spend.
+    const retention = b.grossProfit > 0 ? r4((b.grossProfit - b.spend) / b.grossProfit) : null;
+    const priorRetention = b.priorGrossProfit > 0
+      ? r4((b.priorGrossProfit - b.priorSpend) / b.priorGrossProfit) : null;
+    const adSales = r2(b.sales + b.sbSales);
+    const brandTotal = brandSales[b.brand];
+    const out = {
+      brand: b.brand,
+      campaigns: b.campaigns,
+      spend: r2(b.spend), clicks: b.clicks, impressions: b.impressions,
+      orders: b.orders, sales: r2(b.sales),
+      priorSpend: r2(b.priorSpend), priorOrders: b.priorOrders, priorSales: r2(b.priorSales),
+      grossMargin: b.sales > 0 && b.grossProfit > 0 ? r4(b.grossProfit / b.sales) : null,
+      targetAcos: b.sales > 0 && b.allowedSpend > 0 ? r4(b.allowedSpend / b.sales) : null,
+      acos, priorAcos,
+      retention, priorRetention,
+      retentionDelta: (retention !== null && priorRetention !== null)
+        ? r4(retention - priorRetention) : null,
+      spendShare: totalSpend > 0 ? r4(b.spend / totalSpend) : null,
+      salesShare: totalSales > 0 ? r4(b.sales / totalSales) : null,
+      sbSpend: r2(b.sbSpend), sbSales: r2(b.sbSales),
+      adSales,
+      totalSales: brandTotal === undefined ? null : brandTotal,
+      adShare: (brandTotal > 0) ? r4(adSales / brandTotal) : null,
+      posture: postures[b.brand] || 'hold'
+    };
+    out.gapVsTarget = (out.acos !== null && out.targetAcos !== null)
+      ? r4(out.acos - out.targetAcos) : null;
+    const rec = moRecommend(out);
+    out.recommended = rec.posture;
+    out.basis = rec.basis;
+    out.reason = rec.reason;
+    // Surfaced, never applied: a brand whose sales are almost entirely
+    // ad-driven has no organic floor to fall back on, which is worth seeing
+    // next to a constrain. The call stays yours.
+    out.adDependent = out.adShare !== null && out.adShare >= MO_CONFIG.AD_DEPENDENT;
+    out.changed = out.recommended !== out.posture;
+    return out;
+  }).sort((a, b) => b.spend - a.spend);
+
+  return {
+    rows, sbRows,
+    counts: {
+      brands: rows.length,
+      changed: rows.filter(r => r.changed).length,
+      scale: rows.filter(r => r.recommended === 'scale').length,
+      constrain: rows.filter(r => r.recommended === 'constrain').length,
+      hold: rows.filter(r => r.recommended === 'hold').length
+    },
+    totals: { spend: r2(totalSpend), sales: r2(totalSales) },
+    coverage: { orphanRows, unmapped, evaluated: (inputs.sp || []).length }
+  };
+}
+
+async function moSaveRun(window, inputs) {
+  await kv.set(MO_RUN_KEY, { window, inputs, collectedAt: new Date().toISOString() });
+}
+
+async function moLoadRun() {
+  try {
+    const run = await kv.get(MO_RUN_KEY);
+    return (run && run.inputs && Array.isArray(run.inputs.sp) && run.inputs.sp.length) ? run : null;
+  } catch (err) {
+    console.error('[MONTHLY] run load failed:', err.message);
+    return null;
+  }
+}
+
+// ─── HANDLERS ────────────────────────────────────────────────────────────────
+
+async function handleMonthlyRequest(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const missing = missingAdsCredentials();
+    if (missing.length) {
+      return res.status(500).json({ error: `Missing Advertising API credentials: ${missing.join(', ')}` });
+    }
+
+    const window = resolveMonthlyWindow(new Date());
+    const accessToken = await getAdsAccessToken();
+    const reports = [];
+    const failures = [];
+    const notes = [];
+
+    for (const key of MO_REPORT_KEYS) {
+      const spec = moReportSpec(key, window);
+      try {
+        const r = await requestCampaignReport(accessToken, spec);
+        reports.push({ key, ...r });
+      } catch (err) {
+        // New-to-brand is enrichment, not the report. If Amazon refuses those
+        // columns the base set still answers the question SB is here for.
+        const bad = rfInvalidColumns(err.message);
+        if (spec.fallbackColumns && bad.length) {
+          notes.push({ key, note: `Amazon refused ${bad.join(', ')} — retried without ` +
+                                  'new-to-brand, which will read as unknown.' });
+          try {
+            const r = await requestCampaignReport(accessToken,
+              { ...spec, columns: spec.fallbackColumns, fallbackColumns: null });
+            reports.push({ key, ...r });
+            await sleep(600);
+            continue;
+          } catch (err2) {
+            console.error(`[MONTHLY REQUEST] ${key} fallback failed:`, err2.message);
+            failures.push({ key, error: err2.message, window: `${spec.start}..${spec.end}`,
+                            invalidColumns: rfInvalidColumns(err2.message) });
+            await sleep(600);
+            continue;
+          }
+        }
+        console.error(`[MONTHLY REQUEST] ${key} failed:`, err.message);
+        failures.push({ key, error: err.message, window: `${spec.start}..${spec.end}`,
+                        invalidColumns: bad });
+      }
+      await sleep(600);
+    }
+
+    if (!reports.length) {
+      return res.status(502).json({
+        error: 'No report could be requested. ' + (failures[0] ? failures[0].error : ''),
+        failures
+      });
+    }
+    return res.status(200).json({ success: true, window, reports, failures, notes,
+                                  requestedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('[MONTHLY REQUEST] Error:', error);
+    return res.status(500).json({ error: 'Monthly-request failed: ' + error.message });
+  }
+}
+
+async function handleMonthlyStatus(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const parsed = parseReportsParam(req.query.reports, MO_REPORT_KEYS);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+    const accessToken = await getAdsAccessToken();
+    const statuses = [];
+    for (const { key, reportId } of parsed.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const norm = (status.status || '').toUpperCase();
+        statuses.push({ key, reportId, status: norm,
+                        done: norm === 'COMPLETED' || norm === 'SUCCESS',
+                        failed: norm === 'FAILURE' || norm === 'FAILED' || norm === 'CANCELLED' });
+      } catch (err) {
+        statuses.push({ key, reportId, status: 'ERROR', done: false, failed: false, error: err.message });
+      }
+    }
+    return res.status(200).json({ success: true, statuses,
+      allDone: statuses.every(s => s.done || s.failed), checkedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error('[MONTHLY STATUS] Error:', error);
+    return res.status(500).json({ error: 'Monthly-status failed: ' + error.message });
+  }
+}
+
+async function handleMonthlyCollect(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const parsed = parseReportsParam(req.query.reports, MO_REPORT_KEYS);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+    const window = {
+      start: String(req.query.start || ''), end: String(req.query.end || ''),
+      priorStart: String(req.query.priorStart || ''), priorEnd: String(req.query.priorEnd || '')
+    };
+    for (const [k, v] of Object.entries(window)) {
+      if (!DATE_RE.test(v)) return res.status(400).json({ error: `${k} must be YYYY-MM-DD` });
+    }
+    if (daySpan(window.start, window.end) !== MO_CONFIG.WINDOW_DAYS ||
+        daySpan(window.priorStart, window.priorEnd) !== MO_CONFIG.WINDOW_DAYS) {
+      return res.status(400).json({ error: `both windows must span exactly ${MO_CONFIG.WINDOW_DAYS} days` });
+    }
+
+    const census = await loadCensus();
+    if (!census.campaigns.length) {
+      return res.status(409).json({
+        error: 'No campaign snapshot stored. Refresh Campaign Overview first — ' +
+               'brands and margins are read from it on every load.'
+      });
+    }
+
+    const accessToken = await getAdsAccessToken();
+    const rows = [];
+    const notes = [];
+    for (const { key, reportId } of parsed.reports) {
+      try {
+        const status = await withAdsRetry(() => getReportStatus(accessToken, reportId));
+        const url = status.url || status.location;
+        if (!url) { notes.push({ key, note: `report not ready (${status.status || 'unknown'})` }); continue; }
+        const raw = await withAdsRetry(() => downloadReport(url));
+        rows.push(...rfNormalizeRows(raw, key === 'sbMonth' ? 'SB' : 'SP'));
+      } catch (err) {
+        console.error(`[MONTHLY COLLECT] ${key} failed:`, err.message);
+        notes.push({ key, note: 'download failed: ' + err.message });
+      }
+    }
+    if (!rows.length) return res.status(502).json({ error: 'No report rows could be downloaded.', notes });
+
+    const { inputs, orphanRows } = moBuildInputs({ census, rows, window });
+    await moSaveRun(window, inputs);
+
+    const [brandSales, postures] = await Promise.all([moLoadBrandSales(window), bwLoadPostures()]);
+    const result = moDecideAll({ inputs, census, window, brandSales: brandSales.byBrand, postures });
+    result.coverage.orphanRows += orphanRows;
+    result.orders = brandSales;
+
+    return res.status(200).json({
+      success: true, window, config: MO_CONFIG, postures,
+      deviations: MO_SPEC_DEVIATIONS,
+      censusSyncedAt: census.syncedAt,
+      ...result, notes,
+      collectedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[MONTHLY COLLECT] Error:', error);
+    return res.status(500).json({ error: 'Monthly-collect failed: ' + error.message });
+  }
+}
+
+// The page's only read. Decided afresh every time, so a posture set a moment
+// ago, a brand remapped in Campaign Overview, or a threshold edited in this
+// file all show on the next load with no report to re-run.
+async function handleMonthlyGet(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const [run, census, postures] = await Promise.all([
+      moLoadRun(), loadCensus(), bwLoadPostures()
+    ]);
+    if (!run) return res.status(200).json({ success: true, empty: true });
+    if (!census.campaigns.length) {
+      return res.status(409).json({
+        error: 'No campaign snapshot stored. Refresh Campaign Overview first — ' +
+               'brands and margins are read from it on every load.'
+      });
+    }
+
+    const brandSales = await moLoadBrandSales(run.window);
+    const result = moDecideAll({
+      inputs: run.inputs, census, window: run.window,
+      brandSales: brandSales.byBrand, postures
+    });
+    result.orders = brandSales;
+
+    return res.status(200).json({
+      success: true, window: run.window, config: MO_CONFIG, postures,
+      deviations: MO_SPEC_DEVIATIONS,
+      censusSyncedAt: census.syncedAt,
+      collectedAt: run.collectedAt,
+      ...result
+    });
+  } catch (error) {
+    console.error('[MONTHLY GET] Error:', error);
+    return res.status(500).json({ error: 'Monthly-get failed: ' + error.message });
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // TUESDAY CRON — fetches both cadences' reports before the working day
 // ═════════════════════════════════════════════════════════════════════════════
 // Amazon's report queue is the bottleneck, not report size: the same single
@@ -3050,4 +3736,7 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
          bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
          bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay, adsCronReport,
+         moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
+         moLoadBrandSales,
+         MO_CONFIG, MO_REPORT_KEYS, MO_SPEC_DEVIATIONS, TARGET_ACOS,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };

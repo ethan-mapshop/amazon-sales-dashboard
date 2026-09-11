@@ -22,12 +22,13 @@ const ok = (c, l, d = '') => { if (!c) fails++; console.log(`  ${c ? 'OK  ' : 'F
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const files = [...html.matchAll(/<script src="(js\/[^"]+)"><\/script>/g)].map(m => m[1]);
 
-// The two pages this suite is scoped to. Everything else is inventory.
-const AD_PAGES = ['js/ad-redflags.js', 'js/ad-biweekly.js', 'js/ad-campaigns.js'];
+// The ad pages this suite is scoped to. Everything else is inventory.
+const AD_PAGES = ['js/ad-redflags.js', 'js/ad-biweekly.js', 'js/ad-monthly.js',
+                  'js/ad-campaigns.js'];
 
 console.log('\nSCRIPT INVENTORY');
 ok(files.length >= 14, `index.html loads ${files.length} local scripts, one shared scope`);
-ok(AD_PAGES.every(f => files.includes(f)), 'including all three ad pages');
+ok(AD_PAGES.every(f => files.includes(f)), 'including every ad cadence page');
 
 // ─── STRIPPING ───────────────────────────────────────────────────────────────
 // Blanks out comments, strings and regex literals so an identifier scan cannot
