@@ -24,6 +24,7 @@
     let bwApply = {};        // { [campaignId]: { stage, message, applied } }
     let bwBound = false;
     let bwFilter = 'moves';  // 'moves' | 'all'
+    let bwBrand = 'all';     // 'all' | a brand name | '(unmapped)'
     // Campaign ids ticked for a bulk write. Held as a Set rather than read off
     // the DOM because the table is re-rendered on every filter change and after
     // every apply, and a selection that vanished on re-render would be worse
@@ -249,8 +250,11 @@
       bwBindActions();
     }
 
+    // Brand narrows first, then the changes/all toggle. Select-all reads this,
+    // so a header tick can never reach a row the filters are hiding.
     function bwVisibleRows(data) {
-      const all = data.rows || [];
+      let all = data.rows || [];
+      if (bwBrand !== 'all') all = all.filter(r => bwBrandOf(r) === bwBrand);
       if (bwFilter === 'all') return all;
       // A row applied this session becomes a hold, which would drop it from
       // this filter and make a successful write look like a row that vanished.
@@ -258,6 +262,10 @@
       return all.filter(r => r.action !== 'hold' ||
                              (bwApply[r.campaignId] || {}).stage === 'done');
     }
+
+    // Unmapped campaigns are a group worth filtering to: with no brand they
+    // have no margin, so no retention, so the tree can only ever hold them.
+    function bwBrandOf(r) { return r.brand || '(unmapped)'; }
 
     // Holds and already-applied rows have nothing to write.
     function bwApplicable(r) {
@@ -343,13 +351,23 @@
     }
 
     function bwTable(rows, data) {
-      const total = (data.rows || []).length;
+      // The count follows the brand filter, so "All 34" while narrowed to one
+      // brand does not read as a promise of the whole account.
+      const brands = [...new Set((data.rows || []).map(bwBrandOf))].sort();
+      const total = bwBrand === 'all'
+        ? (data.rows || []).length
+        : (data.rows || []).filter(r => bwBrandOf(r) === bwBrand).length;
       // Recompute re-runs the decision tree against the data this run already
       // fetched. It refreshes DECISIONS, not DATA - the reports are what take
       // half an hour, and they are unchanged.
       const canRecompute = Array.isArray(data.inputs) && data.inputs.length > 0;
       const toggle = `
         <div class="bw-filter">
+          <select data-bw-brand title="Narrow to one brand">
+            <option value="all"${bwBrand === 'all' ? ' selected' : ''}>All brands</option>
+            ${brands.map(b => `<option value="${escapeHtml(b)}"${
+              bwBrand === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+          </select>
           <button class="arf-btn${bwFilter === 'moves' ? ' arf-btn-go' : ''}" data-bw-filter="moves">Changes only</button>
           <button class="arf-btn${bwFilter === 'all' ? ' arf-btn-go' : ''}" data-bw-filter="all">All ${total}</button>
           <span class="bw-spacer"></span>
@@ -357,7 +375,13 @@
             ? `<button class="arf-btn" data-bw-recompute${bwRecomputing ? ' disabled' : ''}
                   title="Re-run the decision tree on this run's data. Picks up posture and threshold changes without a new report."
                >${bwRecomputing ? 'Recomputing' : 'Refresh recommendations'}</button>`
-            : ''}
+            // A run collected before recompute existed has no stored inputs, so
+            // there is nothing to re-decide. Say so rather than rendering
+            // nothing and leaving the control to be hunted for.
+            : `<button class="arf-btn" disabled
+                  title="This run was collected before recommendations could be refreshed. The next run will store what is needed."
+               >Refresh recommendations</button>
+               <span class="arf-muted">needs a run from after this update</span>`}
           ${data.recomputedAt
             ? `<span class="arf-muted">recommendations refreshed ${escapeHtml(_svTimeAgo(data.recomputedAt))}</span>`
             : ''}
@@ -543,6 +567,14 @@
       el.addEventListener('change', e => {
         const sel = e.target.closest('[data-bw-posture]');
         if (sel) return bwSavePosture(sel.dataset.bwPosture, sel.value);
+
+        const brand = e.target.closest('[data-bw-brand]');
+        if (brand) {
+          bwBrand = brand.value;
+          // A pending confirmation would now cover rows you can no longer see.
+          bwBulkConfirm = false;
+          return bwRerender();
+        }
 
         const tick = e.target.closest('[data-bw-tick]');
         if (tick) {

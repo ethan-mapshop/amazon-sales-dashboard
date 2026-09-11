@@ -176,5 +176,59 @@ ok(specs.every(sp => sp.product === 'sp'), 'and it asks for SP');
 ok(specs.every(sp => sp.start === w.priorStart && sp.end === w.end),
    'covering the full 28 days');
 
+console.log('\nSORT  [alphabetical: documented deviation]');
+// The doc sorts by magnitude of change. Alphabetical instead, because the list
+// is worked down with checkboxes rather than skimmed - and the naming
+// convention already groups each brand together.
+const mkInput = (id, name, brand) => ({
+  campaignId: id, name, adProduct: 'SP', brand,
+  dailyBudget: 10, budgetType: 'DAILY',
+  spend: 100, orders: 10, sales: 500,
+  priorSpend: 100, priorOrders: 10, priorSales: 500, daily: []
+});
+const sorted = M.bwDecideAll({
+  inputs: [mkInput('1', 'SOK World Blank (Auto)', 'South of Kings'),
+           mkInput('2', 'BW PACK Rivers (Exact)', 'BrightWay Educational'),
+           mkInput('3', 'RR California (Exact)', 'Hubbard Scientific')],
+  window: w
+}).rows.map(r => r.campaign);
+ok(sorted[0].startsWith('BW') && sorted[2].startsWith('SOK'),
+   'rows come back alphabetically by campaign name', sorted.join(' | '));
+
+console.log('\nRECOMPUTE  - the tree re-runs without a report');
+// Build once, decide as often as needed. This is what lets a threshold or a
+// posture change take effect without another half-hour report queue.
+const built = M.bwBuildInputs({
+  census: { campaigns: [{ campaignId: '1', name: 'RR Test (Exact)', adProduct: 'SP',
+                          state: 'ENABLED', dailyBudget: 10, budgetType: 'DAILY',
+                          brand: 'Hubbard Scientific', portfolioId: 'pf1' }] },
+  rows: [{ date: w.start, adProduct: 'SP', campaignId: '1', cost: 10, clicks: 5,
+           impressions: 500, orders: 2, sales: 100 },
+         { date: w.priorStart, adProduct: 'SP', campaignId: '1', cost: 8, clicks: 4,
+           impressions: 400, orders: 2, sales: 90 }],
+  window: w
+});
+ok(built.inputs.length === 1, 'one input per enabled campaign');
+const one = built.inputs[0];
+ok(one.spend === 10 && one.priorSpend === 8, 'both halves are kept separate',
+   `now $${one.spend}, prior $${one.priorSpend}`);
+ok(Array.isArray(one.daily) && one.daily.length === 1,
+   'daily spends are kept, so the at-cap threshold can be retuned later');
+ok(one.brand === 'Hubbard Scientific' && one.grossMargin === undefined,
+   'brand is stored but margin is not',
+   'so a margin-table change also takes effect on a recompute');
+
+// Deciding is pure: same inputs, same answer - and a posture supplied at decide
+// time changes it, which is what makes the recompute button worth having.
+const plain = M.bwDecideAll({ inputs: built.inputs, window: w });
+const again = M.bwDecideAll({ inputs: built.inputs, window: w });
+ok(plain.rows[0].action === again.rows[0].action, 'deciding twice gives the same answer');
+const constrained = M.bwDecideAll({ inputs: built.inputs, window: w,
+                                    postures: { 'Hubbard Scientific': 'constrain' } });
+ok(constrained.rows[0].action !== 'increase',
+   'a posture applied at decide time changes the outcome',
+   'no report needed to see it');
+
+
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}`);
 process.exit(fails === 0 ? 0 : 1);

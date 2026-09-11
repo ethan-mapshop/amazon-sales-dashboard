@@ -923,6 +923,10 @@ const RF_SPEC_DEVIATIONS = [
 // campaign produces too little data to ever demonstrate a recovery. Repeated,
 // -70% reaches the floor on its own.
 const BW_SPEC_DEVIATIONS = [
+  'Rows are sorted alphabetically by campaign name; the doc sorts by magnitude ' +
+  'of change. The list is worked down with checkboxes rather than skimmed, and ' +
+  'the naming convention already groups each brand together.',
+
   'Tier 1 stages its response rather than cutting straight to the $1 floor: ' +
   '-40% on a single bad fortnight, -70% when the prior fortnight was bad too. ' +
   'Repeated, that reaches the floor anyway, with a chance to recover at each step.',
@@ -2093,9 +2097,12 @@ function bwDecideAll({ inputs, window, postures = {}, recentRaises = {} }) {
     });
   }
 
-  // "Sorted by recommended magnitude of change so biggest moves are visible first."
-  out.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) ||
-                     String(a.brand || '').localeCompare(String(b.brand || '')));
+  // DEVIATION: the doc sorts by magnitude of change, biggest movers first.
+  // Alphabetical by campaign name instead, because the list is now something
+  // you work down with checkboxes rather than skim - and the naming convention
+  // puts each brand's campaigns together anyway (BW, RR, SOK, STATE).
+  out.sort((a, b) => String(a.campaign || '').localeCompare(String(b.campaign || ''),
+                                                            'en', { numeric: true }));
 
   const counts = { increase: 0, decrease: 0, hold: 0, cut: 0 };
   for (const r of out) counts[r.action]++;
