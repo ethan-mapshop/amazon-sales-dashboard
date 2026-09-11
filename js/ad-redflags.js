@@ -242,10 +242,13 @@
         <div class="card card-flat" style="text-align: center; padding: 4rem 2rem;">
           <div style="font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem;">🚩</div>
           <div style="color: var(--text-secondary); max-width: 44rem; margin: 0 auto; line-height: 1.6;">
-            Four checks over the most recent complete Monday&ndash;Sunday week:
-            budget cap emergencies, runaway spenders, stalled campaigns, and brand pacing.
-            Observational only &mdash; adjustments belong to the bi-weekly cadence.
-            Amazon generates the reports on request, which takes a few minutes.
+            Six checks over every enabled Sponsored Products campaign, for the most
+            recent complete Monday&ndash;Sunday week: budget cap emergencies, silent
+            campaigns, spend collapse, CTR collapse, CPC spike, and brand pacing.
+            Everything but the budget cap&rsquo;s retention gate reads only impressions,
+            clicks and spend, which are final the day they happen &mdash; conversions stay
+            incomplete for a week after the click. Sponsored Brands is reviewed monthly.
+            Amazon generates the report on request, which takes a few minutes.
           </div>
         </div>`;
     }
@@ -297,7 +300,7 @@
           'demand exceeded the budget. Retention is the settled 28-day figure. The ' +
           'suggested raise is a step: 25% at four days at cap rising to 50% at seven, ' +
           'never below the best single day it already managed. Applying it writes to Amazon.',
-          [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('7-day spend'),
+          [C('Campaign'), C('Brand'), R('Budget/day'), R('7-day spend'),
            R('At cap'), R('ACoS 28d'), R('Retention 28d'), R('Raise to')],
           arfBudgetCapRow),
 
@@ -305,7 +308,7 @@
           'Enabled and funded, but served nothing at all this week after running normally ' +
           'before. Not a performance problem — a delivery one. Check stock, listing ' +
           'suppression, Buy Box, and whether the ad group or its ads were paused.',
-          [C('Campaign'), C('Ad'), C('Brand'), R('Budget/day'), R('Typical spend/wk'),
+          [C('Campaign'), C('Brand'), R('Budget/day'), R('Typical spend/wk'),
            R('Impressions 28d')],
           arfSilentRow),
 
@@ -313,7 +316,7 @@
           'Still serving, but spending at or below half its own normal rate. Spend is ' +
           'impressions × click-through × cost per click, so each row names which of the ' +
           'three fell — and therefore whether the fix is in the ad account or on the listing.',
-          [C('Campaign'), C('Ad'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
+          [C('Campaign'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
            R('Change')],
           arfSpendCollapseRow),
 
@@ -321,7 +324,7 @@
           'Impressions accumulating without clicks, at half the campaign’s usual rate or ' +
           'worse. Points at the listing — main image, price, reviews — or at targeting ' +
           'drift, and it shows up before the money is spent rather than after.',
-          [C('Campaign'), C('Ad'), C('Brand'), R('Impressions'), R('Clicks'),
+          [C('Campaign'), C('Brand'), R('Impressions'), R('Clicks'),
            R('CTR'), R('Typical CTR'), R('Change')],
           arfCtrRow),
 
@@ -330,7 +333,7 @@
           'bid automation reaching. The suggested cut is a step — 10% at the flagging ' +
           'threshold rising to 25% at twice it — because what a lower bid actually costs ' +
           'per click is an auction outcome, not arithmetic. Applying it writes to Amazon.',
-          [C('Campaign'), C('Ad'), C('Brand'), R('Clicks'), R('7-day spend'),
+          [C('Campaign'), C('Brand'), R('Clicks'), R('7-day spend'),
            R('CPC'), R('Typical CPC'), R('Change'), R('Bid'), R('Lower to')],
           arfCpcRow),
 
@@ -379,7 +382,6 @@
       return `<td class="arf-name">${escapeHtml(r.campaign)}
           ${note ? `<div class="arf-sub">${note}</div>` : ''}
         </td>
-        <td>${escapeHtml(r.adProduct || '')}</td>
         <td>${escapeHtml(r.brand || '—')}</td>`;
     }
 

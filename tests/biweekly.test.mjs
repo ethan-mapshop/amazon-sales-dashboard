@@ -139,10 +139,16 @@ ok(w.priorEnd === '2026-08-19' && w.priorStart === '2026-08-06',
 const span = (Date.parse(w.end) - Date.parse(w.priorStart)) / 86400000 + 1;
 ok(span === 28, 'so one report per ad product covers both halves', `${span} days`);
 ok(span <= M.MAX_REPORT_DAYS, "and stays inside Amazon's report cap");
-ok(M.BW_REPORT_KEYS.length === 2, 'two reports, one per ad product', M.BW_REPORT_KEYS.join(', '));
+// Sponsored Brands is reviewed monthly, not here: two campaigns out of ~142,
+// its report was the slow one gating every run, and its 14-day attribution
+// window does not settle inside this cadence's 8-day lag - which matters
+// because Tier 1 cuts to $1 on understated orders.
+ok(M.BW_REPORT_KEYS.length === 1 && M.BW_REPORT_KEYS[0] === 'spBw',
+   'one report, Sponsored Products only', M.BW_REPORT_KEYS.join(', '));
 const specs = M.BW_REPORT_KEYS.map(k => M.bwReportSpec(k, w));
+ok(specs.every(sp => sp.product === 'sp'), 'and it asks for SP');
 ok(specs.every(sp => sp.start === w.priorStart && sp.end === w.end),
-   'both request the full 28 days');
+   'covering the full 28 days');
 
 console.log(`\n${fails === 0 ? 'ALL PASS' : fails + ' FAILURES'}`);
 process.exit(fails === 0 ? 0 : 1);

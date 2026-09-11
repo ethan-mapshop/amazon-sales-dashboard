@@ -909,7 +909,11 @@ const RF_SPEC_DEVIATIONS = [
   'and there is no fresher retention to be had.',
 
   'Every enabled campaign is evaluated; the doc excludes campaigns under $5 of ' +
-  'weekly spend. The reports are pulled in full either way.'
+  'weekly spend. The reports are pulled in full either way.',
+
+  'Sponsored Brands is not evaluated. Two campaigns out of ~142, and its report ' +
+  'was the slow one gating every run. SB is reviewed in the monthly cadence, ' +
+  'which already has a dedicated section for it.'
 ];
 
 // Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
@@ -946,8 +950,8 @@ function rfSegment(brand, campaignName) {
 // no fallback ladder: a refused column now means a real problem worth stopping
 // for, not a cue to silently run on less data.
 const RF_COLUMNS = {
-  sp: ['date', 'campaignId', 'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d'],
-  sb: ['date', 'campaignId', 'cost', 'clicks', 'impressions', 'purchases', 'sales']
+  sp: ['date', 'campaignId', 'cost', 'clicks', 'impressions', 'purchases7d', 'sales7d']
+  // No sb set: neither cadence requests a Sponsored Brands report any more.
 };
 
 // Amazon's v3 reporting API rejects a request whose date range exceeds this.
@@ -955,16 +959,24 @@ const RF_COLUMNS = {
 // are contiguous and total 35 days.
 const MAX_REPORT_DAYS = 31;
 
-// Two windows x two ad products. Rows from all four are pooled and binned by
-// their own `date`, so the split is a transport detail rather than something
-// the evaluation has to know about.
-const REPORT_KEYS = ['spWeek', 'spBase', 'sbWeek', 'sbBase'];
+// Two windows, Sponsored Products only. Rows from both are pooled and binned
+// by their own `date`, so the split is a transport detail rather than
+// something the evaluation has to know about.
+//
+// SPONSORED BRANDS IS DELIBERATELY ABSENT. Two campaigns out of ~142, and its
+// report is the slow one — it gated the whole run for 1.4% of the account. SB
+// is reviewed monthly instead, where the doc already has a dedicated section
+// for it with new-to-brand metrics and a 30-day window.
+//
+// If SB ever comes back, it must return to the SPINE as well as here: a census
+// row with no report behind it reads as zero impressions and zero spend, which
+// would flag both campaigns as silent and collapsed on every single run.
+const REPORT_KEYS = ['spWeek', 'spBase'];
 
 function reportSpec(key, window) {
-  const product = key.startsWith('sp') ? 'sp' : 'sb';
   return key.endsWith('Week')
-    ? { product, start: window.weekStart, end: window.weekEnd }
-    : { product, start: window.baseStart, end: window.baseEnd };
+    ? { product: 'sp', start: window.weekStart, end: window.weekEnd }
+    : { product: 'sp', start: window.baseStart, end: window.baseEnd };
 }
 const REPORT_ID_RE = /^[A-Za-z0-9._-]{8,80}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1209,6 +1221,9 @@ function evaluateWeek({ census, rows, window }) {
   const campaigns = new Map();
   for (const row of census.campaigns) {
     if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
+    // Sponsored Brands is not reported here, so it must not be in the spine
+    // either — a row with no report behind it looks silent and collapsed.
+    if (row.adProduct !== 'SP') continue;
     const brand = row.brand || null;
     const segment = brand ? rfSegment(brand, row.name) : null;
     campaigns.set(String(row.campaignId), {
@@ -1793,7 +1808,12 @@ const BW_DECREASES = [0.15, 0.25, 0.40];
 const BW_POSTURES = ['scale', 'hold', 'constrain'];
 const BW_POSTURE_KEY = 'biweekly:posture';
 
-const BW_REPORT_KEYS = ['spBw', 'sbBw'];
+// Sponsored Products only, for the reasons in the weekly's REPORT_KEYS note —
+// plus one specific to this cadence: SB uses a 14-DAY attribution window, so
+// the 8-day lag that settles SP leaves roughly six days of SB conversions
+// still arriving. Retention would be understated, and Tier 1 cuts to $1 on
+// exactly that. SB is reviewed monthly.
+const BW_REPORT_KEYS = ['spBw'];
 
 // ─── WINDOW ──────────────────────────────────────────────────────────────────
 // Two 14-day halves, both fully attributed, ending LAG_DAYS before today.
@@ -1808,7 +1828,7 @@ function resolveBiweeklyWindow(nowInstant) {
 
 function bwReportSpec(key, window) {
   return {
-    product: key.startsWith('sp') ? 'sp' : 'sb',
+    product: 'sp',
     // Both halves in one request: 28 contiguous days, under the 31-day cap.
     start: window.priorStart, end: window.end
   };
@@ -1907,6 +1927,10 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
   const campaigns = new Map();
   for (const row of census.campaigns) {
     if (String(row.state || '').toUpperCase() !== 'ENABLED') continue;
+    // No SB report is pulled, so SB must not be in the spine: a campaign with
+    // no report behind it shows zero spend and zero orders, which trips the
+    // significance floor and reads as "insufficient data" forever.
+    if (row.adProduct !== 'SP') continue;
     const brand = row.brand || null;
     const segment = brand ? rfSegment(brand, row.name) : null;
     campaigns.set(String(row.campaignId), {
@@ -1995,31 +2019,24 @@ function evaluateBiweekly({ census, rows, window, postures = {}, recentRaises = 
   for (const r of out) counts[r.action]++;
 
   // Brand Summary — SP and SB split per brand, as the doc specifies.
+  // The doc asks for an SP/SB split per brand. With SB reviewed monthly there
+  // is nothing to split, so the columns are gone rather than sitting at zero
+  // and implying Sponsored Brands spent nothing.
   const brands = new Map();
   for (const r of out) {
     if (!r.brand) continue;
     let b = brands.get(r.brand);
-    if (!b) {
-      b = { brand: r.brand, posture: r.posture,
-            sp: { spend: 0, sales: 0, orders: 0 },
-            sb: { spend: 0, sales: 0, orders: 0 } };
-      brands.set(r.brand, b);
-    }
-    const side = r.adProduct === 'SB' ? b.sb : b.sp;
-    side.spend += r.spend; side.sales += r.sales; side.orders += r.orders;
+    if (!b) { b = { brand: r.brand, posture: r.posture, spend: 0, sales: 0, orders: 0 }; brands.set(r.brand, b); }
+    b.spend += r.spend; b.sales += r.sales; b.orders += r.orders;
   }
   const brandSummary = [...brands.values()].map(b => {
-    const spend = b.sp.spend + b.sb.spend;
-    const sales = b.sp.sales + b.sb.sales;
     const segment = BRAND_SEGMENT[b.brand] || null;
     const margin = segment ? MARGINS[segment] : null;
     return {
       brand: b.brand, posture: b.posture,
-      sp: { spend: r2(b.sp.spend), sales: r2(b.sp.sales), orders: b.sp.orders },
-      sb: { spend: r2(b.sb.spend), sales: r2(b.sb.sales), orders: b.sb.orders },
-      spend: r2(spend), sales: r2(sales), orders: b.sp.orders + b.sb.orders,
-      acos: sales > 0 ? r4(spend / sales) : null,
-      retention: retentionOf(margin, spend, sales)
+      spend: r2(b.spend), sales: r2(b.sales), orders: b.orders,
+      acos: b.sales > 0 ? r4(b.spend / b.sales) : null,
+      retention: retentionOf(margin, b.spend, b.sales)
     };
   }).sort((a, b) => b.spend - a.spend);
 

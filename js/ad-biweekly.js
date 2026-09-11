@@ -215,7 +215,7 @@
         <div class="card card-flat" style="text-align: center; padding: 4rem 2rem;">
           <div style="font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem;">💰</div>
           <div style="color: var(--text-secondary); max-width: 44rem; margin: 0 auto; line-height: 1.6;">
-            Every enabled campaign gets one of Increase, Decrease, Hold or Cut to Floor,
+            Every enabled Sponsored Products campaign gets one of Increase, Decrease, Hold or Cut to Floor,
             from a four-tier decision tree keyed on profit retention. The 14-day window
             ends eight days ago so every conversion has landed &mdash; this cadence writes
             budgets, and a fresh window would cut healthy campaigns whose sales had not
@@ -300,7 +300,6 @@
             <table class="table-fill arf-table">
               <thead><tr>
                 <th>Brand</th><th>Posture</th>
-                <th class="arf-r">SP spend</th><th class="arf-r">SB spend</th>
                 <th class="arf-r">Spend</th><th class="arf-r">Sales</th>
                 <th class="arf-r">Orders</th><th class="arf-r">ACoS</th><th class="arf-r">Retention</th>
               </tr></thead>
@@ -308,8 +307,6 @@
                 <tr>
                   <td class="arf-name">${escapeHtml(b.brand)}</td>
                   <td>${escapeHtml(b.posture === 'hold' ? '—' : b.posture)}</td>
-                  <td class="arf-r">${bwMoney(b.sp.spend)}</td>
-                  <td class="arf-r">${b.sb.spend > 0 ? bwMoney(b.sb.spend) : '—'}</td>
                   <td class="arf-r">${bwMoney(b.spend)}</td>
                   <td class="arf-r">${bwMoney(b.sales)}</td>
                   <td class="arf-r">${b.orders}</td>
@@ -337,7 +334,7 @@
         <div class="arf-table-wrap">
           <table class="table-fill arf-table">
             <thead><tr>
-              <th>Campaign</th><th>Ad</th><th>Brand</th>
+              <th>Campaign</th><th>Brand</th>
               <th class="arf-r">Spend</th><th class="arf-r">Sales</th><th class="arf-r">Orders</th>
               <th class="arf-r">ACoS</th><th class="arf-r">Retention</th><th class="arf-r">At cap</th>
               <th>Action</th><th class="arf-r">Budget</th><th class="arf-r">New</th><th class="arf-r">Apply</th>
@@ -363,7 +360,6 @@
               ? ` <span class="bw-warn">· this tool already raised it to $${r.raisedRecently.to} on ${escapeHtml(r.raisedRecently.ptDate)}</span>`
               : ''}</div>
         </td>
-        <td>${escapeHtml(r.adProduct || '')}</td>
         <td>${escapeHtml(r.brand || '—')}</td>
         <td class="arf-r">${bwMoney(r.spend)}</td>
         <td class="arf-r">${bwMoney(r.sales)}</td>
