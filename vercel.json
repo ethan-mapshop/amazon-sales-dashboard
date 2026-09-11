@@ -49,7 +49,7 @@
       "schedule": "0 11 * * *"
     },
     {
-      "path": "/api/adspend?action=cron-ads-collect&slot=2",
+      "path": "/api/adspend?action=cron-ads-collect&slot=2&final=1",
       "schedule": "0 12 * * *"
     }
   ],

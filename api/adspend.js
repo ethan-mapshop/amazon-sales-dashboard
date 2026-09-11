@@ -2700,6 +2700,168 @@ function adsCronIsRunDay(nowInstant) {
   return d.getUTCDay() === ADS_CRON_DAY;
 }
 
+// ─── SLACK ───────────────────────────────────────────────────────────────────
+// ONE message per Tuesday run, sent when the run reaches a terminal state:
+// everything collected, or the last attempt is over. A collect slot that still
+// has a retry behind it stays silent on failure, so a slow report queue never
+// sends a problem that the next slot would quietly contradict. Success is
+// terminal whenever it happens, so it goes out at the earliest slot that has
+// everything — which is the point of running before the working day.
+//
+// Reuses SLACK_WEBHOOK_URL, already set for the orders alerts. Without it the
+// cron simply runs without notifying. A Slack failure is logged and never
+// thrown: reporting on the run must not break the run.
+
+const ADS_CRON_LABELS = {
+  spWeek: 'weekly report (the week)',
+  spBase: 'weekly report (the baseline)',
+  spBw:   'bi-weekly report'
+};
+
+const RF_BUCKET_LABELS = {
+  budgetCap: 'budget cap', silent: 'silent', spendCollapse: 'spend collapse',
+  ctrCollapse: 'CTR collapse', cpcSpike: 'CPC spike', brandPacing: 'brand pacing'
+};
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// Pure, so the wording can be tested without a webhook. Returns the outcome
+// alongside the text because the caller logs it and the tests assert on it.
+function adsCronReport(s) {
+  const notReady = s.notReady || [];
+  const failures = s.failures || [];
+  const label = (k) => ADS_CRON_LABELS[k] || k;
+
+  // Stopped before anything could be stored, so no later slot rescues it.
+  if (s.blocked) {
+    return {
+      outcome: 'none',
+      text: '🔴 [Ad cadences] Tuesday run could not proceed\n' +
+            `• ${s.blocked}\n` +
+            'Nothing was stored. Both cadences can still be run from the dashboard.'
+    };
+  }
+
+  const outcome = (s.weekly && s.biweekly) ? 'ok'
+                : (s.weekly || s.biweekly) ? 'partial'
+                : 'none';
+
+  const head = outcome === 'ok'      ? '✅ [Ad cadences] Tuesday reports are in'
+             : outcome === 'partial' ? '⚠️ [Ad cadences] Tuesday run finished short'
+             :                         '🔴 [Ad cadences] Tuesday run did not finish';
+
+  const lines = [head];
+
+  if (s.weekly) {
+    const w = s.weekly;
+    const buckets = Object.entries(w.flags || {})
+      .filter(([, list]) => list && list.length)
+      .map(([k, list]) => `${RF_BUCKET_LABELS[k] || k} ${list.length}`);
+    lines.push(`• Weekly red flags — ${plural(w.flagCount, 'flag')}, ` +
+               `${w.window.weekStart} to ${w.window.weekEnd}`);
+    lines.push(buckets.length ? `    ${buckets.join(' · ')}` : '    nothing flagged this week');
+  }
+
+  if (s.biweekly) {
+    const b = s.biweekly;
+    if (b.adopted) {
+      const c = b.counts || { increase: 0, decrease: 0, cut: 0, hold: 0 };
+      const changes = c.increase + c.decrease + c.cut;
+      lines.push(`• Bi-weekly budgets — adopted, ${plural(changes, 'change')} ` +
+                 `across ${b.evaluated} campaigns, ${b.window.start} to ${b.window.end}`);
+      lines.push(`    increase ${c.increase} · decrease ${c.decrease} · ` +
+                 `cut ${c.cut} · hold ${c.hold}`);
+    } else {
+      lines.push('• Bi-weekly budgets — fresh data ready to import, ' +
+                 `${b.window.start} to ${b.window.end}`);
+      lines.push(b.daysUntilAdopt > 0
+        ? `    Adopted on its own in ${plural(b.daysUntilAdopt, 'day')}, or import it now to act early.`
+        : '    Import it from the dashboard to decide from it.');
+    }
+  }
+
+  // The census supplies every budget, brand and bid the checks read, so a stale
+  // one is worth saying even when the reports themselves landed.
+  if (s.censusError) {
+    lines.push(`• Campaign snapshot did not refresh: ${s.censusError}`);
+    lines.push('    Decisions were made from the previous snapshot.');
+  }
+
+  for (const n of notReady) lines.push(`• The ${label(n.key)} never arrived — ${n.status}`);
+  for (const f of failures) lines.push(`• The ${label(f.key)} was never requested — ${f.error}`);
+
+  if (outcome !== 'ok') {
+    const what = outcome === 'none' ? 'both cadences' : 'that cadence';
+    lines.push(notReady.length
+      ? `Amazon had not finished generating them by the last attempt. Re-run ${what} from the dashboard.`
+      : `Re-run ${what} from the dashboard.`);
+  }
+
+  return { outcome, text: lines.join('\n') };
+}
+
+async function adsCronSlack(text) {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.log('[ADS CRON] SLACK_WEBHOOK_URL is not set — not notifying');
+    return false;
+  }
+  try {
+    const resp = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (!resp.ok) {
+      console.warn(`[ADS CRON] Slack POST returned ${resp.status}: ` +
+                   `${await resp.text().catch(() => '')}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('[ADS CRON] Slack POST failed:', err.message);
+    return false;
+  }
+}
+
+// Sends, and records that it sent. The flag is what stops a retried invocation
+// or an extra slot from saying the same thing twice.
+async function adsCronNotify(summary, pending) {
+  const { outcome, text } = adsCronReport(summary);
+  console.log(`[ADS CRON] ${outcome}:\n${text}`);
+  await adsCronSlack(text);
+  if (pending) {
+    try {
+      await kv.set(ADS_CRON_KEY, {
+        ...pending, notified: true, notifiedAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('[ADS CRON] could not record the notification:', err.message);
+    }
+  }
+  return outcome;
+}
+
+// Counts for the bi-weekly line. Only meaningful once the data is ADOPTED: an
+// unadopted fetch drives no recommendation yet, so reporting its action counts
+// would describe something nobody is looking at.
+async function bwCronSummary({ window, inputs, census, adopted }) {
+  if (!adopted) {
+    const run = await bwLoadRun();
+    const since = Date.parse((run && (run.adoptedAt || run.collectedAt)) || 0);
+    const left = Number.isFinite(since)
+      ? Math.ceil(BW_CONFIG.ADOPT_AFTER_DAYS - (Date.now() - since) / 86400000)
+      : 0;
+    return { window, adopted: false, daysUntilAdopt: Math.max(0, left) };
+  }
+  const postures = await bwLoadPostures();
+  const result = bwDecideAll({
+    inputs, census, window, postures,
+    recentRaises: bwRecentRaises(census.changes, window)
+  });
+  return { window, adopted: true, counts: result.counts, evaluated: result.rows.length };
+}
+
 async function handleCronAdsRequest(req, res) {
   try {
     if (!adsCronIsRunDay(new Date())) {
@@ -2707,7 +2869,9 @@ async function handleCronAdsRequest(req, res) {
     }
     const missing = missingAdsCredentials();
     if (missing.length) {
-      return res.status(500).json({ error: `Missing Advertising API credentials: ${missing.join(', ')}` });
+      const why = `Missing Advertising API credentials: ${missing.join(', ')}`;
+      await adsCronNotify({ blocked: why }, null);
+      return res.status(500).json({ error: why });
     }
 
     // The census decides which campaigns are evaluated and supplies every
@@ -2747,32 +2911,67 @@ async function handleCronAdsRequest(req, res) {
       await sleep(600);
     }
 
+    // Nothing to collect means no later slot can rescue this, so it is terminal
+    // now rather than at the final collect. A PARTIAL failure is not terminal:
+    // the collect can still store the cadence whose reports did get requested,
+    // and it carries these failures into that message.
+    if (!reports.length) {
+      await adsCronNotify({
+        blocked: 'No report could be requested. ' +
+                 failures.map(f => `${ADS_CRON_LABELS[f.key] || f.key}: ${f.error}`).join('; ')
+      }, null);
+      return res.status(200).json({ success: false, requested: 0, failures, censusError });
+    }
+
     await kv.set(ADS_CRON_KEY, {
-      weekly, biweekly, reports, failures,
-      requestedAt: new Date().toISOString(), collected: false
+      weekly, biweekly, reports, failures, censusError,
+      // Stamped so a collect can tell this batch from last week's — see below.
+      ptDate: _ptDate(new Date()),
+      requestedAt: new Date().toISOString(), collected: false, notified: false
     });
 
     return res.status(200).json({ success: true, requested: reports.length, failures, censusError });
   } catch (error) {
     console.error('[ADS CRON REQUEST] Error:', error);
+    await adsCronNotify({ blocked: 'Could not request the reports: ' + error.message }, null);
     return res.status(500).json({ error: 'Cron request failed: ' + error.message });
   }
 }
 
 // Safe to call repeatedly: it does nothing once a pending batch is collected,
 // which is what lets a second slot exist purely as a safety net.
+//
+// The LAST slot carries final=1 in vercel.json, and that is the only one that
+// reports a failure — every earlier slot still has a retry behind it, so a
+// queue that is merely slow must not produce a message the next slot contradicts.
 async function handleCronAdsCollect(req, res) {
+  const final = String(req.query.final || '') === '1';
+  let pending = null;
   try {
-    const pending = await kv.get(ADS_CRON_KEY);
+    pending = await kv.get(ADS_CRON_KEY);
     if (!pending || !Array.isArray(pending.reports) || !pending.reports.length) {
       return res.status(200).json({ success: true, skipped: 'nothing pending' });
     }
-    if (pending.collected) {
-      return res.status(200).json({ success: true, skipped: 'already collected' });
+    if (pending.collected || pending.notified) {
+      return res.status(200).json({ success: true, skipped: 'already finished' });
+    }
+    // The record outlives the day it was written. Downloading a week-old report
+    // id would store a stale window as if it were this week's, so a batch from
+    // another Pacific day is refused rather than collected.
+    const today = _ptDate(new Date());
+    if (pending.ptDate && pending.ptDate !== today) {
+      return res.status(200).json({ success: true,
+                                    skipped: `pending batch is from ${pending.ptDate}` });
     }
 
     const census = await loadCensus();
     if (!census.campaigns.length) {
+      if (final) {
+        await adsCronNotify({
+          blocked: 'No campaign snapshot to evaluate against. Every budget, brand ' +
+                   'and bid is read from it. Refresh Campaign Overview, then re-run.'
+        }, pending);
+      }
       return res.status(200).json({ success: false, error: 'no campaign snapshot to evaluate against' });
     }
 
@@ -2795,12 +2994,23 @@ async function handleCronAdsCollect(req, res) {
     // All or nothing per cadence: half a window is worse than none, because a
     // missing baseline makes every campaign look like it collapsed.
     const stored = [];
+    const summary = {
+      notReady,
+      failures: pending.failures || [],
+      censusError: pending.censusError || null
+    };
+
     if (rowsByKey.spWeek && rowsByKey.spBase) {
       const { inputs } = rfBuildInputs({
         census, rows: [...rowsByKey.spWeek, ...rowsByKey.spBase], window: pending.weekly
       });
       await rfSaveRun(pending.weekly, inputs);
       stored.push('weekly');
+      // Decided here only to say how much there is to look at. Nothing is
+      // stored from it: the page re-decides on every read.
+      const decided = rfDecideAll({ inputs, census, window: pending.weekly });
+      summary.weekly = { window: pending.weekly, flags: decided.flags,
+                         flagCount: decided.flagCount };
     }
     if (rowsByKey.spBw) {
       const { inputs } = bwBuildInputs({ census, rows: rowsByKey.spBw, window: pending.biweekly });
@@ -2808,16 +3018,26 @@ async function handleCronAdsCollect(req, res) {
       // The bi-weekly is an action cadence on a fortnightly rhythm, so fresh
       // data is offered rather than imposed — except when a fortnight has
       // passed, which is the scheduled run.
-      if (await bwAdoptIfDue()) stored.push('biweekly (auto-adopted)');
-      else stored.push('biweekly (available to import)');
+      const adopted = await bwAdoptIfDue();
+      stored.push(adopted ? 'biweekly (auto-adopted)' : 'biweekly (available to import)');
+      summary.biweekly = await bwCronSummary({ window: pending.biweekly, inputs, census, adopted });
     }
 
     const done = stored.length > 0 && !notReady.length;
-    await kv.set(ADS_CRON_KEY, { ...pending, collected: done, lastCollectAt: new Date().toISOString() });
+    const record = { ...pending, collected: done, lastCollectAt: new Date().toISOString() };
 
-    return res.status(200).json({ success: true, stored, notReady, collected: done });
+    // Terminal: everything landed, or this was the last attempt.
+    let outcome = null;
+    if (done || final) outcome = await adsCronNotify(summary, record);
+    else await kv.set(ADS_CRON_KEY, record);
+
+    return res.status(200).json({ success: true, stored, notReady, collected: done,
+                                  notified: outcome });
   } catch (error) {
     console.error('[ADS CRON COLLECT] Error:', error);
+    if (final) {
+      await adsCronNotify({ blocked: 'Could not collect the reports: ' + error.message }, pending);
+    }
     return res.status(500).json({ error: 'Cron collect failed: ' + error.message });
   }
 }
@@ -2829,5 +3049,5 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
          bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
-         bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay,
+         bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay, adsCronReport,
          BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
