@@ -2104,6 +2104,40 @@
 
     .wk-chart { min-width: 0; }
 
+    /* Monthly Review: the posture legend and the confirm bar. */
+    .mo-legend {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      margin: 0.5rem 0 1rem;
+    }
+
+    .mo-legend-head {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.35rem;
+    }
+
+    .mo-legend ul { margin: 0; padding-left: 1.1rem; }
+
+    .mo-legend li { margin-bottom: 0.2rem; line-height: 1.45; }
+
+    .mo-legend strong { color: var(--text-primary); font-weight: 600; }
+
+    @media (max-width: 1024px) {
+      .mo-legend { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    .mo-save-bar { margin-top: 1rem; }
+
+    .mo-row-pending { background: rgba(59, 130, 246, 0.06); }
+
     .wk-degree {
       font-weight: 400;
       font-size: 0.7rem;

@@ -36,7 +36,12 @@
     let moPollTimer = null;
     let moBusy = false;
     let moBound = false;
-    let moSaving = {};   // { [brand]: true } while a posture write is in flight
+    // Posture choices are staged and saved together on Confirm. Saving on every
+    // dropdown change meant a decision was already live at Amazon's next
+    // bi-weekly before the other brands had even been looked at.
+    let moPending = {};        // { [brand]: posture } staged, not yet saved
+    let moConfirming = false;
+    let moConfirmErrors = {};  // { [brand]: message } from the last Confirm
     // In memory for the life of the page, never written to storage.
     let moData = null;
 
@@ -67,6 +72,11 @@
         if (!res.ok) throw new Error(data.error || `Load failed (${res.status})`);
         if (data.empty) { moData = null; return moRenderIdle(); }
         moData = data;
+        // A staged choice that now matches what is saved is not a change any more.
+        for (const brand of Object.keys(moPending)) {
+          const row = (data.rows || []).find(r => r.brand === brand);
+          if (!row || row.posture === moPending[brand]) delete moPending[brand];
+        }
         moRender(data);
         if (after) moSetStatus(after);
       } catch (err) {
@@ -306,6 +316,7 @@
             cancel &mdash; only the spend and sales dollars read as "that month". Ad share
             counts Sponsored Brands too, and comes from orders rather than the ad reports.
           </p>
+          ${moLegend(data)}
           <div class="arf-table-wrap">
             <table class="table-fill arf-table">
               <thead>
@@ -326,6 +337,71 @@
               <tbody>${rows.map(moBrandRow).join('')}</tbody>
             </table>
           </div>
+          ${moPostureBar(data)}
+        </div>`;
+    }
+
+    // What the recommendation is based on and what each posture actually does,
+    // built from the live config so the numbers cannot drift from the rules.
+    function moLegend(data) {
+      const c = data.config || {};
+      const p = (n) => (typeof n === 'number' ? Math.round(n * 100) + '%' : '—');
+      const pts = (n) => (typeof n === 'number' ? Math.round(n * 100) : '—');
+      return `
+        <div class="mo-legend">
+          <div>
+            <div class="mo-legend-head">How a posture is recommended</div>
+            <ul>
+              <li><strong>Scale</strong> at ${p(c.SCALE_RETENTION)} profit retention or better.</li>
+              <li><strong>Hold Steady</strong> between ${p(c.CONSTRAIN_RETENTION)} and ${p(c.SCALE_RETENTION)}.</li>
+              <li><strong>Constrain</strong> under ${p(c.CONSTRAIN_RETENTION)}. Also when retention fell
+                ${pts(c.TREND_MATERIAL)} points or more from last month and is now under
+                ${p(c.SCALE_RETENTION)}, or when a brand's share of spend runs more than
+                ${pts(c.SHARE_GAP)} points above its share of ad sales and it is under ${p(c.SCALE_RETENTION)}.</li>
+              <li>Always <strong>Hold Steady</strong> with under $${c.MIN_SPEND ?? '—'} of spend and under
+                ${c.MIN_ORDERS ?? '—'} orders, or when retention can't be worked out.</li>
+            </ul>
+          </div>
+          <div>
+            <div class="mo-legend-head">What it changes in the bi-weekly</div>
+            <ul>
+              <li><strong>Scale</strong>: raises on budget-capped campaigns go one step larger.</li>
+              <li><strong>Hold Steady</strong>: the normal budget rules, unchanged.</li>
+              <li><strong>Constrain</strong>: budget-capped campaigns get no raise, and cuts go one step deeper.</li>
+            </ul>
+          </div>
+        </div>`;
+    }
+
+    // The staged changes and the one control that saves them.
+    function moPostureBar(data) {
+      const rows = data.rows || [];
+      const changes = Object.entries(moPending)
+        .map(([brand, posture]) => ({ brand, posture, row: rows.find(r => r.brand === brand) }))
+        .filter(x => x.row);
+      if (!changes.length) return '';
+
+      const detail = changes
+        .map(x => `${x.brand}: ${moPostureLabel(x.row.posture)} \u2192 ${moPostureLabel(x.posture)}`)
+        .join(' \u00b7 ');
+      const failed = changes.filter(x => moConfirmErrors[x.brand]).length;
+      const n = changes.length;
+
+      return `
+        <div class="mo-save-bar">
+          <div class="card aco-save-bar-inner">
+            <div class="aco-save-bar-summary">
+              <strong>${n} posture change${n === 1 ? '' : 's'} not yet saved</strong>
+              <span class="aco-save-bar-detail">${escapeHtml(detail)}</span>
+              ${failed ? `<span class="aco-save-bar-failed">${failed} failed \u2014 still staged</span>` : ''}
+            </div>
+            <div class="aco-save-bar-actions">
+              ${moConfirming
+                ? '<span class="loading"></span><span class="arf-muted">Saving\u2026</span>'
+                : `<button class="btn btn-secondary" data-mo-discard>Discard</button>
+                   <button class="btn btn-primary" data-mo-confirm>Confirm posture changes</button>`}
+            </div>
+          </div>
         </div>`;
     }
 
@@ -340,7 +416,7 @@
         ? '<span class="arf-muted">—</span>'
         : `<span class="${gap <= 0 ? 'bw-up' : 'bw-down'}">${gap >= 0 ? '+' : ''}${moPct(gap)}</span>`;
       return `
-        <tr>
+        <tr${moPending[r.brand] !== undefined ? ' class="mo-row-pending"' : ''}>
           <td class="arf-name">${escapeHtml(r.brand)}
             <div class="arf-sub">${escapeHtml(r.reason || '')}${
               r.adDependent
@@ -360,21 +436,26 @@
         </tr>`;
     }
 
-    // Writes through the bi-weekly's posture endpoint on purpose: it is the
-    // same stored object, read by the same decision tree. A second endpoint
-    // would be a second place for them to disagree.
+    // Changing the dropdown or pressing "Use" only STAGES a posture. Nothing is
+    // saved until Confirm. Saves go through the bi-weekly's posture endpoint on
+    // purpose: it is the same stored object, read by the same decision tree.
     function moPostureSelect(r) {
       const brand = escapeHtml(r.brand);
-      const busy = moSaving[r.brand];
+      const staged = moPending[r.brand];
+      const shown = staged !== undefined ? staged : r.posture;
       const opts = [['scale', 'Scale'], ['hold', 'Hold Steady'], ['constrain', 'Constrain']]
-        .map(([v, label]) => `<option value="${v}"${r.posture === v ? ' selected' : ''}>${label}</option>`)
+        .map(([v, label]) => `<option value="${v}"${shown === v ? ' selected' : ''}>${label}</option>`)
         .join('');
-      return `<select data-mo-posture="${brand}"${busy ? ' disabled' : ''}>${opts}</select>${
-        r.changed && !busy
-          ? `<button class="arf-btn" data-mo-adopt="${brand}" title="Set ${brand} to ${
+      const err = moConfirmErrors[r.brand];
+      return `<select class="${staged !== undefined ? 'aco-dirty' : ''}" data-mo-posture="${brand}"${
+          moConfirming ? ' disabled' : ''}>${opts}</select>${
+        shown !== r.recommended && !moConfirming
+          ? `<button class="arf-btn" data-mo-adopt="${brand}" title="Stage ${brand} as ${
               escapeHtml(moPostureLabel(r.recommended))}">Use ${
               escapeHtml(moPostureLabel(r.recommended))}</button>`
-          : ''}`;
+          : ''}${
+        staged !== undefined ? `<div class="arf-sub">was ${escapeHtml(moPostureLabel(r.posture))}</div>` : ''}${
+        err ? `<div class="arf-warn">${escapeHtml(err)}</div>` : ''}`;
     }
 
     const MO_POSTURE_LABELS = { scale: 'Scale', hold: 'Hold Steady', constrain: 'Constrain' };
@@ -478,42 +559,82 @@
       const el = document.getElementById('admonthly-content');
       if (!el) return;
       el.addEventListener('click', e => {
-        const btn = e.target.closest('[data-mo-adopt]');
-        if (btn) {
-          const brand = btn.dataset.moAdopt;
+        const adopt = e.target.closest('[data-mo-adopt]');
+        if (adopt) {
+          const brand = adopt.dataset.moAdopt;
           const row = (moData?.rows || []).find(r => r.brand === brand);
-          if (row) moSavePosture(brand, row.recommended);
+          if (row) moStage(brand, row.recommended);
+          return;
+        }
+        if (e.target.closest('[data-mo-confirm]')) return moConfirmPostures();
+        if (e.target.closest('[data-mo-discard]')) {
+          moPending = {};
+          moConfirmErrors = {};
+          if (moData) moRender(moData);
         }
       });
       el.addEventListener('change', e => {
         const sel = e.target.closest('[data-mo-posture]');
-        if (sel) moSavePosture(sel.dataset.moPosture, sel.value);
+        if (sel) moStage(sel.dataset.moPosture, sel.value);
       });
       moBound = true;
     }
 
-    async function moSavePosture(brand, posture) {
-      if (!brand || !posture || moSaving[brand] || !accessToken) return;
-      moSaving[brand] = true;
+    // Choosing the posture a brand already has un-stages it, so the bar only
+    // ever lists real changes.
+    function moStage(brand, posture) {
+      if (moConfirming) return;
+      const row = (moData?.rows || []).find(r => r.brand === brand);
+      if (!row || !posture) return;
+      if (posture === row.posture) delete moPending[brand];
+      else moPending[brand] = posture;
+      delete moConfirmErrors[brand];
       if (moData) moRender(moData);
-      try {
-        const res = await fetch('/api/adspend?action=biweekly-posture', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({ brand, posture })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
-        delete moSaving[brand];
-        // Re-read rather than patching locally: the server decides from the
-        // stored postures, so this picks up exactly what it just saved.
-        await moFetch(`${brand} is now ${moPostureLabel(posture)}. The bi-weekly reads this on its next load.`);
-      } catch (err) {
-        console.error('[MO] posture save failed:', err);
-        delete moSaving[brand];
-        moSetStatus('', err.message);
-        if (moData) moRender(moData);
+    }
+
+    // Saves every staged change, one brand at a time. A brand that fails stays
+    // staged with its error beside it, and the ones that saved are not undone.
+    // The endpoint takes one brand per call, and there are only four brands.
+    async function moConfirmPostures() {
+      if (moConfirming || !accessToken) return;
+      const changes = Object.entries(moPending);
+      if (!changes.length) return;
+
+      moConfirming = true;
+      moConfirmErrors = {};
+      if (moData) moRender(moData);
+
+      const saved = [];
+      for (const [brand, posture] of changes) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const res = await fetch('/api/adspend?action=biweekly-posture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+            body: JSON.stringify({ brand, posture })
+          });
+          // eslint-disable-next-line no-await-in-loop
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
+          delete moPending[brand];
+          saved.push(`${brand} to ${moPostureLabel(posture)}`);
+        } catch (err) {
+          console.error('[MO] posture save failed:', err);
+          moConfirmErrors[brand] = `Not saved: ${err.message}`;
+        }
       }
+      moConfirming = false;
+
+      const failed = Object.keys(moConfirmErrors).length;
+      const summary = saved.length
+        ? `Saved ${saved.join(', ')}. The bi-weekly reads this on its next load.`
+        : '';
+      // Re-read rather than patching locally: the server decides from the
+      // stored postures, so this shows exactly what was saved.
+      await moFetch(failed
+        ? `${summary}${summary ? ' ' : ''}${failed} change${failed === 1 ? '' : 's'} could not be saved and ${
+            failed === 1 ? 'is' : 'are'} still staged.`
+        : summary);
     }
 
     // ─── HELPERS ─────────────────────────────────────────────────────────────

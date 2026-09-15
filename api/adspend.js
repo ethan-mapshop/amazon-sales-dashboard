@@ -3298,17 +3298,26 @@ const pct = (n) => (n === null || n === undefined || !Number.isFinite(n))
 // ─── THE RECOMMENDATION ──────────────────────────────────────────────────────
 // Pure, ordered, and every branch says why in plain words. Profit retention is
 // the metric, as in every other cadence — not ACoS against target.
+// Every reason names its own numbers and says what the posture will do. The
+// first version said things like "sits between the bands" and "the standard
+// tree", which only mean something to whoever wrote them.
 function moRecommend(b, config = MO_CONFIG) {
+  const points = (n) => `${Math.round(n * 100)} point${Math.round(n * 100) === 1 ? '' : 's'}`;
+  const scaleLine = pct(config.SCALE_RETENTION);
+  const constrainLine = pct(config.CONSTRAIN_RETENTION);
+
   if (b.spend < config.MIN_SPEND && b.orders < config.MIN_ORDERS) {
     return { posture: 'hold', basis: 'floor',
-             reason: `Under $${config.MIN_SPEND} and ${config.MIN_ORDERS} orders in the month. ` +
-                     'Too little to move a posture on.' };
+             reason: `Under $${config.MIN_SPEND} of spend and under ${config.MIN_ORDERS} orders this ` +
+                     'month, which is too little to judge, so no change to the normal budget rules.' };
   }
   if (b.retention === null) {
     return { posture: 'hold', basis: 'unknown',
              reason: b.grossMargin === null
-               ? 'No gross margin for this brand, so retention cannot be computed.'
-               : 'No attributed sales in the month, so retention cannot be computed.' };
+               ? 'No gross margin on file for this brand, so retention can\'t be worked out. ' +
+                 'No change to the normal budget rules.'
+               : 'No ad sales this month, so retention can\'t be worked out. ' +
+                 'No change to the normal budget rules.' };
   }
 
   // null, not 0, when there is no prior month: a brand that was not running
@@ -3320,29 +3329,30 @@ function moRecommend(b, config = MO_CONFIG) {
 
   if (b.retention < config.CONSTRAIN_RETENTION) {
     return { posture: 'constrain', basis: 'retention',
-             reason: `Retention ${pct(b.retention)} is below ${pct(config.CONSTRAIN_RETENTION)}. ` +
-                     'The doc calls this weak and a candidate for decrease.' };
+             reason: `Retention ${pct(b.retention)} is under ${constrainLine}, so hold back ` +
+                     'raises and cut deeper.' };
   }
   if (fell !== null && fell >= config.TREND_MATERIAL && b.retention < config.SCALE_RETENTION) {
     return { posture: 'constrain', basis: 'trend',
-             reason: `Retention fell ${pct(fell)} from last month to ${pct(b.retention)}, ` +
-                     'and is no longer in the healthy band.' };
+             reason: `Retention fell ${points(fell)} from last month to ${pct(b.retention)}, ` +
+                     `dropping under ${scaleLine}, so hold back raises and cut deeper.` };
   }
   if (shareGap !== null && shareGap > config.SHARE_GAP && b.retention < config.SCALE_RETENTION) {
     return { posture: 'constrain', basis: 'share',
-             reason: `Takes ${pct(b.spendShare)} of spend and returns ${pct(b.salesShare)} of ` +
-                     `ad sales, at ${pct(b.retention)} retention. The money works harder elsewhere.` };
+             reason: `Takes ${pct(b.spendShare)} of spend but returns only ${pct(b.salesShare)} of ` +
+                     `ad sales, at ${pct(b.retention)} retention, so hold back raises and cut deeper.` };
   }
   if (b.retention >= config.SCALE_RETENTION) {
     return { posture: 'scale', basis: 'retention',
-             reason: `Retention ${pct(b.retention)} is healthy` +
+             reason: `Retention ${pct(b.retention)} is ${scaleLine} or better, so raise ` +
+                     'budget-capped campaigns faster.' +
                      (fell !== null && fell >= config.TREND_MATERIAL
-                       ? `, though it fell ${pct(fell)} from last month.`
-                       : '.') };
+                       ? ` It fell ${points(fell)} from last month, so it is worth watching.`
+                       : '') };
   }
   return { posture: 'hold', basis: 'mediocre',
-           reason: `Retention ${pct(b.retention)} sits between the bands. ` +
-                   'The standard tree is the right treatment.' };
+           reason: `Retention ${pct(b.retention)} is between ${constrainLine} and ${scaleLine}, ` +
+                   'so no change to the normal budget rules.' };
 }
 
 // ─── DECIDE ──────────────────────────────────────────────────────────────────

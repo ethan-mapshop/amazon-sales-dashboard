@@ -361,6 +361,45 @@ ok(rec({ retention: 0.70, spendShare: 0.50, salesShare: 0.20 }).posture === 'sca
      r.reason);
 }
 
+console.log('\nREASON WORDING  — every branch names its numbers, and none leans on jargon');
+
+{
+  // One brand for each branch of moRecommend.
+  const cases = {
+    floor:     brand({ spend: 50, orders: 5 }),
+    noMargin:  brand({ retention: null, grossMargin: null }),
+    noSales:   brand({ retention: null }),
+    weak:      brand({ retention: 0.18, priorRetention: 0.18 }),
+    fell:      brand({ retention: 0.40, priorRetention: 0.55 }),
+    share:     brand({ retention: 0.40, priorRetention: 0.40, spendShare: 0.5, salesShare: 0.2 }),
+    healthy:   brand({ retention: 0.62, priorRetention: 0.62 }),
+    healthyFell: brand({ retention: 0.60, priorRetention: 0.85 }),
+    between:   brand({ retention: 0.38, priorRetention: 0.38 })
+  };
+  const reasons = Object.fromEntries(Object.entries(cases).map(([k, b]) => [k, M.moRecommend(b).reason]));
+
+  const jargon = Object.entries(reasons).filter(([, r]) => /band|tree|the doc/i.test(r));
+  ok(jargon.length === 0,
+     'no reason says "band", "tree" or "the doc"',
+     jargon.length ? jargon.map(([k, r]) => `${k}: ${r}`).join(' | ') : 'the first version said "sits between the bands"');
+
+  ok(/38%/.test(reasons.between) && /25%/.test(reasons.between) && /50%/.test(reasons.between),
+     'a Hold Steady reason gives the brand\'s retention and both lines it sits between',
+     reasons.between);
+  ok(/normal budget rules/.test(reasons.between),
+     'and says what Hold Steady does');
+
+  ok(/15 points/.test(reasons.fell),
+     'a fall is stated in points, not as a percentage',
+     'a 15% fall reads as relative to last month; 55% to 40% is 15 points');
+
+  ok(/raise/i.test(reasons.healthy) && /cut deeper/.test(reasons.weak),
+     'Scale and Constrain reasons say what the posture will do');
+
+  ok(/25 points/.test(reasons.healthyFell) && /watching/.test(reasons.healthyFell),
+     'a healthy brand that fell hard still scales, but says so');
+}
+
 console.log('\nTARGET ACOS  — display only');
 {
   const segments = Object.keys(M.TARGET_ACOS);
