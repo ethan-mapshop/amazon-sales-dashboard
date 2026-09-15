@@ -1899,6 +1899,55 @@
        a real change note so it never competes with one. */
     .arf-quiet { opacity: 0.6; font-style: italic; }
 
+    /* Investigation notes on portfolio rows. Named arf-log because arf-note is
+       already the page's header card. Sized to read as an annotation under the
+       product name rather than a second heading. */
+    .arf-log {
+      margin-top: 0.35rem;
+      font-size: 0.75rem;
+      font-weight: 400;
+      white-space: normal;
+      max-width: 34rem;
+    }
+
+    .arf-log-text {
+      color: var(--text-primary);
+      border-left: 2px solid var(--accent-blue);
+      padding-left: 0.5rem;
+      margin-right: 0.5rem;
+    }
+
+    .arf-log-prior {
+      color: var(--text-secondary);
+      font-style: italic;
+      margin-bottom: 0.2rem;
+    }
+
+    .arf-log-link {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--accent-blue);
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .arf-log-input {
+      width: 100%;
+      min-width: 16rem;
+      font: inherit;
+      font-size: 0.8rem;
+      resize: vertical;
+    }
+
+    .arf-log-actions {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.3rem;
+    }
+
     /* Bi-weekly budgets. Reuses the red-flag table styles; these are only the
        pieces that page does not have. */
     .bw-head {

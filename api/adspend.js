@@ -89,6 +89,7 @@ export default async function handler(req, res) {
     if (action === 'delete-sheets-rows')      return handleDeleteSheetsRows(req, res);
     if (action === 'upload-yearly-csv')       return handleUploadYearlyCsv(req, res);
     if (action === 'biweekly-posture')        return handleBiweeklyPosture(req, res);
+    if (action === 'weekly-note')             return handleWeeklyNote(req, res);
     if (action === 'biweekly-adopt')          return handleBiweeklyAdopt(req, res);
     if (action === 'biweekly-import')         return handleBiweeklyImport(req, res);
   }
@@ -1200,6 +1201,7 @@ async function handleWeeklyCollect(req, res) {
 
     const result = rfDecideAll({ inputs, census, window });
     result.coverage.orphanRows += orphanRows;
+    result.flags = rfAttachNotes(result.flags, await rfLoadNotes(), window.weekStart);
 
     return res.status(200).json({
       success: true,
@@ -1226,7 +1228,7 @@ async function handleWeeklyGet(req, res) {
     const auth = await verifyGoogleToken(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
 
-    const [run, census] = await Promise.all([rfLoadRun(), loadCensus()]);
+    const [run, census, logNotes] = await Promise.all([rfLoadRun(), loadCensus(), rfLoadNotes()]);
     if (!run) return res.status(200).json({ success: true, empty: true });
     if (!census.campaigns.length) {
       return res.status(409).json({
@@ -1236,6 +1238,7 @@ async function handleWeeklyGet(req, res) {
     }
 
     const result = rfDecideAll({ inputs: run.inputs, census, window: run.window });
+    result.flags = rfAttachNotes(result.flags, logNotes, run.window.weekStart);
     return res.status(200).json({
       success: true,
       window: run.window,
@@ -1644,6 +1647,124 @@ function evaluateWeek({ census, rows, window }) {
   result.coverage.orphanRows += orphanRows;
   result.inputs = inputs;
   return result;
+}
+
+// ─── INVESTIGATION NOTES ─────────────────────────────────────────────────────
+// What you found when you looked into a flag. The checks can say a product
+// moved; only you can say it was an FBA stock-out with FBM stock still up and
+// the Prime badge gone. Written down, that turns a weekly alarm into a history
+// of why each product dipped.
+//
+// Keyed by portfolio and week, not by flag. Flags are re-decided on every read
+// and have no identity of their own to hang a note on, while "this product,
+// this week" is stable, and is the question a note actually answers. A stock-out
+// explains a spend collapse and a CTR collapse on the same product equally.
+//
+// A note belongs to the week it was written. The next week's flag on the same
+// portfolio shows the most recent earlier note as context rather than inheriting
+// it: an ongoing stock-out needs no retyping, and a new cause on a product with
+// an old note is not hidden behind the old explanation.
+//
+// User-authored, so it is stored as written. The run store holds measurements
+// and never decisions; a note is neither, and is joined onto flags on read.
+
+const RF_NOTES_KEY = 'weekly:notes';
+const RF_NOTE_MAX = 1000;
+
+const rfNoteKey = (portfolioId, weekStart) => `${String(portfolioId)}|${weekStart}`;
+
+async function rfLoadNotes() {
+  try {
+    const stored = await kv.get(RF_NOTES_KEY);
+    return (stored && stored.notes && typeof stored.notes === 'object') ? stored.notes : {};
+  } catch (err) {
+    // Notes are context. A failed read must not take the flags down with it.
+    console.error('[REDFLAGS] notes load failed:', err.message);
+    return {};
+  }
+}
+
+// Pure. Adds `note`, this week's, and `priorNote`, the most recent earlier one,
+// to each portfolio-level flag. Campaign-level flags are left exactly as they
+// were: budget cap and CPC spike carry their own action, an apply button.
+function rfAttachNotes(flags, notes, weekStart) {
+  const byPortfolio = new Map();
+  for (const n of Object.values(notes || {})) {
+    if (!n || n.portfolioId === undefined || n.portfolioId === null || !n.weekStart) continue;
+    const id = String(n.portfolioId);
+    if (!byPortfolio.has(id)) byPortfolio.set(id, []);
+    byPortfolio.get(id).push(n);
+  }
+
+  const attach = (row) => {
+    const list = byPortfolio.get(String(row.portfolioId)) || [];
+    const current = list.find(n => n.weekStart === weekStart) || null;
+    // Strictly earlier weeks. A note written against a later week, which only
+    // happens when an older run is read back, is not context for this one.
+    const prior = list
+      .filter(n => n.weekStart < weekStart)
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart))[0] || null;
+    return {
+      ...row,
+      note: current ? { text: current.text, updatedAt: current.updatedAt || null } : null,
+      priorNote: prior
+        ? { text: prior.text, weekStart: prior.weekStart, updatedAt: prior.updatedAt || null }
+        : null
+    };
+  };
+
+  return {
+    ...flags,
+    silent: (flags.silent || []).map(attach),
+    spendCollapse: (flags.spendCollapse || []).map(attach),
+    ctrCollapse: (flags.ctrCollapse || []).map(attach)
+  };
+}
+
+// Saves, replaces or clears one note. An empty note clears it, which is how a
+// note written against the wrong product is taken back.
+//
+// Read-modify-write on a single key. Two notes saved in the same instant could
+// lose one; with notes written by hand a few times a week that is a trade worth
+// making for one key instead of a key per note.
+async function handleWeeklyNote(req, res) {
+  try {
+    const auth = await verifyGoogleToken(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const portfolioId = String(req.body?.portfolioId ?? '').trim();
+    const weekStart = String(req.body?.weekStart || '').trim();
+    const text = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+    const portfolio = typeof req.body?.portfolio === 'string' ? req.body.portfolio.slice(0, 200) : null;
+
+    if (!portfolioId) return res.status(400).json({ error: 'portfolioId required' });
+    if (!DATE_RE.test(weekStart)) return res.status(400).json({ error: 'weekStart must be YYYY-MM-DD' });
+    if (text.length > RF_NOTE_MAX) {
+      return res.status(400).json({ error: `A note can be at most ${RF_NOTE_MAX} characters.` });
+    }
+
+    const stored = await kv.get(RF_NOTES_KEY);
+    const notes = (stored && stored.notes && typeof stored.notes === 'object') ? { ...stored.notes } : {};
+    const key = rfNoteKey(portfolioId, weekStart);
+
+    if (!text) {
+      delete notes[key];
+    } else {
+      notes[key] = {
+        portfolioId, weekStart, text,
+        // Kept for reading the log back later, if the portfolio is renamed or
+        // archived. Nothing looks a note up by name.
+        portfolio,
+        updatedAt: new Date().toISOString()
+      };
+    }
+    await kv.set(RF_NOTES_KEY, { notes });
+
+    return res.status(200).json({ success: true, note: notes[key] || null });
+  } catch (error) {
+    console.error('[REDFLAGS NOTE] Error:', error);
+    return res.status(500).json({ error: 'Weekly-note failed: ' + error.message });
+  }
 }
 
 // The stored weekly run: what the reports said, nothing decided. The checks are
@@ -4669,7 +4790,7 @@ async function whIngestWeeklyRun({ rows, census, window }) {
 }
 
 export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
-         rfPortfolioFlags, rfPortfolioTotals,
+         rfPortfolioFlags, rfPortfolioTotals, rfAttachNotes, rfNoteKey,
          rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
          rfRecommendBid, rfDecomposeSpend,

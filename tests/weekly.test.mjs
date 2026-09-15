@@ -411,6 +411,105 @@ console.log('\n  through rfDecideAll');
      'the 77-of-141 denominator problem is answerable now');
 }
 
+console.log('\nINVESTIGATION NOTES  — what you found, joined onto the flags on read');
+
+// Keyed by portfolio and week. A note belongs to the week it was written; a
+// later week shows the most recent earlier note as context, never as its own.
+const WEEK = '2026-09-07';
+const noteOf = (portfolioId, weekStart, text) =>
+  ({ [M.rfNoteKey(portfolioId, weekStart)]: { portfolioId: String(portfolioId), weekStart, text,
+                                                updatedAt: '2026-09-15T12:00:00Z' } });
+const pfFlags = (over = {}) => ({
+  budgetCap: [{ campaignId: 'c1', campaign: 'X' }],
+  silent: [],
+  spendCollapse: [{ portfolioId: 'pf-a', portfolio: 'STATE Florida', change: -0.6 }],
+  ctrCollapse: [],
+  cpcSpike: [{ campaignId: 'c2', campaign: 'Y' }],
+  brandPacing: [{ brand: 'MapShop State Maps' }],
+  ...over
+});
+
+{
+  const out = M.rfAttachNotes(pfFlags(), noteOf('pf-a', WEEK, 'FBA stock-out, FBM up, no Prime badge'), WEEK);
+  const r = out.spendCollapse[0];
+  ok(r.note && r.note.text === 'FBA stock-out, FBM up, no Prime badge',
+     'a note written for this portfolio this week is attached to its flag');
+  ok(r.priorNote === null, 'with no earlier note to show');
+}
+
+{
+  const out = M.rfAttachNotes(pfFlags(), noteOf('pf-a', '2026-08-31', 'FBA stock-out'), WEEK);
+  const r = out.spendCollapse[0];
+  ok(r.note === null,
+     'a note from an earlier week is not treated as this week\'s',
+     'otherwise a new cause would sit silently behind an old explanation');
+  ok(r.priorNote && r.priorNote.text === 'FBA stock-out' && r.priorNote.weekStart === '2026-08-31',
+     'it is offered as dated context instead, so an ongoing issue needs no retyping');
+}
+
+{
+  const notes = { ...noteOf('pf-a', '2026-08-17', 'oldest'),
+                  ...noteOf('pf-a', '2026-08-31', 'most recent'),
+                  ...noteOf('pf-a', '2026-08-24', 'middle') };
+  const r = M.rfAttachNotes(pfFlags(), notes, WEEK).spendCollapse[0];
+  ok(r.priorNote && r.priorNote.text === 'most recent',
+     'the context is the most recent earlier note, whatever order they were stored in');
+}
+
+{
+  const r = M.rfAttachNotes(pfFlags(), noteOf('pf-a', '2026-09-14', 'from the future'), WEEK).spendCollapse[0];
+  ok(r.note === null && r.priorNote === null,
+     'a note on a later week is neither this week\'s nor context',
+     'which only happens when an older run is read back');
+}
+
+{
+  const r = M.rfAttachNotes(pfFlags(), noteOf('pf-other', WEEK, 'different product'), WEEK).spendCollapse[0];
+  ok(r.note === null && r.priorNote === null, 'a note on another portfolio does not leak across');
+}
+
+{
+  // The census may carry portfolio ids as numbers; notes are stored as strings.
+  const flags = pfFlags({ spendCollapse: [{ portfolioId: 42, portfolio: 'STATE Ohio' }] });
+  const r = M.rfAttachNotes(flags, noteOf('42', WEEK, 'numeric id'), WEEK).spendCollapse[0];
+  ok(r.note && r.note.text === 'numeric id',
+     'a numeric portfolio id still finds its note',
+     'the ids arrive as numbers from one side and strings from the other');
+}
+
+{
+  // One product flagged in two checks shares one note: the stock-out explains both.
+  const flags = pfFlags({
+    ctrCollapse: [{ portfolioId: 'pf-a', portfolio: 'STATE Florida', change: -0.55 }]
+  });
+  const out = M.rfAttachNotes(flags, noteOf('pf-a', WEEK, 'stock-out'), WEEK);
+  ok(out.spendCollapse[0].note.text === 'stock-out' && out.ctrCollapse[0].note.text === 'stock-out',
+     'a product appearing in two checks shows the same note in both');
+}
+
+{
+  const out = M.rfAttachNotes(pfFlags(), noteOf('pf-a', WEEK, 'x'), WEEK);
+  ok(!('note' in out.budgetCap[0]) && !('note' in out.cpcSpike[0]) && !('note' in out.brandPacing[0]),
+     'campaign-level and brand-level flags are left untouched',
+     'budget cap and CPC spike already carry their own action, an apply button');
+}
+
+{
+  const out = M.rfAttachNotes(pfFlags(), {}, WEEK);
+  ok(out.spendCollapse[0].note === null && out.spendCollapse[0].priorNote === null,
+     'with no notes at all, every portfolio flag reads as unnoted rather than breaking');
+}
+
+{
+  const out = M.rfAttachNotes(pfFlags(), { junk: null, half: { text: 'no portfolio' } }, WEEK);
+  ok(out.spendCollapse[0].note === null,
+     'a malformed stored entry is skipped rather than taking the page down');
+}
+
+ok(M.rfNoteKey('pf-a', WEEK) === M.rfNoteKey('pf-a', WEEK) &&
+   M.rfNoteKey(42, WEEK) === M.rfNoteKey('42', WEEK),
+   'the storage key is the same for a portfolio id given as a number or a string');
+
 console.log('\nevaluateWeek  — still composes the two');
 {
   const campaigns = [cam({ campaignId: 1, dailyBudget: 20 })];

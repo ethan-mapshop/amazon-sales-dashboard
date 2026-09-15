@@ -467,13 +467,119 @@
     }
 
     // The row label for the portfolio-level checks. Same two columns as a
-    // campaign row, so the tables line up down the page.
+    // campaign row, so the tables line up down the page. Carries the
+    // investigation note, since a note is about the product, not the metric.
     function arfWhere(r, explain) {
       const note = explain || '';
       return `<td class="arf-name">${escapeHtml(r.portfolio || 'Unnamed portfolio')}
           ${note ? `<div class="arf-sub">${note}</div>` : ''}
+          ${arfLogBlock(r)}
         </td>
         <td>${escapeHtml(r.brand || '—')}</td>`;
+    }
+
+    // What you found when you looked into it. This week's note is shown as
+    // written. With none yet, the most recent earlier note on the same product
+    // is shown as context, clearly dated, and never as if it were this week's:
+    // an ongoing stock-out needs no retyping, and a new cause is not hidden
+    // behind an old explanation.
+    function arfLogBlock(r) {
+      if (r.portfolioId === undefined || r.portfolioId === null) return '';
+      const id = escapeHtml(String(r.portfolioId));
+      const st = arfLogEdit[String(r.portfolioId)];
+
+      if (st && (st.stage === 'edit' || st.stage === 'busy' || st.stage === 'error')) {
+        const busy = st.stage === 'busy';
+        return `<div class="arf-log arf-log-editing">
+          <textarea class="arf-log-input" data-arf-log-input="${id}" maxlength="1000" rows="2"
+                    placeholder="What did you find? e.g. FBA stock-out; FBM stock up but Prime badge gone"
+                    ${busy ? 'disabled' : ''}>${escapeHtml(st.draft || '')}</textarea>
+          <div class="arf-log-actions">
+            <button class="arf-btn arf-btn-go" data-arf-log-save="${id}" ${busy ? 'disabled' : ''}>${
+              busy ? 'Saving…' : 'Save note'}</button>
+            <button class="arf-btn" data-arf-log-cancel="${id}" ${busy ? 'disabled' : ''}>Cancel</button>
+            ${r.note ? `<button class="arf-btn" data-arf-log-clear="${id}" ${busy ? 'disabled' : ''}
+                         title="Remove this week's note">Remove</button>` : ''}
+          </div>
+          ${st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message || 'Could not save.')}</div>` : ''}
+        </div>`;
+      }
+
+      if (r.note) {
+        return `<div class="arf-log">
+          <span class="arf-log-text">${escapeHtml(r.note.text)}</span>
+          <button class="arf-log-link" data-arf-log-edit="${id}">Edit</button>
+        </div>`;
+      }
+
+      const prior = r.priorNote
+        ? `<div class="arf-log-prior">Noted week of ${arfShortDate(r.priorNote.weekStart)}: ${
+            escapeHtml(r.priorNote.text)}</div>`
+        : '';
+      return `<div class="arf-log">
+          ${prior}
+          <button class="arf-log-link" data-arf-log-edit="${id}">${
+            r.priorNote ? 'Add a note for this week' : 'Add note'}</button>
+        </div>`;
+    }
+
+    // Every portfolio row on screen, across the three portfolio checks. A
+    // product can appear in more than one, and they share one note.
+    function arfPortfolioRow(portfolioId) {
+      const f = (arfData && arfData.flags) || {};
+      return [...(f.silent || []), ...(f.spendCollapse || []), ...(f.ctrCollapse || [])]
+        .find(r => String(r.portfolioId) === String(portfolioId)) || null;
+    }
+
+    function arfLogOpen(portfolioId) {
+      const row = arfPortfolioRow(portfolioId);
+      arfLogEdit[String(portfolioId)] = {
+        stage: 'edit',
+        // Editing starts from this week's note, or from the earlier one when
+        // there is none yet, so an ongoing issue can be confirmed in one click.
+        draft: (row && row.note && row.note.text) || (row && row.priorNote && row.priorNote.text) || ''
+      };
+      if (arfData) arfRender(arfData);
+      const el = document.querySelector(`[data-arf-log-input="${CSS.escape(String(portfolioId))}"]`);
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    }
+
+    function arfLogClose(portfolioId) {
+      delete arfLogEdit[String(portfolioId)];
+      if (arfData) arfRender(arfData);
+    }
+
+    async function arfLogSave(portfolioId, clear) {
+      const key = String(portfolioId);
+      const st = arfLogEdit[key];
+      const row = arfPortfolioRow(portfolioId);
+      const weekStart = arfData && arfData.window && arfData.window.weekStart;
+      if (!st || !row || !weekStart || !accessToken) return;
+
+      // Read the textarea directly: the draft in state only updates on input,
+      // and a paste-then-save must not lose what was pasted.
+      const el = document.querySelector(`[data-arf-log-input="${CSS.escape(key)}"]`);
+      const text = clear ? '' : (el ? el.value : st.draft || '').trim();
+
+      arfLogEdit[key] = { ...st, draft: el ? el.value : st.draft, stage: 'busy' };
+      if (arfData) arfRender(arfData);
+      try {
+        const res = await fetch('/api/adspend?action=weekly-note', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ portfolioId: key, weekStart, note: text, portfolio: row.portfolio || null })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || `Save failed (${res.status})`);
+        delete arfLogEdit[key];
+        // Re-read rather than patching what is on screen: notes are joined onto
+        // the flags on the server, which is the only place that decides them.
+        await arfFetch();
+      } catch (err) {
+        console.error('[ARF] note save failed:', err);
+        arfLogEdit[key] = { ...arfLogEdit[key], stage: 'error', message: err.message };
+        if (arfData) arfRender(arfData);
+      }
     }
 
     function arfSilentRow(r) {
@@ -597,6 +703,9 @@
     // on the next render.
     let arfApply = {};      // { [campaignId]: { stage, message, applied } }
     let arfBound = false;
+    // Investigation notes being edited or saved, keyed by portfolio id. A note
+    // belongs to a portfolio and a week; the week is always the run on screen.
+    let arfLogEdit = {};    // { [portfolioId]: { stage: 'edit'|'busy'|'error', draft, message } }
 
     // The recommended budget and its button share a cell: the number is the
     // thing you are agreeing to, so putting it anywhere else invites agreeing
@@ -643,12 +752,26 @@
       const c = document.getElementById('adredflags-content');
       if (!c) return;
       c.addEventListener('click', e => {
-        const btn = e.target.closest('[data-arf-apply], [data-arf-confirm], [data-arf-cancel]');
+        const btn = e.target.closest(
+          '[data-arf-apply], [data-arf-confirm], [data-arf-cancel], ' +
+          '[data-arf-log-edit], [data-arf-log-save], [data-arf-log-cancel], [data-arf-log-clear]');
         if (!btn) return;
         const d = btn.dataset;
-        if (d.arfApply)        arfSetApplyStage(d.arfApply, 'confirm');
-        else if (d.arfCancel)  arfSetApplyStage(d.arfCancel, null);
-        else if (d.arfConfirm) arfApplyBudget(d.arfConfirm);
+        if (d.arfApply)             arfSetApplyStage(d.arfApply, 'confirm');
+        else if (d.arfCancel)       arfSetApplyStage(d.arfCancel, null);
+        else if (d.arfConfirm)      arfApplyBudget(d.arfConfirm);
+        else if (d.arfLogEdit)      arfLogOpen(d.arfLogEdit);
+        else if (d.arfLogSave)      arfLogSave(d.arfLogSave, false);
+        else if (d.arfLogCancel)    arfLogClose(d.arfLogCancel);
+        else if (d.arfLogClear)     arfLogSave(d.arfLogClear, true);
+      });
+      // Keep the draft as it is typed. The table re-renders whenever anything
+      // else on the page changes, and a note half-written must survive that.
+      c.addEventListener('input', e => {
+        const el = e.target.closest('[data-arf-log-input]');
+        if (!el) return;
+        const st = arfLogEdit[el.dataset.arfLogInput];
+        if (st) st.draft = el.value;
       });
       arfBound = true;
     }
