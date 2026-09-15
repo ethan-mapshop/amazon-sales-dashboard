@@ -42,6 +42,8 @@
     let moPending = {};        // { [brand]: posture } staged, not yet saved
     let moConfirming = false;
     let moConfirmErrors = {};  // { [brand]: message } from the last Confirm
+    // Sponsored Brands budget writes, keyed by campaign id.
+    let moSbApply = {};        // { [campaignId]: { stage: 'confirm'|'busy'|'done'|'error', applied, message } }
     // In memory for the life of the page, never written to storage.
     let moData = null;
 
@@ -373,7 +375,9 @@
         </div>`;
     }
 
-    // The staged changes and the one control that saves them.
+    // The staged changes and the one control that saves them. A single slim line
+    // inside the card: it only needs to say what is waiting and offer the two
+    // buttons, not float over the page like Campaign Overview's save bar.
     function moPostureBar(data) {
       const rows = data.rows || [];
       const changes = Object.entries(moPending)
@@ -382,26 +386,18 @@
       if (!changes.length) return '';
 
       const detail = changes
-        .map(x => `${x.brand}: ${moPostureLabel(x.row.posture)} \u2192 ${moPostureLabel(x.posture)}`)
-        .join(' \u00b7 ');
+        .map(x => `${x.brand} \u2192 ${moPostureLabel(x.posture)}`)
+        .join(', ');
       const failed = changes.filter(x => moConfirmErrors[x.brand]).length;
-      const n = changes.length;
 
       return `
-        <div class="mo-save-bar">
-          <div class="card aco-save-bar-inner">
-            <div class="aco-save-bar-summary">
-              <strong>${n} posture change${n === 1 ? '' : 's'} not yet saved</strong>
-              <span class="aco-save-bar-detail">${escapeHtml(detail)}</span>
-              ${failed ? `<span class="aco-save-bar-failed">${failed} failed \u2014 still staged</span>` : ''}
-            </div>
-            <div class="aco-save-bar-actions">
-              ${moConfirming
-                ? '<span class="loading"></span><span class="arf-muted">Saving\u2026</span>'
-                : `<button class="btn btn-secondary" data-mo-discard>Discard</button>
-                   <button class="btn btn-primary" data-mo-confirm>Confirm posture changes</button>`}
-            </div>
-          </div>
+        <div class="mo-confirm">
+          <span class="mo-confirm-detail">${escapeHtml(detail)}${
+            failed ? ` <span class="arf-warn">\u00b7 ${failed} not saved</span>` : ''}</span>
+          ${moConfirming
+            ? '<span class="loading"></span>'
+            : `<button class="arf-btn" data-mo-discard>Discard</button>
+               <button class="arf-btn arf-btn-go" data-mo-confirm>Confirm posture changes</button>`}
         </div>`;
     }
 
@@ -468,58 +464,160 @@
     // those from a catalog field that does not exist, and two campaigns do not
     // justify building one. New-to-brand is the case for running SB at all, so
     // it is the column that matters here.
+    // The only place Sponsored Brands budgets are managed: neither faster cadence
+    // covers them. Each campaign gets Raise, Hold or Lower with a plain reason,
+    // and a recommended budget can be written to Amazon from here.
     function moSbTable(data) {
       const rows = data.sbRows || [];
       if (!rows.length) {
         return `
           <div class="card arf-section">
             <h4>Sponsored Brands</h4>
-            <p class="arf-none">No enabled Sponsored Brands campaign reported in this window.</p>
+            <p class="arf-none">No enabled Sponsored Brands campaign reported in this month.</p>
           </div>`;
       }
       const noNtb = rows.every(r => r.ntbOrders === null);
+      const c = data.config || {};
+      const p = (n) => (typeof n === 'number' ? Math.round(n * 100) + '%' : '—');
       return `
         <div class="card arf-section">
           <h4>Sponsored Brands</h4>
           <p class="arf-blurb">
-            Neither faster cadence covers these, so this is the only place they are looked
-            at. New-to-brand is the reason to run Sponsored Brands at all: a low share means
-            the campaign is mostly catching people who already know you.${
-              noNtb ? ' <span class="bw-warn">Amazon did not return new-to-brand for this run.</span>' : ''}
+            Neither faster cadence covers these two, so this is where their budgets are set.
+            Each uses the same retention lines as the brands above: under ${p(c.CONSTRAIN_RETENTION)}
+            lowers the budget, and ${p(c.SCALE_RETENTION)} or better raises it, but only when the
+            budget ran out on most days. A budget that isn't being spent gains nothing from a raise.
+          </p>
+          <p class="arf-blurb">
+            <strong>Days at cap</strong> counts the days spend reached 95% of the daily budget.
+            <strong>New to brand</strong> is the share of orders from shoppers who hadn't bought from
+            the brand in the past year: high means the campaign is finding new customers, low means it
+            mostly reaches people who would have found you anyway.${
+              noNtb ? ' <span class="bw-warn">Amazon did not return new-to-brand for this month.</span>' : ''}
           </p>
           <div class="arf-table-wrap">
             <table class="table-fill arf-table">
               <thead>
                 <tr>
                   <th>Campaign</th>
-                  <th>Brand</th>
-                  <th>Budget</th>
+                  <th>Budget/day</th>
                   <th>Spend</th>
                   <th>Sales</th>
-                  <th>Orders</th>
                   <th>ACoS</th>
                   <th>Retention</th>
+                  <th>Days at cap</th>
                   <th>New to brand</th>
+                  <th>Recommended</th>
                 </tr>
               </thead>
-              <tbody>${rows.map(r => `
-                <tr>
-                  <td class="arf-name">${escapeHtml(r.campaign)}</td>
-                  <td>${escapeHtml(r.brand || '—')}</td>
-                  <td>${moMoney(r.dailyBudget)}</td>
-                  <td>${moMoney(r.spend)}</td>
-                  <td>${moMoney(r.sales)}</td>
-                  <td>${formatNumber(r.orders)}</td>
-                  <td>${moPct(r.acos)}</td>
-                  <td>${moPct(r.retention)}</td>
-                  <td>${r.ntbOrderShare === null
-                        ? '<span class="arf-muted">—</span>'
-                        : `${moPct(r.ntbOrderShare)} of orders<div class="arf-sub">${
-                            moPct(r.ntbSalesShare)} of sales</div>`}</td>
-                </tr>`).join('')}</tbody>
+              <tbody>${rows.map(moSbRow).join('')}</tbody>
             </table>
           </div>
         </div>`;
+    }
+
+    function moSbRow(r) {
+      const cap = (r.cappedDays === null || r.cappedDays === undefined)
+        ? '<span class="arf-muted">—</span>'
+        : `${r.cappedDays} of ${r.daysInMonth}`;
+      return `
+        <tr>
+          <td class="arf-name">${escapeHtml(r.campaign)}
+            <div class="arf-sub">${escapeHtml(r.brand || 'No brand')} \u00b7 ${escapeHtml(r.reason || '')}</div>
+          </td>
+          <td>${moMoney(r.dailyBudget)}</td>
+          <td>${moMoney(r.spend)}</td>
+          <td>${moMoney(r.sales)}</td>
+          <td>${moPct(r.acos)}</td>
+          <td>${moPct(r.retention)}</td>
+          <td>${cap}</td>
+          <td>${r.ntbOrderShare === null || r.ntbOrderShare === undefined
+                ? '<span class="arf-muted">—</span>'
+                : moPct(r.ntbOrderShare)}</td>
+          <td class="mo-sb-action">${moSbActionCell(r)}</td>
+        </tr>`;
+    }
+
+    // The label, then the write. The recommended number sits on the button
+    // itself, so there is nothing to agree to that wasn't read.
+    function moSbActionCell(r) {
+      const st = moSbApply[r.campaignId] || {};
+      const id = escapeHtml(String(r.campaignId));
+
+      // Before the no-recommendation check: once applied, the re-read shows the
+      // campaign as held, and that would hide the confirmation.
+      if (st.stage === 'done') {
+        return `<span class="arf-applied">&#10003; now $${escapeHtml(String(st.applied))}/day</span>`;
+      }
+
+      const label = r.action === 'raise' ? 'Raise' : r.action === 'lower' ? 'Lower' : 'Hold';
+      const cls = r.action === 'raise' ? 'bw-up' : r.action === 'lower' ? 'bw-down' : 'bw-hold';
+      const pill = `<span class="bw-pill ${cls}">${label}</span>`;
+      if (!r.recommendedBudget) return pill;
+
+      const to = moMoney(r.recommendedBudget);
+      if (st.stage === 'busy') return `${pill} <span class="loading"></span>`;
+      if (st.stage === 'confirm') {
+        return `${pill} <span class="arf-confirm">
+          <span>${moMoney(r.dailyBudget)} \u2192 ${to}/day?</span>
+          <button class="arf-btn arf-btn-go" data-mo-sb-confirm="${id}">Confirm</button>
+          <button class="arf-btn" data-mo-sb-cancel="${id}">Cancel</button>
+        </span>`;
+      }
+      return `${pill} <button class="arf-btn" data-mo-sb-apply="${id}"
+                title="${label} the daily budget on Amazon to ${to}">${to}/day</button>${
+        st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message || 'Could not apply.')}</div>` : ''}`;
+    }
+
+    function moSbSetStage(campaignId, stage, extra) {
+      if (!stage) delete moSbApply[campaignId];
+      else moSbApply[campaignId] = { stage, ...(extra || {}) };
+      if (moData) moRender(moData);
+    }
+
+    // The Campaign Overview write path: it re-reads the campaign from Amazon,
+    // refuses if the budget has moved since this page loaded, writes, and reads
+    // it back. Sponsored Brands is a new path through it, so success here means
+    // Amazon reported the new budget back, not merely that the request returned.
+    async function moSbApplyBudget(campaignId) {
+      const row = (moData?.sbRows || []).find(r => String(r.campaignId) === String(campaignId));
+      if (!row || !row.recommendedBudget || !accessToken) return;
+
+      moSbSetStage(campaignId, 'busy');
+      try {
+        const res = await fetch('/api/adcampaigns?action=update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({
+            campaignId: row.campaignId, adProduct: 'SB', local: {},
+            amazon: { dailyBudget: row.recommendedBudget },
+            // What this page showed. The budget can move between loading the
+            // month and pressing the button.
+            expected: { dailyBudget: row.dailyBudget }
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          if (data.conflicts && data.conflicts.length) {
+            const c0 = data.conflicts[0];
+            throw new Error(`Amazon now has a $${c0.amazonHasNow ?? '—'} budget (this page showed ` +
+                            `$${c0.youSaw ?? '—'}). Reload and try again.`);
+          }
+          throw new Error(data.error || `Failed (${res.status})`);
+        }
+        const applied = data.applied && data.applied.dailyBudget;
+        if (!applied) {
+          throw new Error('Amazon accepted the request, but reading the campaign back shows the budget ' +
+                          'unchanged. Nothing was applied.');
+        }
+        moSbApply[campaignId] = { stage: 'done', applied: applied.to };
+        // Re-read: the write is recorded in the change log, which the server
+        // uses to stop recommending the same change again from this month.
+        await moFetch(`${row.campaign}: daily budget is now $${applied.to}.`);
+      } catch (err) {
+        console.error('[MO] SB budget write failed:', err);
+        moSbSetStage(campaignId, 'error', { message: err.message });
+      }
     }
 
     function moFooter(data) {
@@ -567,6 +665,12 @@
           return;
         }
         if (e.target.closest('[data-mo-confirm]')) return moConfirmPostures();
+        const sbApply = e.target.closest('[data-mo-sb-apply]');
+        if (sbApply) return moSbSetStage(sbApply.dataset.moSbApply, 'confirm');
+        const sbConfirm = e.target.closest('[data-mo-sb-confirm]');
+        if (sbConfirm) return moSbApplyBudget(sbConfirm.dataset.moSbConfirm);
+        const sbCancel = e.target.closest('[data-mo-sb-cancel]');
+        if (sbCancel) return moSbSetStage(sbCancel.dataset.moSbCancel, null);
         if (e.target.closest('[data-mo-discard]')) {
           moPending = {};
           moConfirmErrors = {};

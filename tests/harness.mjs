@@ -54,3 +54,13 @@ export async function loadAdspend(tag, kv) {
     }
   };
 }
+
+// Loads api/adcampaigns.js on its own, for suites that drive its write paths
+// directly. Its only unresolvable import is @vercel/kv.
+export async function loadAdcampaigns(tag, kv) {
+  const f = path.join(here, `.${tag}_testable.mjs`);
+  fs.writeFileSync(f, stubKv(fs.readFileSync(path.join(here, '..', 'api', 'adcampaigns.js'), 'utf8')));
+  globalThis.__TEST_KV__ = kv || null;
+  const M = await import(pathToFileURL(f).href);
+  return { M, cleanup: () => { try { fs.unlinkSync(f); } catch { /* already gone */ } } };
+}

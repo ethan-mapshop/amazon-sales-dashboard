@@ -2134,7 +2134,23 @@
       .mo-legend { grid-template-columns: minmax(0, 1fr); }
     }
 
-    .mo-save-bar { margin-top: 1rem; }
+    /* One slim line under the posture table. */
+    .mo-confirm {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.6rem;
+      padding: 0.35rem 0.6rem;
+      font-size: 0.8rem;
+      border-left: 3px solid var(--accent-blue);
+      background: rgba(59, 130, 246, 0.06);
+      border-radius: 4px;
+    }
+
+    .mo-confirm-detail { flex: 1; min-width: 0; color: var(--text-secondary); }
+
+    .mo-sb-action { white-space: nowrap; }
 
     .mo-row-pending { background: rgba(59, 130, 246, 0.06); }
 

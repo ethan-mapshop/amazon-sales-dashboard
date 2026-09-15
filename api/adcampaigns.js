@@ -184,6 +184,8 @@ const AC_ENDPOINTS = {
   sbV4: {
     label: 'sb-campaigns-v4', adProduct: 'SB', version: 'v4',
     url: `${ADS_HOST}/sb/v4/campaigns/list`, method: 'POST',
+    // Used only for a daily budget change, through acWriteSbBudget.
+    writeUrl: `${ADS_HOST}/sb/v4/campaigns`,
     contentType: 'application/vnd.sbcampaignresource.v4+json',
     accept: 'application/vnd.sbcampaignresource.v4+json',
     listField: 'campaigns', paging: 'token'
@@ -640,6 +642,17 @@ async function acWriteAdGroupBid({ row, adGroupId, defaultBid, expected }) {
 // write of one can clear the other, so the live object is always read first and
 // sent back whole.
 async function acWriteAmazonFields({ campaignId, row, amazon, expected }) {
+  // Sponsored Brands can change its daily budget and nothing else. It goes
+  // through its own function rather than branches threaded through this one, so
+  // the Sponsored Products path below stays exactly as it was proven.
+  if (row.adProduct === 'SB') {
+    const fields = Object.keys(amazon);
+    if (fields.length !== 1 || fields[0] !== 'dailyBudget') {
+      return { ok: false, stage: 'validate',
+               error: 'Only the daily budget can be changed on a Sponsored Brands campaign.' };
+    }
+    return acWriteSbBudget({ campaignId, amazon, expected });
+  }
   if (row.adProduct !== 'SP') {
     return { ok: false, stage: 'validate', error: 'Only Sponsored Products campaigns can be edited here.' };
   }
@@ -759,6 +772,104 @@ async function acWriteAmazonFields({ campaignId, row, amazon, expected }) {
   const collateral = [];
   for (const field of AC_TRACKED_FIELDS) {
     if (requestedKeys.has(field)) continue;
+    if (!acSame(liveRow[field] ?? null, afterRow[field] ?? null)) {
+      collateral.push({ field, from: liveRow[field] ?? null, to: afterRow[field] ?? null });
+    }
+  }
+
+  return { ok: true, stage: 'store', applied, notApplied, collateral, row: afterRow };
+}
+
+// A Sponsored Brands daily budget, and nothing else. The same four steps as the
+// Sponsored Products write: read the live campaign, refuse on a conflict,
+// write, then read it back and confirm. A 200 is not proof a value was applied;
+// only Amazon reporting the new value back is.
+//
+// Two differences, both about SB v4's shape:
+//
+//   - The budget is FLAT, a number with budgetType beside it. SP v3 nests it as
+//     { budget, budgetType }. The census reader already documents this, and the
+//     write mirrors what the read returns.
+//   - The read lists every Sponsored Brands campaign rather than filtering by
+//     id. There are two, and an id-filter body never exercised against SB would
+//     be one more guess inside a write path.
+async function acWriteSbBudget({ campaignId, amazon, expected }) {
+  const invalid = acValidateAmazonFields({ dailyBudget: amazon.dailyBudget });
+  if (invalid) return { ok: false, stage: 'validate', error: invalid };
+
+  const accessToken = await getAdsAccessToken();
+  const find = async () => {
+    const res = await acAdsList(accessToken, AC_ENDPOINTS.sbV4, {});
+    const live = res.ok ? (res.items || []).find(i => String(i.campaignId) === String(campaignId)) : null;
+    return { res, live: live || null };
+  };
+
+  // ── read ──
+  const before = await find();
+  if (!before.res.ok) {
+    return { ok: false, stage: 'read',
+             error: `Could not read the campaign from Amazon (${before.res.status}): ${
+               String(before.res.bodyText || '').slice(0, 300)}` };
+  }
+  if (!before.live) {
+    return { ok: false, stage: 'read',
+             error: 'Amazon no longer returns this campaign, so it cannot be edited. ' +
+                    'It may have been archived in Campaign Manager.' };
+  }
+  const liveRow = acMapCampaign(before.live, 'SB', {});
+
+  // ── conflict ──
+  // What the page showed goes in `expected`. The monthly numbers take minutes to
+  // pull, so the budget really can move between reading them and pressing apply.
+  const exp = expected || {};
+  if ('dailyBudget' in exp && !acSame(exp.dailyBudget ?? null, liveRow.dailyBudget ?? null)) {
+    return { ok: false, stage: 'conflict',
+             conflicts: [{ field: 'dailyBudget', youSaw: exp.dailyBudget ?? null,
+                           amazonHasNow: liveRow.dailyBudget ?? null }],
+             error: 'Amazon has changed since this page loaded — refresh and try again.' };
+  }
+
+  // Refuse rather than guess: sending a budget without its type is how the type
+  // gets cleared, and a lifetime budget is not a daily one.
+  if (!liveRow.budgetType) {
+    return { ok: false, stage: 'write',
+             error: 'Amazon did not return this campaign\'s budget type, so the budget cannot be changed safely.' };
+  }
+  if (!/^DAILY$/i.test(liveRow.budgetType)) {
+    return { ok: false, stage: 'write',
+             error: `This campaign has a ${String(liveRow.budgetType).toLowerCase()} budget, not a daily one.` };
+  }
+
+  // ── write ──
+  const payload = { campaignId: String(campaignId), budget: acNum(amazon.dailyBudget),
+                    budgetType: liveRow.budgetType };
+  const put = await acAdsWrite(accessToken, AC_ENDPOINTS.sbV4, { campaigns: [payload] });
+  if (!put.ok) {
+    return { ok: false, stage: 'write',
+             error: `Amazon rejected the change (${put.status}): ${String(put.bodyText || '').slice(0, 400)}` };
+  }
+
+  // ── verify ──
+  const after = await find();
+  if (!after.res.ok || !after.live) {
+    return { ok: false, stage: 'verify',
+             error: 'Amazon accepted the change but it could not be confirmed. Refresh to see the current values.' };
+  }
+  const afterRow = acMapCampaign(after.live, 'SB', {});
+
+  const applied = {};
+  const notApplied = [];
+  if (acSame(liveRow.dailyBudget ?? null, afterRow.dailyBudget ?? null)) {
+    notApplied.push({ field: 'dailyBudget', value: liveRow.dailyBudget ?? null });
+  } else {
+    applied.dailyBudget = { from: liveRow.dailyBudget ?? null, to: afterRow.dailyBudget ?? null };
+  }
+
+  // Anything else that moved. The alarm that would catch a PUT turning out to
+  // replace the whole campaign rather than patch one field.
+  const collateral = [];
+  for (const field of AC_TRACKED_FIELDS) {
+    if (field === 'dailyBudget') continue;
     if (!acSame(liveRow[field] ?? null, afterRow[field] ?? null)) {
       collateral.push({ field, from: liveRow[field] ?? null, to: afterRow[field] ?? null });
     }
@@ -1614,7 +1725,7 @@ function _ptDate(instant) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-export { acRunSync, acBrandFromPrefix, acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
+export { acRunSync, acBrandFromPrefix, acWriteSbBudget, acWriteAmazonFields, acMapCampaign, acCampaignType, acDiffSnapshot, acMergePresence, acFieldCoverage,
          acCoverageLooksWrong, acPlacementCensus, acReadPlacements,
          acPlacementsSummary, acApplyBrandOverride, acKnownBrands,
          acValidateAmazonFields, acCollectItemErrors, acAdsWrite, acJoinDefaultBids,

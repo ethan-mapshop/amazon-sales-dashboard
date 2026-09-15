@@ -19,9 +19,10 @@ const ok = (c, l, d = '') => { if (!c) fails++; console.log(`  ${c ? 'OK  ' : 'F
 
 // ─── HARNESS ─────────────────────────────────────────────────────────────────
 
-function boot({ saved = {}, failFor = [] } = {}) {
+function boot({ saved = {}, failFor = [], sbRows = [], updateReply = null } = {}) {
   const state = { postures: { ...saved } };
   const posts = [];
+  const updates = [];
 
   const rowsFrom = () => ['Hubbard Scientific', 'South of Kings', 'MapShop State Maps'].map(brand => ({
     brand,
@@ -39,7 +40,14 @@ function boot({ saved = {}, failFor = [] } = {}) {
       return reply(200, { success: true });
     }
     if (String(url).includes('action=monthly-get')) {
-      return reply(200, { success: true, rows: rowsFrom(), window: {}, config: {} });
+      return reply(200, { success: true, rows: rowsFrom(), sbRows, window: {}, config: {} });
+    }
+    if (String(url).includes('/api/adcampaigns?action=update')) {
+      const body = JSON.parse(opts.body || '{}');
+      updates.push(body);
+      return updateReply ? updateReply(body, reply) : reply(200, {
+        success: true, applied: { dailyBudget: { from: body.expected.dailyBudget, to: body.amazon.dailyBudget } }
+      });
     }
     return reply(404, { error: 'unexpected ' + url });
   };
@@ -61,7 +69,8 @@ function boot({ saved = {}, failFor = [] } = {}) {
 
   const epilogue = `
     return {
-      moStage, moConfirmPostures, moFetch,
+      moStage, moConfirmPostures, moFetch, moSbSetStage, moSbApplyBudget, moSbActionCell,
+      get sbApply() { return moSbApply; },
       get pending() { return moPending; },
       get errors() { return moConfirmErrors; },
       get data() { return moData; }
@@ -83,7 +92,7 @@ function boot({ saved = {}, failFor = [] } = {}) {
     (fn, ms) => globalThis.setTimeout(fn, ms), (t) => globalThis.clearTimeout(t),
     { ...console, error: () => {} }
   );
-  return { api, posts, state, fire };
+  return { api, posts, updates, state, fire };
 }
 
 // ─── STAGING ─────────────────────────────────────────────────────────────────
@@ -220,6 +229,75 @@ console.log('\nWIRING  — the dropdown and buttons, as a click actually reaches
   await w.fire('click', { '[data-mo-discard]': {} });
   ok(Object.keys(w.api.pending).length === 0 && w.posts.length === 0,
      'pressing Discard drops every staged change without saving any');
+}
+
+// ─── SPONSORED BRANDS APPLY ──────────────────────────────────────────────────
+
+console.log('\nSPONSORED BRANDS APPLY  — a budget reaches Amazon only after Confirm');
+
+const sbRow = { campaignId: 'sb1', campaign: 'SB Kings Maps', adProduct: 'SB', brand: 'South of Kings',
+                dailyBudget: 20, action: 'raise', recommendedBudget: 25, reason: 'x' };
+
+{
+  const w = boot({ sbRows: [sbRow] });
+  await w.api.moFetch();
+  await w.fire('click', { '[data-mo-sb-apply]': { dataset: { moSbApply: 'sb1' } } });
+  ok(w.api.sbApply.sb1 && w.api.sbApply.sb1.stage === 'confirm',
+     'pressing the budget button asks for confirmation');
+  ok(w.updates.length === 0, 'and writes nothing yet');
+
+  await w.fire('click', { '[data-mo-sb-cancel]': { dataset: { moSbCancel: 'sb1' } } });
+  ok(!w.api.sbApply.sb1 && w.updates.length === 0, 'Cancel backs out without writing');
+}
+
+{
+  const w = boot({ sbRows: [sbRow] });
+  await w.api.moFetch();
+  await w.fire('click', { '[data-mo-sb-apply]': { dataset: { moSbApply: 'sb1' } } });
+  await w.fire('click', { '[data-mo-sb-confirm]': { dataset: { moSbConfirm: 'sb1' } } });
+  const u = w.updates[0] || {};
+  ok(w.updates.length === 1, 'Confirm sends one write');
+  ok(u.adProduct === 'SB' && u.campaignId === 'sb1', 'marked as Sponsored Brands, for that campaign');
+  ok(u.amazon && u.amazon.dailyBudget === 25, 'asking for the recommended budget');
+  ok(u.expected && u.expected.dailyBudget === 20,
+     'and carrying the budget the page showed',
+     'so the server refuses if it moved in the meantime');
+  ok(w.api.sbApply.sb1 && w.api.sbApply.sb1.stage === 'done' && w.api.sbApply.sb1.applied === 25,
+     'a confirmed change shows as done at the new budget');
+}
+
+{
+  // Amazon answered success, but reading the campaign back shows no change.
+  const w = boot({ sbRows: [sbRow],
+                   updateReply: (body, reply) => reply(200, { success: true, applied: {},
+                                                              notApplied: [{ field: 'dailyBudget', value: 20 }] }) });
+  await w.api.moFetch();
+  w.api.moSbSetStage('sb1', 'confirm');
+  await w.api.moSbApplyBudget('sb1');
+  ok(w.api.sbApply.sb1 && w.api.sbApply.sb1.stage === 'error',
+     'a success reply with the budget unchanged is shown as a failure, not as done',
+     'this is a new write path, so only a confirmed new value counts');
+  ok(/unchanged/.test(w.api.sbApply.sb1.message || ''), 'saying the budget did not change');
+}
+
+{
+  const w = boot({ sbRows: [sbRow],
+                   updateReply: (body, reply) => reply(200, { success: false, stage: 'conflict',
+                     conflicts: [{ field: 'dailyBudget', youSaw: 20, amazonHasNow: 30 }] }) });
+  await w.api.moFetch();
+  w.api.moSbSetStage('sb1', 'confirm');
+  await w.api.moSbApplyBudget('sb1');
+  const msg = (w.api.sbApply.sb1 || {}).message || '';
+  ok(/\$30/.test(msg) && /\$20/.test(msg),
+     'a conflict names what Amazon has now and what the page showed', msg);
+}
+
+{
+  const w = boot({ sbRows: [{ ...sbRow, action: 'hold', recommendedBudget: null }] });
+  await w.api.moFetch();
+  const cell = w.api.moSbActionCell({ ...sbRow, action: 'hold', recommendedBudget: null });
+  ok(/Hold/.test(cell) && !/data-mo-sb-apply/.test(cell),
+     'a campaign on Hold has no button to press');
 }
 
 console.log(fails === 0 ? '\nmonthly-page: all assertions pass\n' : `\nmonthly-page: ${fails} FAILED\n`);

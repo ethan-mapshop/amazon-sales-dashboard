@@ -1797,10 +1797,14 @@ async function rfLoadRun() {
 //
 // Returns whole dollars. A recommendation of $18.73 reads as a calculation
 // this cannot honestly claim to be.
-function rfRecommendBudget({ dailyBudget, cappedDays, weekDays, maxDaySpend }) {
+// `minDays` is the day count at which the raise is its smallest. It defaults to
+// the weekly threshold; the monthly Sponsored Brands check passes its own,
+// since four days is nothing in a month and would put every raise near the top.
+function rfRecommendBudget({ dailyBudget, cappedDays, weekDays, maxDaySpend,
+                             minDays = RF_CONFIG.CAP_DAYS_MIN }) {
   if (!(dailyBudget > 0) || cappedDays === null || cappedDays === undefined) return null;
-  const span = Math.max(1, weekDays - RF_CONFIG.CAP_DAYS_MIN);
-  const over = Math.max(0, Math.min(cappedDays, weekDays) - RF_CONFIG.CAP_DAYS_MIN);
+  const span = Math.max(1, weekDays - minDays);
+  const over = Math.max(0, Math.min(cappedDays, weekDays) - minDays);
   const step = RF_CONFIG.RAISE_MIN +
                (RF_CONFIG.RAISE_MAX - RF_CONFIG.RAISE_MIN) * (over / span);
   const raised = Math.max(dailyBudget * (1 + step), maxDaySpend || 0);
@@ -3180,6 +3184,10 @@ function moBuildInputs({ census, rows, window }) {
 
   const sp = new Map();
   const sb = new Map();
+  // Spend per day for each Sponsored Brands campaign. Days at cap depends on
+  // the budget, which is configuration and joined on read, so the daily
+  // amounts are stored and the counting happens at decide time.
+  const sbDaily = new Map();
   let orphanRows = 0;
 
   const blankSp = (id) => ({
@@ -3204,6 +3212,9 @@ function moBuildInputs({ census, rows, window }) {
       if (!c) { c = blankSb(id); sb.set(id, c); }
       c.spend += r.cost; c.clicks += r.clicks; c.impressions += r.impressions;
       c.orders += r.orders; c.sales += r.sales;
+      if (!sbDaily.has(id)) sbDaily.set(id, new Map());
+      const days = sbDaily.get(id);
+      days.set(r.date, (days.get(r.date) || 0) + r.cost);
       if (r.ntbOrders !== null && r.ntbOrders !== undefined) {
         c.ntbOrders = (c.ntbOrders || 0) + r.ntbOrders;
       }
@@ -3231,11 +3242,17 @@ function moBuildInputs({ census, rows, window }) {
 
   const round = (c) => {
     for (const k of Object.keys(c)) {
-      if (k === 'campaignId' || c[k] === null) continue;
+      if (k === 'campaignId' || c[k] === null || Array.isArray(c[k])) continue;
       c[k] = /clicks|impressions|orders/i.test(k) ? Math.round(c[k]) : r2(c[k]);
     }
     return c;
   };
+
+  // Days with no row had no spend, so they cannot reach the cap and are
+  // correctly absent from the list.
+  for (const [id, c] of sb) {
+    c.daily = [...(sbDaily.get(id) || new Map()).values()].map(r2);
+  }
 
   return {
     inputs: { sp: [...sp.values()].map(round), sb: [...sb.values()].map(round) },
@@ -3290,6 +3307,20 @@ async function moLoadBrandSales(window) {
   }
   for (const b of Object.keys(byBrand)) byBrand[b] = r2(byBrand[b]);
   return { byBrand, available: true, unmappedSkus: unmapped.size, unmappedSales: r2(unmappedSales) };
+}
+
+// The most recent daily-budget change made after the month ended. The month's
+// numbers predate it, so recommending from them again would only repeat a
+// change already made, and after a cut it would keep asking for another.
+function moSbChangeAfter(changes, campaignId, afterDate) {
+  let latest = null;
+  for (const r of (changes || [])) {
+    if (!r || String(r.campaignId) !== String(campaignId) || r.field !== 'dailyBudget') continue;
+    if (!(String(r.ptDate || '') > afterDate)) continue;
+    const key = `${r.ptDate}|${r.at || ''}`;
+    if (!latest || key > latest.key) latest = { key, from: r.from, to: r.to, ptDate: r.ptDate };
+  }
+  return latest ? { from: latest.from, to: latest.to, ptDate: latest.ptDate } : null;
 }
 
 const pct = (n) => (n === null || n === undefined || !Number.isFinite(n))
@@ -3353,6 +3384,79 @@ function moRecommend(b, config = MO_CONFIG) {
   return { posture: 'hold', basis: 'mediocre',
            reason: `Retention ${pct(b.retention)} is between ${constrainLine} and ${scaleLine}, ` +
                    'so no change to the normal budget rules.' };
+}
+
+// Raise, Hold or Lower one Sponsored Brands campaign's daily budget. Neither
+// faster cadence covers Sponsored Brands, so this is the only place its budgets
+// are managed at all.
+//
+// The same retention lines as the brand postures, so the page reads as one set
+// of rules, and the bi-weekly's own step sizes, so an SB budget moves the way a
+// Sponsored Products one would. A raise also needs the budget to have run out on
+// most days, in the same four-days-in-seven proportion the weekly and bi-weekly
+// use: raising a budget that is not being spent changes nothing.
+function moRecommendSb(r, config = MO_CONFIG) {
+  const money = (n) => `$${Number(n).toFixed(2).replace(/\.00$/, '')}`;
+  const hold = (reason) => ({ action: 'hold', recommendedBudget: null, reason });
+  const scaleLine = pct(config.SCALE_RETENTION);
+  const constrainLine = pct(config.CONSTRAIN_RETENTION);
+
+  if (r.changedAfter) {
+    const c = r.changedAfter;
+    return hold(`Budget changed from ${money(c.from)} to ${money(c.to)} on ${c.ptDate}, after this ` +
+                'month ended. Next month\'s numbers will show how it went.');
+  }
+  if (!(r.dailyBudget > 0) || /LIFETIME/i.test(r.budgetType || '')) {
+    return hold('No daily budget on this campaign to adjust.');
+  }
+  if (r.spend < config.MIN_SPEND && r.orders < config.MIN_ORDERS) {
+    return hold(`Under $${config.MIN_SPEND} of spend and under ${config.MIN_ORDERS} orders this month, ` +
+                'which is too little to judge.');
+  }
+  if (r.retention === null || r.retention === undefined) {
+    return hold('No ad sales this month, so retention can\'t be worked out.');
+  }
+
+  if (r.retention < config.CONSTRAIN_RETENTION) {
+    const cut = r.retention < BW_CONFIG.T3_BARELY ? BW_DECREASES[2] : BW_DECREASES[1];
+    const to = Math.max(BW_CONFIG.FLOOR, Math.round(r.dailyBudget * (1 - cut) * 100) / 100);
+    if (!(to < r.dailyBudget)) {
+      return hold(`Retention ${pct(r.retention)} is under ${constrainLine}, but the budget is already ` +
+                  `at the ${money(BW_CONFIG.FLOOR)} floor.`);
+    }
+    return {
+      action: 'lower', recommendedBudget: to,
+      reason: r.retention < 0
+        ? `Retention ${pct(r.retention)} is below break-even, so lower the budget ${Math.round(cut * 100)}%.`
+        : `Retention ${pct(r.retention)} is under ${constrainLine}, so lower the budget ${Math.round(cut * 100)}%.`
+    };
+  }
+
+  if (r.retention >= config.SCALE_RETENTION) {
+    if (r.cappedDays === null || r.cappedDays === undefined) {
+      return hold(`Retention ${pct(r.retention)} is ${scaleLine} or better. Whether the budget is holding ` +
+                  'it back needs daily spend, which arrives with the next monthly run.');
+    }
+    const needed = Math.ceil(r.daysInMonth * RF_CONFIG.CAP_DAYS_MIN / 7);
+    if (r.cappedDays >= needed) {
+      const to = rfRecommendBudget({
+        dailyBudget: r.dailyBudget, cappedDays: r.cappedDays, weekDays: r.daysInMonth,
+        maxDaySpend: r.maxDaySpend, minDays: needed
+      });
+      if (to) {
+        return {
+          action: 'raise', recommendedBudget: to,
+          reason: `Retention ${pct(r.retention)} is ${scaleLine} or better and the budget ran out on ` +
+                  `${r.cappedDays} of ${r.daysInMonth} days, so raise it.`
+        };
+      }
+    }
+    return hold(`Retention ${pct(r.retention)} is ${scaleLine} or better, but the budget only ran out on ` +
+                `${r.cappedDays} of ${r.daysInMonth} days, so a bigger one wouldn't get spent.`);
+  }
+
+  return hold(`Retention ${pct(r.retention)} is between ${constrainLine} and ${scaleLine}, ` +
+              'so leave the budget as it is.');
 }
 
 // ─── DECIDE ──────────────────────────────────────────────────────────────────
@@ -3419,15 +3523,41 @@ function moDecideAll({ inputs, census, window, brandSales = {}, postures = {} })
     const segment = brand ? rfSegment(brand, row.name) : null;
     const margin = segment ? MARGINS[segment] : null;
     const acos = i.sales > 0 ? r4(i.spend / i.sales) : null;
+    const retention = (margin && acos !== null) ? r4((margin - acos) / margin) : null;
+    const dailyBudget = typeof row.dailyBudget === 'number' ? row.dailyBudget : null;
+    const daysInMonth = daySpan(window.start, window.end);
+
+    // A run stored before daily spend was kept has no `daily`, so days at cap is
+    // unknown rather than zero. Zero would claim the budget never ran out.
+    let cappedDays = null;
+    let maxDaySpend = null;
+    if (Array.isArray(i.daily) && dailyBudget > 0) {
+      const atCap = dailyBudget * RF_CONFIG.CAP_DAY_RATIO;
+      cappedDays = i.daily.filter(d => d >= atCap).length;
+      maxDaySpend = r2(i.daily.reduce((m, d) => Math.max(m, d), 0));
+    }
+
+    const rec = moRecommendSb({
+      spend: i.spend, orders: i.orders, retention, dailyBudget,
+      budgetType: row.budgetType || null, cappedDays, daysInMonth, maxDaySpend,
+      changedAfter: moSbChangeAfter(census.changes, i.campaignId, window.end)
+    });
+
     sbRows.push({
       campaignId: i.campaignId,
       campaign: row.name || '',
+      adProduct: 'SB',
       brand,
-      dailyBudget: typeof row.dailyBudget === 'number' ? row.dailyBudget : null,
+      dailyBudget,
+      budgetType: row.budgetType || null,
+      cappedDays, daysInMonth, maxDaySpend,
+      action: rec.action,
+      recommendedBudget: rec.recommendedBudget,
+      reason: rec.reason,
       spend: r2(i.spend), clicks: i.clicks, impressions: i.impressions,
       orders: i.orders, sales: r2(i.sales),
       acos,
-      retention: (margin && acos !== null) ? r4((margin - acos) / margin) : null,
+      retention,
       // New-to-brand is the whole case for running Sponsored Brands. Null,
       // never zero, when Amazon refused the columns: unknown is not "none".
       ntbOrders: i.ntbOrders === null ? null : i.ntbOrders,
@@ -4811,6 +4941,7 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
          moLoadBrandSales, moIsWholeMonth, moShiftMonth, moMonthBounds,
          moCronReport, moMonthLabel, moAvailability, moUnavailableReason,
+         moRecommendSb, moSbChangeAfter,
          whMonday, whSettledThrough, whBinWeeks, whSeries,
          reportRetentionStart, REPORT_RETENTION_DAYS,
          MO_CONFIG, MO_REPORT_KEYS, MO_SPEC_DEVIATIONS, TARGET_ACOS,

@@ -400,6 +400,181 @@ console.log('\nREASON WORDING  — every branch names its numbers, and none lean
      'a healthy brand that fell hard still scales, but says so');
 }
 
+console.log('\nSPONSORED BRANDS  — Raise, Hold or Lower, with a budget to apply');
+
+// One SB campaign as moRecommendSb sees it. Defaults: a healthy, busy campaign
+// on a $20 daily budget that ran out on 20 of 30 days.
+const sbc = (o = {}) => ({
+  spend: o.spend === undefined ? 600 : o.spend,
+  orders: o.orders === undefined ? 30 : o.orders,
+  retention: o.retention === undefined ? 0.60 : o.retention,
+  dailyBudget: o.dailyBudget === undefined ? 20 : o.dailyBudget,
+  budgetType: o.budgetType === undefined ? 'DAILY' : o.budgetType,
+  cappedDays: o.cappedDays === undefined ? 20 : o.cappedDays,
+  daysInMonth: o.daysInMonth === undefined ? 30 : o.daysInMonth,
+  maxDaySpend: o.maxDaySpend === undefined ? 21 : o.maxDaySpend,
+  changedAfter: o.changedAfter === undefined ? null : o.changedAfter
+});
+const sbRec = (o) => M.moRecommendSb(sbc(o));
+
+{
+  const r = sbRec({ retention: 0.18 });
+  ok(r.action === 'lower' && r.recommendedBudget === 15,
+     'retention under 25% lowers the budget 25%',
+     '$20 to $15, the bi-weekly\'s own step for weak retention');
+}
+
+{
+  const r = sbRec({ retention: 0.05 });
+  ok(r.action === 'lower' && r.recommendedBudget === 12,
+     'under 10% lowers it 40%', '$20 to $12');
+}
+
+{
+  const r = sbRec({ retention: -0.3 });
+  ok(r.action === 'lower' && /break-even/.test(r.reason),
+     'below break-even lowers it too, and says so');
+}
+
+{
+  const r = sbRec({ retention: 0.05, dailyBudget: 1 });
+  ok(r.action === 'hold' && r.recommendedBudget === null && /floor/.test(r.reason),
+     'a budget already at the $1 floor is not offered a cut to the same number',
+     'an apply button that changes nothing is worse than none');
+}
+
+{
+  // 18 of 30 days is the four-in-seven threshold the weekly and bi-weekly use.
+  const r = sbRec({ retention: 0.60, cappedDays: 18, daysInMonth: 30, maxDaySpend: 20 });
+  ok(r.action === 'raise' && r.recommendedBudget === 25,
+     'healthy and at cap on 18 of 30 days raises the budget 25%',
+     'the smallest raise at the threshold, not near the top of the range');
+}
+
+{
+  const r = sbRec({ retention: 0.60, cappedDays: 30, daysInMonth: 30, maxDaySpend: 20 });
+  ok(r.action === 'raise' && r.recommendedBudget === 30,
+     'at cap every day raises it 50%', '$20 to $30');
+}
+
+{
+  const r = sbRec({ retention: 0.60, cappedDays: 30, daysInMonth: 30, maxDaySpend: 34 });
+  ok(r.recommendedBudget === 34,
+     'and never below the best single day it already reached',
+     'raising to less than it already spent in one day would still cap it');
+}
+
+{
+  const r = sbRec({ retention: 0.60, cappedDays: 9 });
+  ok(r.action === 'hold' && /9 of 30/.test(r.reason),
+     'healthy but rarely at cap holds, and says why',
+     'a budget that is not being spent gains nothing from a raise');
+}
+
+{
+  const r = sbRec({ retention: 0.60, cappedDays: null });
+  ok(r.action === 'hold' && /next monthly run/.test(r.reason),
+     'with no daily spend stored yet, days at cap is unknown, not zero',
+     'a run stored before this change has no daily breakdown');
+}
+
+{
+  const r = sbRec({ retention: 0.38 });
+  ok(r.action === 'hold' && /between 25% and 50%/.test(r.reason),
+     'between the lines holds', r.reason);
+}
+
+ok(sbRec({ spend: 40, orders: 3 }).action === 'hold', 'too little spend and too few orders to judge holds');
+ok(sbRec({ retention: null }).action === 'hold', 'no ad sales holds');
+ok(sbRec({ dailyBudget: null }).action === 'hold', 'no daily budget holds');
+ok(sbRec({ budgetType: 'LIFETIME' }).action === 'hold', 'a lifetime budget holds rather than being treated as daily');
+
+{
+  // Changed after the month ended: the month's numbers predate it.
+  const r = sbRec({ retention: 0.05, changedAfter: { from: 20, to: 12, ptDate: '2026-09-16' } });
+  ok(r.action === 'hold' && r.recommendedBudget === null,
+     'a budget changed after the month ended is not recommended again',
+     'otherwise every cut would be followed by a request for another cut');
+  ok(/\$20/.test(r.reason) && /\$12/.test(r.reason) && /2026-09-16/.test(r.reason),
+     'and the reason names the change and when it was made');
+}
+
+console.log('\nmoSbChangeAfter  — which budget change counts as already acted on');
+
+{
+  const changes = [
+    { campaignId: 'sb1', field: 'dailyBudget', from: 20, to: 15, ptDate: '2026-09-02', at: '2026-09-02T10:00:00Z' },
+    { campaignId: 'sb1', field: 'dailyBudget', from: 15, to: 12, ptDate: '2026-09-16', at: '2026-09-16T10:00:00Z' },
+    { campaignId: 'sb1', field: 'dailyBudget', from: 25, to: 20, ptDate: '2026-08-20', at: '2026-08-20T10:00:00Z' },
+    { campaignId: 'sb1', field: 'name', from: 'a', to: 'b', ptDate: '2026-09-20' },
+    { campaignId: 'sb2', field: 'dailyBudget', from: 9, to: 10, ptDate: '2026-09-21' }
+  ];
+  const c = M.moSbChangeAfter(changes, 'sb1', '2026-08-31');
+  ok(c && c.to === 12 && c.ptDate === '2026-09-16',
+     'the most recent budget change after the month is the one that counts');
+  ok(!M.moSbChangeAfter(changes, 'sb1', '2026-09-30'),
+     'a change made during or before the month is already in its numbers, so it does not count');
+  ok(!M.moSbChangeAfter([], 'sb1', '2026-08-31') && !M.moSbChangeAfter(undefined, 'sb1', '2026-08-31'),
+     'no change log means nothing was changed');
+}
+
+{
+  const changes = [{ campaignId: 'sb1', field: 'dailyBudget', from: 20, to: 25, ptDate: '2026-08-31' }];
+  ok(!M.moSbChangeAfter(changes, 'sb1', '2026-08-31'),
+     'a change on the month\'s last day is inside the month, not after it');
+}
+
+console.log('\nSB DAILY SPEND  — stored, so days at cap can be counted against the live budget');
+
+{
+  const { inputs } = M.moBuildInputs({
+    census: census([cam({ campaignId: 9, adProduct: 'SB' })]),
+    rows: [row({ date: '2026-08-01', campaignId: 9, adProduct: 'SB', cost: 12 }),
+           row({ date: '2026-08-01', campaignId: 9, adProduct: 'SB', cost: 8 }),
+           row({ date: '2026-08-02', campaignId: 9, adProduct: 'SB', cost: 19 })],
+    window: W
+  });
+  const d = inputs.sb[0].daily;
+  ok(Array.isArray(d) && d.length === 2 && d.includes(20) && d.includes(19),
+     'spend is kept per day, with several rows on one day summed',
+     JSON.stringify(d));
+}
+
+{
+  const campaigns = [cam({ campaignId: 9, adProduct: 'SB', dailyBudget: 20 })];
+  const inputs = { sp: [], sb: [{ campaignId: '9', spend: 600, clicks: 100, impressions: 9000,
+                                   orders: 30, sales: 3000, ntbOrders: null, ntbSales: null,
+                                   daily: [20, 19.5, 19, 10, 5] }] };
+  const r = M.moDecideAll({ inputs, census: census(campaigns), window: W });
+  const sb = r.sbRows[0];
+  ok(sb.cappedDays === 3,
+     'days at cap are counted at 95% of the CURRENT budget',
+     '$19 and above on a $20 budget: three of the five days');
+  ok(sb.adProduct === 'SB' && sb.daysInMonth === 31,
+     'the row carries what the apply button needs', 'August has 31 days');
+}
+
+{
+  // The same stored month, read after the budget was raised.
+  const campaigns = [cam({ campaignId: 9, adProduct: 'SB', dailyBudget: 40 })];
+  const inputs = { sp: [], sb: [{ campaignId: '9', spend: 600, clicks: 100, impressions: 9000,
+                                   orders: 30, sales: 3000, ntbOrders: null, ntbSales: null,
+                                   daily: [20, 19.5, 19, 10, 5] }] };
+  const r = M.moDecideAll({ inputs, census: census(campaigns), window: W });
+  ok(r.sbRows[0].cappedDays === 0,
+     'against a raised budget the same days are no longer at cap',
+     'which is why the budget is joined on read and never stored with the spend');
+}
+
+console.log('\nrfRecommendBudget  — the weekly raise is unchanged by the new starting point');
+{
+  // Weekly: 4 of 7 days at cap is the smallest raise, 25%.
+  ok(M.rfRecommendBudget({ dailyBudget: 20, cappedDays: 4, weekDays: 7, maxDaySpend: 20 }) === 25,
+     'with no minDays given, the weekly threshold still applies');
+  ok(M.rfRecommendBudget({ dailyBudget: 20, cappedDays: 18, weekDays: 30, maxDaySpend: 20, minDays: 18 }) === 25,
+     'and a monthly caller can set its own');
+}
+
 console.log('\nTARGET ACOS  — display only');
 {
   const segments = Object.keys(M.TARGET_ACOS);
