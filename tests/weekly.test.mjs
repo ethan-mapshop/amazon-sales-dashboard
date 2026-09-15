@@ -176,43 +176,199 @@ const HEALTHY = base({ cost: 84, sales: 400, clicks: 200, impressions: 9000 });
   ok(r.flags.budgetCap.length === 0, 'three days at cap is under the four-day bar');
 }
 
+console.log('\nPORTFOLIO CHECKS  — silent, spend collapse and CTR collapse ask whether the PRODUCT moved');
+
+// A portfolio is one product. Its causes, stock, Buy Box, suppression, price,
+// image, reviews, competition, reach every campaign at once. One campaign moving
+// on its own is its bids or targets, which Badger manages and the page cannot
+// see, so it is deliberately not listed.
+
+// A derived campaign as rfPortfolioFlags sees it. Defaults are steady: this
+// week runs at exactly its usual weekly rate, so nothing should flag.
+const member = (o = {}) => {
+  const m = {
+    brand: o.brand === undefined ? 'MapShop State Maps' : o.brand,
+    dailyBudget: o.dailyBudget === undefined ? 10 : o.dailyBudget,
+    endDate: o.endDate || null,
+    impressions7: o.impressions7 === undefined ? 1000 : o.impressions7,
+    clicks7: o.clicks7 === undefined ? 10 : o.clicks7,
+    spend7: o.spend7 === undefined ? 20 : o.spend7,
+    // The four weeks before, as totals.
+    impressions28: o.impressions28 === undefined ? 4000 : o.impressions28,
+    clicks28: o.clicks28 === undefined ? 40 : o.clicks28,
+    spend28: o.spend28 === undefined ? 80 : o.spend28
+  };
+  m.ctr28 = m.impressions28 > 0 ? m.clicks28 / m.impressions28 : null;
+  return m;
+};
+const four = (o) => [member(o), member(o), member(o), member(o)];
+const pf = (members) => M.rfPortfolioFlags({
+  members, portfolioId: 'pf-fl', portfolio: 'STATE Florida', window: W
+});
+const dark = { impressions7: 0, clicks7: 0, spend7: 0 };
+
 {
-  const r = decide([cam({ campaignId: 1, endDate: '2026-08-01' })], HEALTHY);
-  const s = r.flags.silent[0];
-  ok(!!s, 'a campaign that served nothing all week is silent');
-  ok(s && s.endedBefore === '2026-08-01',
-     'and a past end date is carried as the answer, not left as a lead',
-     'an enabled campaign past its end date explains its own silence');
+  const f = pf(four());
+  ok(!f.silent && !f.spendCollapse && !f.ctrCollapse, 'a steady portfolio flags nothing');
+}
+
+console.log('\n  2 · Silent');
+
+{
+  const f = pf(four(dark));
+  ok(!!f.silent, 'every campaign in the portfolio at zero is silent');
+  ok(f.silent && f.silent.portfolio === 'STATE Florida' && f.silent.campaigns === 4,
+     'reported once, as the portfolio, naming how many campaigns it covers');
 }
 
 {
-  // Still serving - impressions in the week - so this is a collapse and not
-  // silence. The two are mutually exclusive on purpose.
-  const r = decide([cam({ campaignId: 1 })],
-                   [...week(0.5, { clicks: 2, impressions: 100 }),
-                    ...base({ cost: 400, sales: 2000, clicks: 900, impressions: 40000 })]);
-  ok(r.flags.spendCollapse.length === 1,
-     '$3.50 against a $100 weekly baseline is a spend collapse');
-  ok(r.flags.silent.length === 0,
-     'and is not also reported as silent',
-     'two rows saying the same thing, one of them less precisely');
+  // This week's STATE Florida (ASIN): one of four quiet, the others serving.
+  const f = pf([member(dark), member(), member(), member()]);
+  ok(!f.silent,
+     'one campaign at zero while the other three serve is not silent',
+     'stock, suppression and Buy Box would have stopped all four');
 }
 
 {
-  // Same clicks per impression in both halves: no CTR collapse, whatever the spend.
-  const r = decide([cam({ campaignId: 1 })],
-                   [...week(3, { clicks: 20, impressions: 1000 }),
-                    ...base({ cost: 84, sales: 400, clicks: 560, impressions: 28000 })]);
-  ok(r.flags.ctrCollapse.length === 0, 'an unchanged click-through rate does not flag');
+  // 50 impressions a week across the whole portfolio, under the 100 floor.
+  const f = pf(four({ ...dark, impressions28: 50 }));
+  ok(!f.silent,
+     'a portfolio that was barely advertising is not flagged for stopping',
+     'one stray impression in a month used to be enough to count as running');
 }
 
 {
-  const r = decide([cam({ campaignId: 1 })],
-                   [...week(3, { clicks: 5, impressions: 1000 }),
-                    ...base({ cost: 84, sales: 400, clicks: 560, impressions: 28000 })]);
-  ok(r.flags.ctrCollapse.length === 1,
-     'click-through halving on enough impressions does',
-     'conversion-free, so the attribution window cannot fake it');
+  const f = pf(four({ ...dark, dailyBudget: 0 }));
+  ok(!f.silent, 'a portfolio with no funded campaign is not silent, it is unfunded');
+}
+
+{
+  const f = pf([member({ ...dark, endDate: '2026-08-20' }),
+                member({ ...dark, endDate: '2026-08-28' }),
+                member({ ...dark, endDate: '2026-08-15' }),
+                member({ ...dark, endDate: '2026-08-02' })]);
+  ok(f.silent && f.silent.endedBefore === '2026-08-28',
+     'when every campaign has ended, the latest end date is the whole answer');
+}
+
+{
+  const f = pf([member({ ...dark, endDate: '2026-08-20' }), member(dark), member(dark), member(dark)]);
+  ok(f.silent && f.silent.endedBefore === null,
+     'but one campaign ending explains nothing about the other three');
+}
+
+{
+  const f = pf(four(dark));
+  ok(f.silent && !f.spendCollapse && !f.ctrCollapse,
+     'a silent portfolio is not also listed as a spend or CTR collapse',
+     'the same product three times, saying the same thing less precisely');
+}
+
+console.log('\n  3 · Spend collapse');
+
+{
+  // Every campaign serving a quarter as often. Spend falls to 25% of normal
+  // and impressions are the factor that fell.
+  const f = pf(four({ impressions7: 250, clicks7: 3, spend7: 5 }));
+  ok(!!f.spendCollapse, 'the whole product spending a quarter of normal is a spend collapse');
+  ok(f.spendCollapse && f.spendCollapse.cause && f.spendCollapse.cause.driver === 'impressions',
+     'and names impressions as what fell');
+}
+
+{
+  // One large campaign collapses and drags the portfolio total to 27% of
+  // normal on its own. The other three are running exactly as usual.
+  const big = member({ spend28: 800, spend7: 10, impressions28: 40000, impressions7: 500,
+                       clicks28: 400, clicks7: 5 });
+  const f = pf([big, member(), member(), member()]);
+  ok(!f.spendCollapse,
+     'one large campaign collapsing does not flag the product',
+     'take it out and the rest are normal, so the cause is that campaign');
+}
+
+{
+  // Same impressions and clicks as usual, bought for 40% of the money.
+  const f = pf(four({ spend7: 8 }));
+  ok(!f.spendCollapse,
+     'spend falling because clicks got cheaper is not flagged',
+     'that is bids, not the product, and bids are Badger\'s');
+}
+
+{
+  const f = pf([member({ impressions7: 250, clicks7: 3, spend7: 5 })]);
+  ok(!f.spendCollapse,
+     'a one-campaign portfolio is never flagged for spend collapse',
+     'with nothing to remove, product and targeting cannot be told apart');
+}
+
+console.log('\n  4 · CTR collapse');
+
+{
+  // Four campaigns, each clicking at 0.4% against a usual 1%.
+  const f = pf(four({ impressions7: 1000, clicks7: 4 }));
+  ok(!!f.ctrCollapse, 'click-through below half across the product flags');
+  ok(f.ctrCollapse && f.ctrCollapse.impressions7 === 4000 && f.ctrCollapse.clicks7 === 16,
+     'reported on the portfolio totals');
+}
+
+{
+  // One high-volume campaign's click-through collapses; the other three hold.
+  const big = member({ impressions7: 6000, clicks7: 3, impressions28: 24000, clicks28: 240 });
+  const f = pf([big, member(), member(), member()]);
+  ok(!f.ctrCollapse,
+     'one campaign\'s click-through collapsing does not flag the product',
+     'a listing problem would show in every campaign, so this is targeting drift');
+}
+
+{
+  // A broad drop, but after removing the biggest contributor the remainder has
+  // too few impressions to read a click-through rate from.
+  const f = pf([member({ impressions7: 1500, clicks7: 3 }),
+                member({ impressions7: 900, clicks7: 2 })]);
+  ok(!f.ctrCollapse,
+     'a drop that cannot be shown to be broad is not flagged',
+     'the remainder has to clear the same 2,000-impression floor the whole portfolio did');
+}
+
+{
+  const f = pf(four());
+  ok(!f.ctrCollapse, 'an unchanged click-through rate does not flag');
+}
+
+console.log('\n  through rfDecideAll');
+
+{
+  // The real path: campaigns grouped by the portfolio id in the census.
+  const types = ['(Auto)', '(Broad)', '(Exact)', '(ASIN)'];
+  const pfCensus = (weekFor) => ({
+    campaigns: [1, 2, 3, 4].map(i => cam({
+      campaignId: i, name: `STATE Florida ${types[i - 1]}`,
+      portfolioId: 'pf-fl', brand: 'MapShop State Maps'
+    })),
+    portfolioNames: { 'pf-fl': 'STATE Florida' }, changes: [], syncedAt: null
+  });
+  const baseline = [1, 2, 3, 4].map(i =>
+    row({ date: '2026-08-10', campaignId: i, cost: 80, clicks: 40, impressions: 4000, sales: 300 }));
+
+  const c1 = pfCensus();
+  const allDark = M.rfDecideAll({
+    inputs: M.rfBuildInputs({ census: c1, rows: baseline, window: W }).inputs,
+    census: c1, window: W
+  });
+  ok(allDark.flags.silent.length === 1 && allDark.flags.silent[0].portfolio === 'STATE Florida',
+     'a portfolio whose four campaigns all went dark produces one silent row, by name');
+
+  const serving = [1, 2, 3].map(i =>
+    row({ date: '2026-09-01', campaignId: i, cost: 20, clicks: 10, impressions: 1000 }));
+  const oneDark = M.rfDecideAll({
+    inputs: M.rfBuildInputs({ census: c1, rows: [...baseline, ...serving], window: W }).inputs,
+    census: c1, window: W
+  });
+  ok(oneDark.flags.silent.length === 0,
+     'and the same portfolio with three still serving produces none',
+     'which is exactly this week\'s Florida, New York and Pennsylvania');
+  ok(oneDark.coverage.portfolios === 1 && oneDark.coverage.noPortfolio === 0,
+     'coverage reports how many portfolios were checked, and any campaign without one');
 }
 
 {

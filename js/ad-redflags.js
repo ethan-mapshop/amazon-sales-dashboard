@@ -330,27 +330,35 @@
            R('At cap'), R('ACoS 28d'), R('Retention 28d'), R('Raise to')],
           arfBudgetCapRow),
 
-        arfSection('2 · Silent campaigns', f.silent,
-          'Enabled and funded, but served nothing at all this week after running normally ' +
-          'before. Not a performance problem — a delivery one. Check stock, listing ' +
-          'suppression, Buy Box, and whether the ad group or its ads were paused.',
-          [C('Campaign'), C('Brand'), R('Budget/day'), R('Typical spend/wk'),
+        // Checks 2 to 4 are per portfolio, and a portfolio is one product. Their
+        // causes are the product and its competition, which reach every campaign
+        // at once. One campaign moving on its own is its bids or targets, which
+        // Badger manages, and is deliberately not listed.
+        arfSection('2 · Silent portfolios', f.silent,
+          'Every campaign for the product served nothing this week, after it averaged at ' +
+          'least 100 impressions a week over the four before. When a whole product goes ' +
+          'dark the cause is the product: check stock, listing suppression and Buy Box. ' +
+          'One campaign going quiet while the others serve is a bid or a target, and is ' +
+          'not listed.',
+          [C('Portfolio'), C('Brand'), R('Campaigns'), R('Typical spend/wk'),
            R('Impressions 28d')],
           arfSilentRow),
 
         arfSection('3 · Spend collapse', f.spendCollapse,
-          'Still serving, but spending at or below half its own normal rate. Spend is ' +
-          'impressions × click-through × cost per click, so each row names which of the ' +
-          'three fell — and therefore whether the fix is in the ad account or on the listing.',
-          [C('Campaign'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
+          'The product spent at or below half its normal rate, across its campaigns ' +
+          'rather than in just one. Spend is impressions × click-through × cost per click, ' +
+          'so each row names which fell. A fall in cost per click is bids rather than the ' +
+          'product, and is not listed.',
+          [C('Portfolio'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
            R('Change')],
           arfSpendCollapseRow),
 
         arfSection('4 · CTR collapse', f.ctrCollapse,
-          'Impressions accumulating without clicks, at half the campaign’s usual rate or ' +
-          'worse. Points at the listing — main image, price, reviews — or at targeting ' +
-          'drift, and it shows up before the money is spent rather than after.',
-          [C('Campaign'), C('Brand'), R('Impressions'), R('Clicks'),
+          'Across the product’s campaigns, impressions are turning into clicks at half the ' +
+          'usual rate or worse. That points at the listing or what sits beside it: price, ' +
+          'main image, reviews, or a cheaper competitor. A drop confined to one campaign ' +
+          'is targeting drift, and is not listed.',
+          [C('Portfolio'), C('Brand'), R('Impressions'), R('Clicks'),
            R('CTR'), R('Typical CTR'), R('Change')],
           arfCtrRow),
 
@@ -414,10 +422,12 @@
     // spend = impressions x CTR x CPC. Naming which factor fell is the whole
     // action item: it says whether the fix is in the ad account or on the
     // listing, which is the difference between a click and an afternoon.
+    // Worded for a whole product, since that is the only case these checks now
+    // list. There is no cost-per-click entry: a spend fall driven by cheaper
+    // clicks is bids, which the server does not flag.
     const ARF_CAUSE = {
-      impressions: { label: 'Impressions', fix: 'not serving as often — check Buy Box, stock, or whether you are being outbid' },
-      ctr:         { label: 'Click-through', fix: 'being shown and ignored — check price, main image, reviews' },
-      cpc:         { label: 'Cost per click', fix: 'bids fell — Badger most likely cut them' }
+      impressions: { label: 'Impressions', fix: 'serving less often — check stock and Buy Box, then whether a competitor is outbidding you on the product’s searches' },
+      ctr:         { label: 'Click-through', fix: 'shown and passed over — check price, main image and reviews, or a cheaper competitor beside you' }
     };
 
     function arfCauseNote(cause) {
@@ -456,20 +466,30 @@
       </tr>`;
     }
 
+    // The row label for the portfolio-level checks. Same two columns as a
+    // campaign row, so the tables line up down the page.
+    function arfWhere(r, explain) {
+      const note = explain || '';
+      return `<td class="arf-name">${escapeHtml(r.portfolio || 'Unnamed portfolio')}
+          ${note ? `<div class="arf-sub">${note}</div>` : ''}
+        </td>
+        <td>${escapeHtml(r.brand || '—')}</td>`;
+    }
+
     function arfSilentRow(r) {
-      // An expired campaign is the complete answer, not a lead to follow.
+      // Every campaign past its end date is the complete answer, not a lead.
       const explain = r.endedBefore
-        ? `<span class="arf-quiet">Campaign ended ${arfShortDate(r.endedBefore)}</span>`
+        ? `<span class="arf-quiet">Every campaign ended by ${arfShortDate(r.endedBefore)}</span>`
         : undefined;
-      return `<tr>${arfWho(r, explain === undefined ? undefined : explain)}
-        <td class="arf-r">${arfMoney(r.dailyBudget)}</td>
+      return `<tr>${arfWhere(r, explain)}
+        <td class="arf-r">${formatCount(r.campaigns)}</td>
         <td class="arf-r arf-em">${arfMoney(r.baselineWeekly)}</td>
         <td class="arf-r">${formatCount(r.baselineImpressions)}</td>
       </tr>`;
     }
 
     function arfSpendCollapseRow(r) {
-      return `<tr>${arfWho(r, arfCauseNote(r.cause))}
+      return `<tr>${arfWhere(r, arfCauseNote(r.cause))}
         <td class="arf-r">${arfMoney(r.spend7)}</td>
         <td class="arf-r">${arfMoney(r.baselineWeekly)}</td>
         <td class="arf-r arf-em arf-down">${arfPct(r.change)}</td>
@@ -477,7 +497,7 @@
     }
 
     function arfCtrRow(r) {
-      return `<tr>${arfWho(r)}
+      return `<tr>${arfWhere(r)}
         <td class="arf-r">${formatCount(r.impressions7)}</td>
         <td class="arf-r">${formatCount(r.clicks7)}</td>
         <td class="arf-r arf-em">${arfRate(r.ctr7)}</td>
@@ -524,7 +544,8 @@
         c.neverActive ? `${c.neverActive} have never run` : null,
         c.unmapped && c.unmapped.length ? `${c.unmapped.length} unmapped to a brand` : null,
         c.noBudget && c.noBudget.length ? `${c.noBudget.length} with no usable daily budget` : null,
-        c.orphanRows ? `${c.orphanRows} report rows for campaigns not in the snapshot` : null
+        c.orphanRows ? `${c.orphanRows} report rows for campaigns not in the snapshot` : null,
+        typeof c.portfolios === 'number' ? `${c.portfolios} portfolios checked for silence and collapse` : null
       ].filter(Boolean);
 
       const warn = [];
@@ -544,6 +565,12 @@
       }
       if (c.orphanRows) {
         warn.push('Some report rows belong to campaigns missing from the snapshot — refresh Campaign Overview.');
+      }
+      // Every campaign belongs to a portfolio, so this should never show. If it
+      // does, those campaigns were invisible to checks 2 to 4.
+      if (c.noPortfolio) {
+        warn.push(`${c.noPortfolio} campaign${c.noPortfolio === 1 ? ' has' : 's have'} no portfolio, ` +
+                  'so silence, spend collapse and CTR collapse could not be checked for them.');
       }
 
       return `

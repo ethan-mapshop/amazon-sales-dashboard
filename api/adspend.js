@@ -896,6 +896,8 @@ const RF_CONFIG = {
   CAP_RETENTION_MIN:     0.50,  // ... and 28-day profit retention ≥ 50%
   RAISE_MIN:             0.25,  // suggested raise at CAP_DAYS_MIN days at cap
   RAISE_MAX:             0.50,  // ... rising to this when capped every day
+  // 2 — silent portfolios
+  SILENT_MIN_WEEKLY_IMPRESSIONS: 100,  // the portfolio averaged at least this many a week before
   // 3 — spend collapse
   COLLAPSE_RATIO:        0.50,  // 7-day spend at or below half the trailing weekly average
   COLLAPSE_MIN_BASELINE: 10,    // ... and a baseline worth collapsing from
@@ -923,7 +925,12 @@ const RF_SPEC_DEVIATIONS = [
   'data has settled.',
 
   'Four checks added that use only impressions, clicks and spend, all final the ' +
-  'day they happen: silent campaigns, spend collapse, CTR collapse and CPC spike.',
+  'day they happen: silent portfolios, spend collapse, CTR collapse and CPC spike.',
+
+  'Silent, spend collapse and CTR collapse are judged per portfolio, and a ' +
+  'portfolio is one product. Their causes are the product and its competition, ' +
+  'which reach every campaign at once; a single campaign moving is its own bids ' +
+  'or targets, which Ad Badger manages, and is not listed.',
 
   'Check 1 counts days at cap rather than time-in-budget, which Amazon exposes ' +
   'only in the console Budget Report. Its profit retention gate reads the 28-day ' +
@@ -1511,57 +1518,7 @@ function rfDecideAll({ inputs, census, window }) {
       });
     }
 
-    // ── 2 · Silent campaigns ──
-    // Enabled, funded, and served nothing at all. Deliberately requires prior
-    // activity: a campaign that has never run is dormant, not broken, and
-    // flagging every dormant campaign weekly would drown the report. This is a
-    // CHANGE detector — it ran, and now it does not.
-    const wasActive = c.impressions28 > 0;
-    const silent = c.dailyBudget > 0 && c.impressions7 === 0 && wasActive;
-    if (silent) {
-      flags.silent.push({
-        ...base(c),
-        dailyBudget: c.dailyBudget,
-        // An enabled campaign past its end date explains its own silence.
-        endedBefore: (c.endDate && c.endDate < window.weekStart) ? c.endDate : null,
-        baselineWeekly: c.baselineWeekly,
-        baselineImpressions: Math.round(c.impressions28)
-      });
-    }
-
-    // ── 3 · Spend collapse ──
-    // Still serving, but spending far below its own normal. Skips campaigns
-    // already reported silent, which would otherwise appear twice saying the
-    // same thing less precisely.
-    if (!silent && c.baselineWeekly >= RF_CONFIG.COLLAPSE_MIN_BASELINE &&
-        c.spend7 <= c.baselineWeekly * RF_CONFIG.COLLAPSE_RATIO) {
-      flags.spendCollapse.push({
-        ...base(c),
-        spend7: r2(c.spend7),
-        baselineWeekly: c.baselineWeekly,
-        change: r4((c.spend7 - c.baselineWeekly) / c.baselineWeekly),
-        // Names its own cause, and therefore where the fix is.
-        cause: rfDecomposeSpend(c)
-      });
-    }
-
-    // ── 4 · CTR collapse ──
-    // Impressions accumulating without clicks. Points at the listing — main
-    // image, price, reviews — or at targeting drift, and it fires before the
-    // money is spent rather than after. The impression floor is significance:
-    // at a typical 0.4% CTR, a few hundred impressions cannot distinguish a
-    // collapse from an ordinary quiet week.
-    if (c.impressions7 >= RF_CONFIG.CTR_MIN_IMPRESSIONS &&
-        c.ctr28 > 0 && c.ctr7 !== null &&
-        c.ctr7 <= c.ctr28 * RF_CONFIG.CTR_COLLAPSE_RATIO) {
-      flags.ctrCollapse.push({
-        ...base(c),
-        impressions7: Math.round(c.impressions7),
-        clicks7: Math.round(c.clicks7),
-        ctr7: c.ctr7, ctr28: c.ctr28,
-        change: r4((c.ctr7 - c.ctr28) / c.ctr28)
-      });
-    }
+    // Checks 2, 3 and 4 are judged per portfolio, below this loop.
 
     // ── 5 · CPC spike ──
     // Paying materially more per click than usual: competitive pressure, or
@@ -1582,6 +1539,23 @@ function rfDecideAll({ inputs, census, window }) {
         recommendedBid: rfRecommendBid({ defaultBid: c.defaultBid, cpc7: c.cpc7, cpc28: c.cpc28 })
       });
     }
+  }
+
+  // ── 2, 3, 4 · Silent, spend collapse, CTR collapse — per portfolio ──
+  const byPortfolio = new Map();
+  let noPortfolio = 0;
+  for (const c of campaigns.values()) {
+    if (!c.portfolioId) { noPortfolio++; continue; }
+    if (!byPortfolio.has(c.portfolioId)) {
+      byPortfolio.set(c.portfolioId, { portfolio: c.portfolio, members: [] });
+    }
+    byPortfolio.get(c.portfolioId).members.push(c);
+  }
+  for (const [portfolioId, p] of byPortfolio) {
+    const f = rfPortfolioFlags({ members: p.members, portfolioId, portfolio: p.portfolio, window });
+    if (f.silent) flags.silent.push(f.silent);
+    if (f.spendCollapse) flags.spendCollapse.push(f.spendCollapse);
+    if (f.ctrCollapse) flags.ctrCollapse.push(f.ctrCollapse);
   }
 
   // ── 6 · Brand pacing ──
@@ -1659,7 +1633,8 @@ function rfDecideAll({ inputs, census, window }) {
     flagCount,
     clean: flagCount === 0,
     coverage: { enabled, evaluated: enabled, withSpend, neverActive,
-                orphanRows, unmapped, noBudget }
+                orphanRows, unmapped, noBudget,
+                portfolios: byPortfolio.size, noPortfolio }
   };
 }
 
@@ -1741,6 +1716,146 @@ function rfRecommendBid({ defaultBid, cpc7, cpc28 }) {
 // both windows, so a collapse can name its own cause instead of sending you to
 // look. Which factor moved decides WHERE the fix is — an impressions drop is a
 // listing or Buy Box problem, a CPC drop is a bidding one.
+// ─── PORTFOLIO CHECKS ────────────────────────────────────────────────────────
+// Silent, spend collapse and CTR collapse are judged per PORTFOLIO, and every
+// campaign in a portfolio advertises the same product.
+//
+// That grouping is what makes their guidance true. Anything about the product
+// itself, its stock, Buy Box, suppression, price, main image, reviews, or the
+// competition beside it, reaches every campaign advertising it at once.
+// Anything about one campaign's own bids or targets reaches only that campaign,
+// and that layer is Ad Badger's until the keyword census exists. So these checks
+// ask whether the PRODUCT moved. A lone campaign moving is not listed: the page
+// has no data on the cause and nothing to do about it.
+//
+// Silent is broad by construction, every campaign at zero. Spend and
+// click-through are totals, which one large campaign can drag below the line on
+// its own and so put product guidance on a one-campaign problem. Those two also
+// have to hold after removing whichever campaign accounts for most of the drop.
+
+function rfPortfolioTotals(members) {
+  const t = { campaigns: members.length, spend7: 0, spend28: 0,
+              impressions7: 0, impressions28: 0, clicks7: 0, clicks28: 0 };
+  for (const c of members) {
+    t.spend7 += c.spend7;             t.spend28 += c.spend28;
+    t.impressions7 += c.impressions7; t.impressions28 += c.impressions28;
+    t.clicks7 += c.clicks7;           t.clicks28 += c.clicks28;
+  }
+  t.baselineWeekly = t.spend28 / 4;
+  t.ctr7  = t.impressions7  > 0 ? t.clicks7  / t.impressions7  : null;
+  t.ctr28 = t.impressions28 > 0 ? t.clicks28 / t.impressions28 : null;
+  t.cpc7  = t.clicks7  > 0 ? t.spend7  / t.clicks7  : null;
+  t.cpc28 = t.clicks28 > 0 ? t.spend28 / t.clicks28 : null;
+  return t;
+}
+
+// The same thresholds the per-campaign checks used, applied to a total. Also
+// applied to the remainder in the breadth test, so "the rest still collapsed"
+// has to clear the same bar for enough data as the whole portfolio did.
+function rfSpendCollapsed(t) {
+  return t.baselineWeekly >= RF_CONFIG.COLLAPSE_MIN_BASELINE &&
+         t.spend7 <= t.baselineWeekly * RF_CONFIG.COLLAPSE_RATIO;
+}
+
+function rfCtrCollapsed(t) {
+  return t.impressions7 >= RF_CONFIG.CTR_MIN_IMPRESSIONS &&
+         t.ctr28 > 0 && t.ctr7 !== null &&
+         t.ctr7 <= t.ctr28 * RF_CONFIG.CTR_COLLAPSE_RATIO;
+}
+
+// Every member except the one contributing most to a fall. A one-campaign
+// portfolio has no remainder, so breadth can never be shown there and nothing
+// is flagged: with one campaign, product and targeting cannot be told apart.
+function rfWithoutLargest(members, contribution) {
+  if (members.length < 2) return [];
+  let top = 0;
+  for (let i = 1; i < members.length; i++) {
+    if (contribution(members[i]) > contribution(members[top])) top = i;
+  }
+  return members.filter((_, i) => i !== top);
+}
+
+function rfPortfolioBrand(members) {
+  const counts = new Map();
+  for (const c of members) if (c.brand) counts.set(c.brand, (counts.get(c.brand) || 0) + 1);
+  let best = null;
+  let most = 0;
+  for (const [b, n] of counts) if (n > most) { best = b; most = n; }
+  return best;
+}
+
+// Pure. `members` are fully derived campaign rows from rfDecideAll.
+function rfPortfolioFlags({ members, portfolioId, portfolio, window }) {
+  const out = { silent: null, spendCollapse: null, ctrCollapse: null };
+  if (!members || !members.length) return out;
+
+  const t = rfPortfolioTotals(members);
+  const head = {
+    portfolioId, portfolio: portfolio || null,
+    brand: rfPortfolioBrand(members), campaigns: members.length
+  };
+
+  // ── 2 · Silent ──
+  // Every campaign at zero, after the product was genuinely advertising. One
+  // stray impression in a month used to be enough to count as "running".
+  const allZero = members.every(c => c.impressions7 === 0);
+  if (allZero) {
+    const funded = members.some(c => c.dailyBudget > 0);
+    const wasAdvertising = t.impressions28 / 4 >= RF_CONFIG.SILENT_MIN_WEEKLY_IMPRESSIONS;
+    if (funded && wasAdvertising) {
+      // Every campaign past its end date explains the silence outright.
+      const ends = members.map(c => c.endDate);
+      const allEnded = ends.every(d => d && d < window.weekStart);
+      out.silent = {
+        ...head,
+        baselineWeekly: r2(t.baselineWeekly),
+        baselineImpressions: Math.round(t.impressions28),
+        endedBefore: allEnded ? ends.slice().sort().pop() : null
+      };
+    }
+    // A portfolio at zero is silent or too small to matter. Either way it is
+    // not also a spend collapse or a CTR collapse worth a second row.
+    return out;
+  }
+
+  // ── 3 · Spend collapse ──
+  if (rfSpendCollapsed(t)) {
+    const cause = rfDecomposeSpend(t);
+    // Falling cost per click is bids, not the product, and bids are Badger's.
+    const byBids = !!cause && cause.driver === 'cpc';
+    const rest = rfWithoutLargest(members, c => c.spend28 / 4 - c.spend7);
+    if (!byBids && rest.length && rfSpendCollapsed(rfPortfolioTotals(rest))) {
+      out.spendCollapse = {
+        ...head,
+        spend7: r2(t.spend7),
+        baselineWeekly: r2(t.baselineWeekly),
+        change: r4((t.spend7 - t.baselineWeekly) / t.baselineWeekly),
+        cause
+      };
+    }
+  }
+
+  // ── 4 · CTR collapse ──
+  // A campaign's share of the drop is its click shortfall: the clicks it would
+  // have had at its own usual rate, less the clicks it actually got.
+  if (rfCtrCollapsed(t)) {
+    const rest = rfWithoutLargest(members,
+      c => (c.ctr28 !== null ? c.impressions7 * c.ctr28 : 0) - c.clicks7);
+    if (rest.length && rfCtrCollapsed(rfPortfolioTotals(rest))) {
+      out.ctrCollapse = {
+        ...head,
+        impressions7: Math.round(t.impressions7),
+        clicks7: Math.round(t.clicks7),
+        ctr7: r4(t.ctr7),
+        ctr28: r4(t.ctr28),
+        change: r4((t.ctr7 - t.ctr28) / t.ctr28)
+      };
+    }
+  }
+
+  return out;
+}
+
 function rfDecomposeSpend(c) {
   const weekly = (n) => n / 4;   // baseline is 28 days
   const ratio = (now, before) => (before > 0 ? r4(now / before) : null);
@@ -4554,6 +4669,7 @@ async function whIngestWeeklyRun({ rows, census, window }) {
 }
 
 export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
+         rfPortfolioFlags, rfPortfolioTotals,
          rfNormalizeRows, resolveWindow, rfSegment, rfInvalidColumns,
          reportSpec, buildReportBody, daySpan, rfDuplicateReportId, rfRecommendBudget,
          rfRecommendBid, rfDecomposeSpend,
