@@ -20,19 +20,27 @@
       { weeks: 260, label: 'Everything' }
     ];
 
-    // Row order and formatting, matching the sheet it replaces.
+    // Row order and formatting, matching the sheet it replaces. `tip` is a
+    // glossary key; the counts that mean what they say have none.
     const WK_METRICS = [
       { key: 'impressions', label: 'Impressions', fmt: 'int' },
       { key: 'clicks', label: 'Clicks', fmt: 'int' },
-      { key: 'orders', label: 'Orders', fmt: 'int' },
+      { key: 'orders', label: 'Orders', fmt: 'int', tip: 'wk.orders' },
       { key: 'spend', label: 'Spend', fmt: 'money' },
-      { key: 'sales', label: 'Sales', fmt: 'money' },
-      { key: 'acos', label: 'ACoS', fmt: 'pct' },
-      { key: 'roas', label: 'ROAS', fmt: 'x' },
-      { key: 'cpc', label: 'CPC', fmt: 'money2' },
-      { key: 'ctr', label: 'CTR', fmt: 'pct2' },
-      { key: 'cvr', label: 'CVR', fmt: 'pct2' }
+      { key: 'sales', label: 'Sales', fmt: 'money', tip: 'wk.sales' },
+      { key: 'acos', label: 'ACoS', fmt: 'pct', tip: 'acos' },
+      { key: 'roas', label: 'ROAS', fmt: 'x', tip: 'roas' },
+      { key: 'cpc', label: 'CPC', fmt: 'money2', tip: 'cpc' },
+      { key: 'ctr', label: 'CTR', fmt: 'pct2', tip: 'ctr' },
+      { key: 'cvr', label: 'CVR', fmt: 'pct2', tip: 'cvr' }
     ];
+
+    // A metric's label with its definition icon, when it has one.
+    function wkLabel(key) {
+      const m = WK_METRICS.find(x => x.key === key);
+      if (!m) return escapeHtml(key);
+      return m.label + (m.tip ? adTip(m.tip) : '');
+    }
 
     // The sheet's three chart tabs, kept as three groups on one page. The sheet
     // ran Conversion at degree 4 and the rest at 2; everything is 4 here, so a
@@ -172,17 +180,17 @@
 
     function wkSummary(data) {
       const t = data.totals || {};
-      const cell = (label, value) =>
-        `<div class="wk-stat"><span class="wk-stat-label">${label}</span>
+      const cell = (key, value) =>
+        `<div class="wk-stat"><span class="wk-stat-label">${wkLabel(key)}</span>
            <span class="wk-stat-value">${value}</span></div>`;
       return `
         <div class="card card-flat wk-stats">
-          ${cell('Spend', wkMoney(t.spend))}
-          ${cell('Sales', wkMoney(t.sales))}
-          ${cell('Orders', formatNumber(t.orders || 0))}
-          ${cell('ACoS', wkPct(t.acos))}
-          ${cell('ROAS', t.roas === null || t.roas === undefined ? '—' : t.roas.toFixed(2))}
-          ${cell('CPC', wkMoney2(t.cpc))}
+          ${cell('spend', wkMoney(t.spend))}
+          ${cell('sales', wkMoney(t.sales))}
+          ${cell('orders', formatNumber(t.orders || 0))}
+          ${cell('acos', wkPct(t.acos))}
+          ${cell('roas', t.roas === null || t.roas === undefined ? '—' : t.roas.toFixed(2))}
+          ${cell('cpc', wkMoney2(t.cpc))}
         </div>`;
     }
 
@@ -193,7 +201,7 @@
       if (!s.length) return '<div class="card arf-section"><p class="arf-none">No weeks in this range.</p></div>';
       return `
         <div class="card arf-section">
-          <h4>Weekly detail</h4>
+          <h4>Weekly detail${adTip('wk.week')}</h4>
           <div class="arf-table-wrap">
             <table class="table-fill arf-table wk-table">
               <thead>
@@ -206,7 +214,7 @@
               <tbody>
                 ${WK_METRICS.map(m => `
                   <tr>
-                    <td class="wk-sticky arf-name">${m.label}</td>
+                    <td class="wk-sticky arf-name">${wkLabel(m.key)}</td>
                     ${s.map(w => `<td>${wkFormat(w[m.key], m.fmt)}</td>`).join('')}
                   </tr>`).join('')}
               </tbody>
@@ -219,12 +227,11 @@
       return WK_CHART_GROUPS.map(g => `
         <div class="card arf-section">
           <h4>${g.title} <span class="arf-muted wk-degree">polynomial trend, degree ${
-            g.degree}</span></h4>
+            g.degree}${adTip('wk.trend')}</span></h4>
           <div class="wk-charts">
             ${g.keys.map(k => `
               <div class="wk-chart">
-                <div class="wk-chart-title">${
-                  (WK_METRICS.find(m => m.key === k) || {}).label || k}</div>
+                <div class="wk-chart-title">${wkLabel(k)}</div>
                 <canvas id="wk-chart-${k}"></canvas>
               </div>`).join('')}
           </div>

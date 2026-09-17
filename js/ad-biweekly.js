@@ -360,7 +360,7 @@
           </div>
           <div class="bw-window">
             14 days to ${escapeHtml(w.end)} · prior ${escapeHtml(w.priorStart)}&ndash;${escapeHtml(w.priorEnd)}
-            <span class="bw-muted">lagged 8 days so conversions have landed</span>
+            <span class="bw-muted">lagged 8 days so conversions have landed</span>${adTip('bw.window')}
           </div>
         </div>`;
     }
@@ -395,7 +395,7 @@
       return `
         <div class="card card-flat bw-posture">
           <div class="bw-posture-label">
-            Monthly posture
+            Monthly posture${adTip('bw.posture')}
             <span class="bw-muted">Scale leans into increases · Constrain skips them and cuts harder</span>
           </div>
           <div class="bw-posture-row">
@@ -421,9 +421,10 @@
           <div class="arf-table-wrap">
             <table class="table-fill arf-table">
               <thead><tr>
-                <th>Brand</th><th>Posture</th>
+                <th>Brand</th><th>Posture${adTip('bw.posture')}</th>
                 <th class="arf-r">Spend</th><th class="arf-r">Sales</th>
-                <th class="arf-r">Orders</th><th class="arf-r">ACoS</th><th class="arf-r">Retention</th>
+                <th class="arf-r">Orders</th><th class="arf-r">ACoS${adTip('acos')}</th>
+                <th class="arf-r">Retention${adTip('retention')}</th>
               </tr></thead>
               <tbody>${brands.map(b => `
                 <tr>
@@ -477,8 +478,10 @@
                     title="Select every changed campaign currently shown"></th>
               <th>Campaign</th><th>Brand</th>
               <th class="arf-r">Spend</th><th class="arf-r">Sales</th><th class="arf-r">Orders</th>
-              <th class="arf-r">ACoS</th><th class="arf-r">Retention</th><th class="arf-r">At cap</th>
-              <th>Action</th><th class="arf-r">Budget</th><th class="arf-r">New</th><th class="arf-r">Apply</th>
+              <th class="arf-r">ACoS${adTip('acos')}</th><th class="arf-r">Retention${adTip('retention')}</th>
+              <th class="arf-r">At cap${adTip('bw.atCap')}</th>
+              <th>Action${adTip('bw.action')}</th><th class="arf-r">Budget${adTip('bw.budget')}</th>
+              <th class="arf-r">New${adTip('bw.new')}</th><th class="arf-r">Apply</th>
             </tr></thead>
             <tbody>${rows.map(bwRow).join('')}</tbody>
           </table>

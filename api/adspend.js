@@ -4945,4 +4945,5 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          whMonday, whSettledThrough, whBinWeeks, whSeries,
          reportRetentionStart, REPORT_RETENTION_DAYS,
          MO_CONFIG, MO_REPORT_KEYS, MO_SPEC_DEVIATIONS, TARGET_ACOS,
-         BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS };
+         BW_CONFIG, BW_POSTURES, BW_REPORT_KEYS, BW_SPEC_DEVIATIONS,
+         BW_INCREASES, BW_DECREASES };

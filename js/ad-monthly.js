@@ -325,15 +325,15 @@
                 <tr>
                   <th>Brand</th>
                   <th>Spend</th>
-                  <th>Ad sales</th>
-                  <th>ACoS</th>
-                  <th>vs target</th>
-                  <th>Retention</th>
-                  <th>vs last month</th>
-                  <th>Spend / sales share</th>
-                  <th>Ad share</th>
-                  <th>Recommended</th>
-                  <th>Posture</th>
+                  <th>Ad sales${adTip('mo.adSales')}</th>
+                  <th>ACoS${adTip('acos')}</th>
+                  <th>vs target${adTip('mo.vsTarget')}</th>
+                  <th>Retention${adTip('mo.retention')}</th>
+                  <th>vs last month${adTip('mo.vsLastMonth')}</th>
+                  <th>Spend / sales share${adTip('mo.share')}</th>
+                  <th>Ad share${adTip('mo.adShare')}</th>
+                  <th>Recommended${adTip('mo.recommended')}</th>
+                  <th>Posture${adTip('mo.posture')}</th>
                 </tr>
               </thead>
               <tbody>${rows.map(moBrandRow).join('')}</tbody>
@@ -500,14 +500,14 @@
               <thead>
                 <tr>
                   <th>Campaign</th>
-                  <th>Budget/day</th>
+                  <th>Budget/day${adTip('mo.sbBudget')}</th>
                   <th>Spend</th>
-                  <th>Sales</th>
-                  <th>ACoS</th>
-                  <th>Retention</th>
-                  <th>Days at cap</th>
-                  <th>New to brand</th>
-                  <th>Recommended</th>
+                  <th>Sales${adTip('mo.sbSales')}</th>
+                  <th>ACoS${adTip('acos')}</th>
+                  <th>Retention${adTip('retention')}</th>
+                  <th>Days at cap${adTip('mo.sbDaysAtCap')}</th>
+                  <th>New to brand${adTip('mo.ntb')}</th>
+                  <th>Recommended${adTip('mo.sbRecommended')}</th>
                 </tr>
               </thead>
               <tbody>${rows.map(moSbRow).join('')}</tbody>

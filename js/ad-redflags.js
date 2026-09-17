@@ -326,8 +326,9 @@
           'demand exceeded the budget. Retention is the settled 28-day figure. The ' +
           'suggested raise is a step: 25% at four days at cap rising to 50% at seven, ' +
           'never below the best single day it already managed. Applying it writes to Amazon.',
-          [C('Campaign'), C('Brand'), R('Budget/day'), R('7-day spend'),
-           R('At cap'), R('ACoS 28d'), R('Retention 28d'), R('Raise to')],
+          [C('Campaign'), C('Brand'), R('Budget/day'), R('7-day spend', 'rf.spend7'),
+           R('At cap', 'rf.atCap'), R('ACoS 28d', 'rf.acos28'), R('Retention 28d', 'rf.retention28'),
+           R('Raise to', 'rf.raiseTo')],
           arfBudgetCapRow),
 
         // Checks 2 to 4 are per portfolio, and a portfolio is one product. Their
@@ -340,8 +341,8 @@
           'dark the cause is the product: check stock, listing suppression and Buy Box. ' +
           'One campaign going quiet while the others serve is a bid or a target, and is ' +
           'not listed.',
-          [C('Portfolio'), C('Brand'), R('Campaigns'), R('Typical spend/wk'),
-           R('Impressions 28d')],
+          [C('Portfolio'), C('Brand'), R('Campaigns', 'rf.campaigns'),
+           R('Typical spend/wk', 'rf.typicalSpend'), R('Impressions 28d', 'rf.impressions28')],
           arfSilentRow),
 
         arfSection('3 · Spend collapse', f.spendCollapse,
@@ -349,8 +350,8 @@
           'rather than in just one. Spend is impressions × click-through × cost per click, ' +
           'so each row names which fell. A fall in cost per click is bids rather than the ' +
           'product, and is not listed.',
-          [C('Portfolio'), C('Brand'), R('7-day spend'), R('Typical spend/wk'),
-           R('Change')],
+          [C('Portfolio'), C('Brand'), R('7-day spend', 'rf.spend7'),
+           R('Typical spend/wk', 'rf.typicalSpend'), R('Change', 'rf.change')],
           arfSpendCollapseRow),
 
         arfSection('4 · CTR collapse', f.ctrCollapse,
@@ -358,8 +359,8 @@
           'usual rate or worse. That points at the listing or what sits beside it: price, ' +
           'main image, reviews, or a cheaper competitor. A drop confined to one campaign ' +
           'is targeting drift, and is not listed.',
-          [C('Portfolio'), C('Brand'), R('Impressions'), R('Clicks'),
-           R('CTR'), R('Typical CTR'), R('Change')],
+          [C('Portfolio'), C('Brand'), R('Impressions', 'rf.impressions7'), R('Clicks'),
+           R('CTR', 'ctr'), R('Typical CTR', 'rf.typicalCtr'), R('Change', 'rf.change')],
           arfCtrRow),
 
         arfSection('5 · CPC spike', f.cpcSpike,
@@ -367,23 +368,26 @@
           'bid automation reaching. The suggested cut is a step — 10% at the flagging ' +
           'threshold rising to 25% at twice it — because what a lower bid actually costs ' +
           'per click is an auction outcome, not arithmetic. Applying it writes to Amazon.',
-          [C('Campaign'), C('Brand'), R('Clicks'), R('7-day spend'),
-           R('CPC'), R('Typical CPC'), R('Change'), R('Bid'), R('Lower to')],
+          [C('Campaign'), C('Brand'), R('Clicks'), R('7-day spend', 'rf.spend7'),
+           R('CPC', 'cpc'), R('Typical CPC', 'rf.typicalCpc'), R('Change', 'rf.change'),
+           R('Bid', 'rf.bid'), R('Lower to', 'rf.lowerTo')],
           arfCpcRow),
 
         arfSection('6 · Brand pacing', f.brandPacing,
           'Brand spend against its trailing weekly average — the account-level sanity ' +
           'check. Each row names the campaigns that account for the move, so a brand-level ' +
           'deviation resolves to specific campaigns rather than a prompt to go looking.',
-          [C('Brand'), R('7-day spend'), R('Trailing avg'), R('Change')],
+          [C('Brand'), R('7-day spend', 'rf.spend7'), R('Trailing avg', 'rf.trailingAvg'),
+           R('Change', 'rf.change')],
           arfPacingRow)
       ].join('');
     }
 
     // Column definitions. Numbers right-align so they can be compared down the
-    // column, which is the only reason to use a table here at all.
-    function C(label) { return { label, align: 'left' }; }
-    function R(label) { return { label, align: 'right' }; }
+    // column, which is the only reason to use a table here at all. `tip` is a
+    // glossary key, for a column whose meaning is not obvious from its name.
+    function C(label, tip) { return { label, align: 'left', tip }; }
+    function R(label, tip) { return { label, align: 'right', tip }; }
 
     // "with 'No flags' written for any check that did not trigger"
     function arfSection(title, rows, guidance, cols, rowFn) {
@@ -400,7 +404,8 @@
         <div class="arf-table-wrap">
           <table class="table-fill arf-table">
             <thead><tr>${cols.map(c =>
-              `<th${c.align === 'right' ? ' class="arf-r"' : ''}>${c.label}</th>`).join('')}</tr></thead>
+              `<th${c.align === 'right' ? ' class="arf-r"' : ''}>${c.label}${
+                c.tip ? adTip(c.tip) : ''}</th>`).join('')}</tr></thead>
             <tbody>${list.map(rowFn).join('')}</tbody>
           </table>
         </div>

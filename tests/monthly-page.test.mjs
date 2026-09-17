@@ -78,7 +78,7 @@ function boot({ saved = {}, failFor = [], sbRows = [], updateReply = null } = {}
   `;
   const factory = new Function(
     'document', 'fetch', 'localStorage', 'accessToken', 'escapeHtml', 'formatNumber',
-    '_svTimeAgo', 'CSS', 'setTimeout', 'clearTimeout', 'console',
+    '_svTimeAgo', 'CSS', 'setTimeout', 'clearTimeout', 'console', 'adTip',
     `${src}\n${epilogue}`
   );
   const api = factory(
@@ -90,7 +90,9 @@ function boot({ saved = {}, failFor = [], sbRows = [], updateReply = null } = {}
     (x) => String(x), (x) => String(x), () => 'just now',
     { escape: (x) => String(x) },
     (fn, ms) => globalThis.setTimeout(fn, ms), (t) => globalThis.clearTimeout(t),
-    { ...console, error: () => {} }
+    { ...console, error: () => {} },
+    // From ad-glossary.js. The icons are not under test here.
+    () => ''
   );
   return { api, posts, updates, state, fire };
 }

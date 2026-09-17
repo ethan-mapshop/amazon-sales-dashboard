@@ -14,13 +14,13 @@
 
     const ACO_COLUMNS = [
       { field: 'name',            label: 'Campaign',      editable: 'text' },
-      { field: 'campaignType',    label: 'Type',          filter: true },
-      { field: 'adProduct',       label: 'Ad',            filter: true },
+      { field: 'campaignType',    label: 'Type',          filter: true, tip: 'aco.type' },
+      { field: 'adProduct',       label: 'Ad',            filter: true, tip: 'aco.ad' },
       { field: 'state',           label: 'State',         filter: true, editable: 'state' },
-      { field: 'brand',           label: 'Brand',         filter: true, editable: 'brand' },
-      { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money', editable: 'money' },
-      { field: 'biddingStrategy', label: 'Bidding',       editable: 'bidding' },
-      { field: 'placements',      label: 'Placements',    format: 'placements', editable: 'placements' },
+      { field: 'brand',           label: 'Brand',         filter: true, editable: 'brand', tip: 'aco.brand' },
+      { field: 'dailyBudget',     label: 'Daily budget',  align: 'right', mono: true, format: 'money', editable: 'money', tip: 'aco.dailyBudget' },
+      { field: 'biddingStrategy', label: 'Bidding',       editable: 'bidding', tip: 'aco.bidding' },
+      { field: 'placements',      label: 'Placements',    format: 'placements', editable: 'placements', tip: 'aco.placements' },
       // Hidden rather than deleted: gone from the table, still in the CSV.
       { field: 'startDate',       label: 'Started',       hidden: true },
       // Present in the CSV, absent from the table. Without ids an export can't
@@ -456,7 +456,8 @@
       });
 
       const head = `<thead><tr>${ACO_VISIBLE.map(c =>
-        `<th style="text-align: ${c.align === 'right' ? 'right' : 'left'};">${escapeHtml(c.label)}</th>`).join('')}</tr></thead>`;
+        `<th style="text-align: ${c.align === 'right' ? 'right' : 'left'};">${escapeHtml(c.label)}${
+          c.tip ? adTip(c.tip) : ''}</th>`).join('')}</tr></thead>`;
 
       const body = ordered.map(([pfId, rows]) => {
         const pf = pfById.get(pfId);

@@ -2199,3 +2199,55 @@
     }
 
     .bw-spacer { flex: 1; }
+
+    /* Definition icons on the Ad Admin pages. Sized to the text beside it, so
+       it sits in a 0.7rem uppercase header or a heading without resizing
+       either. The bubble is attached to <body>, outside any table. */
+    .adg-tip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.1em;
+      height: 1.1em;
+      margin-left: 0.35em;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 0.85em;
+      font-style: italic;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0;
+      text-transform: none;
+      vertical-align: 0.1em;
+      opacity: 0.55;
+      cursor: help;
+      user-select: none;
+    }
+
+    .adg-tip:hover,
+    .adg-tip:focus-visible {
+      opacity: 1;
+      color: var(--accent-orange);
+      outline: none;
+    }
+
+    .adg-bubble {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      max-width: min(22rem, calc(100vw - 16px));
+      padding: 0.55rem 0.7rem;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+      color: var(--text-primary);
+      font-family: 'Work Sans', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 400;
+      line-height: 1.45;
+      text-align: left;
+      white-space: pre-line;
+      pointer-events: none;
+    }
