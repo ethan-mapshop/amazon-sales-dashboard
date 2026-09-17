@@ -127,13 +127,18 @@
     // The icon, placed straight after a label. The key goes in the markup and
     // the text is looked up on hover, so a table header stays short. An unknown
     // key renders nothing rather than an icon with no definition behind it.
+    //
+    // The icon is a box of its own, and a browser will break a line before a
+    // box, so a narrow column would drop it under its label. The word joiner
+    // (&#8288;, invisible) removes that break. The header's own words still
+    // wrap; the icon just travels with the last one.
     function adTip(key) {
       const text = AD_TERMS[key];
       if (!text) {
         console.warn('[ADG] no definition for', key);
         return '';
       }
-      return `<span class="adg-tip" tabindex="0" role="button" data-adg="${escapeHtml(key)}"` +
+      return `&#8288;<span class="adg-tip" tabindex="0" role="button" data-adg="${escapeHtml(key)}"` +
              ` aria-label="${escapeHtml(text)}">i</span>`;
     }
 

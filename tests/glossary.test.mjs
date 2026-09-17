@@ -98,6 +98,9 @@ console.log('\nTHE ICON');
   const html = G.adTip('rf.bid');
   ok(/data-adg="rf\.bid"/.test(html) && /tabindex="0"/.test(html),
      'carries its key, and can be reached with the keyboard');
+  ok(html.startsWith('&#8288;<span'),
+     'is joined to the word before it',
+     'without the word joiner a narrow column drops the icon onto a line of its own');
   const label = (html.match(/aria-label="([^"]*)"/) || [])[1] || '';
   ok(label.includes('&#39;') && !label.includes("'"),
      'the definition in aria-label is escaped', 'rf.bid contains an apostrophe');
