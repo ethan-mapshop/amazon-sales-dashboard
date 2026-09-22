@@ -520,7 +520,8 @@
         <td class="arf-r">${bwPct(r.acos)}</td>
         <td class="arf-r arf-em">${bwPct(r.retention)}</td>
         <td class="arf-r">${r.cappedDays === null ? '—' : `${r.cappedDays} of ${r.weekDays}`}</td>
-        <td><span class="bw-tag ${cls}">${BW_ACTION_LABEL[r.action]}${pct}</span></td>
+        <td><span class="bw-tag ${cls}">${
+          BW_ACTION_LABEL[r.action] || escapeHtml(r.action || '—')}${pct}</span></td>
         <td class="arf-r">${bwMoney(r.dailyBudget)}</td>
         <td class="arf-r arf-em">${r.newBudget === null ? '—' : bwMoney(r.newBudget)}</td>
         <td class="arf-r arf-action">${bwApplyCell(r)}</td>
