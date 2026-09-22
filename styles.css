@@ -6,6 +6,9 @@
       --bg-card: #232936;
       --accent-orange: #ff6b35;
       --accent-blue: #004e89;
+      /* --accent-blue is a fill colour; at 4.5:1 against the card it is not
+         legible as text. This is the readable blue for a label. */
+      --accent-sky: #6ea8fe;
       --accent-yellow: #ffc857;
       --accent-green: #06d6a0;
       --text-primary: #f7f7f2;
@@ -1974,6 +1977,10 @@
     .bw-down { color: var(--warning); border-color: var(--warning); }
     .bw-cut  { color: var(--error);   border-color: var(--error); }
     .bw-hold { opacity: 0.7; }
+    /* Already acted on. Blue reads as "done" rather than as another direction
+       to move the budget, which is the whole point of it having its own
+       status. */
+    .bw-adjusted { color: var(--accent-sky); border-color: var(--accent-sky); }
 
     .bw-tag {
       display: inline-block;

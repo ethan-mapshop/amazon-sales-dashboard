@@ -357,6 +357,7 @@
             ${pill(c.decrease, 'decrease', 'bw-down')}
             ${pill(c.cut, 'cut', 'bw-cut')}
             ${pill(c.hold, 'hold', 'bw-hold')}
+            ${c.adjusted ? pill(c.adjusted, 'adjusted', 'bw-adjusted') : ''}
           </div>
           <div class="bw-window">
             14 days to ${escapeHtml(w.end)} · prior ${escapeHtml(w.priorStart)}&ndash;${escapeHtml(w.priorEnd)}
@@ -491,13 +492,15 @@
     // losing money or not converting at all, Decrease means underperforming.
     // Neither goes straight to the floor any more.
     const BW_ACTION_LABEL = {
-      increase: 'Increase', decrease: 'Decrease', hold: 'Hold', cut: 'Cut'
+      increase: 'Increase', decrease: 'Decrease', hold: 'Hold', cut: 'Cut',
+      adjusted: 'Adjusted'
     };
 
     function bwRow(r) {
       const cls = r.action === 'increase' ? 'bw-up'
                 : r.action === 'decrease' ? 'bw-down'
-                : r.action === 'cut' ? 'bw-cut' : 'bw-hold';
+                : r.action === 'cut' ? 'bw-cut'
+                : r.action === 'adjusted' ? 'bw-adjusted' : 'bw-hold';
       const pct = r.pct ? ` ${r.pct > 0 ? '+' : ''}${Math.round(r.pct * 100)}%` : '';
       return `<tr>
         <td class="bw-tick">${bwApplicable(r)
@@ -519,7 +522,7 @@
         <td class="arf-r">${r.cappedDays === null ? '—' : `${r.cappedDays} of ${r.weekDays}`}</td>
         <td><span class="bw-tag ${cls}">${BW_ACTION_LABEL[r.action]}${pct}</span></td>
         <td class="arf-r">${bwMoney(r.dailyBudget)}</td>
-        <td class="arf-r arf-em">${r.action === 'hold' ? '—' : bwMoney(r.newBudget)}</td>
+        <td class="arf-r arf-em">${r.newBudget === null ? '—' : bwMoney(r.newBudget)}</td>
         <td class="arf-r arf-action">${bwApplyCell(r)}</td>
       </tr>`;
     }
@@ -531,6 +534,9 @@
       const st = bwApply[r.campaignId] || {};
       const id = escapeHtml(r.campaignId);
       if (st.stage === 'done') return `<span class="arf-applied">&#10003; ${bwMoney(st.applied)}</span>`;
+      if (r.adjusted) {
+        return `<span class="arf-applied">&#10003; ${bwMoney(r.adjusted.to)}</span>`;
+      }
       if (r.action === 'hold' || r.newBudget === null || r.newBudget === r.dailyBudget) {
         return '<span class="arf-muted">—</span>';
       }

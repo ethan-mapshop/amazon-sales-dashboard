@@ -157,6 +157,109 @@ ok(nb(1.2, { action: 'decrease', pct: -0.40 }) === 1,
 ok(nb(10, { action: 'hold', pct: 0 }) === 10, 'a hold does not move the budget');
 ok(nb(null, { action: 'increase', pct: 0.5 }) === null, 'no current budget, no new one');
 
+console.log('\nADJUSTED  \u2014 a budget already changed since these days ended');
+
+// The window being judged. A change dated after WIN.end means every day in the
+// run predates it.
+const AWIN = { start: '2026-09-01', end: '2026-09-14',
+               priorStart: '2026-08-18', priorEnd: '2026-08-31' };
+
+const chg = (o = {}) => ({
+  campaignId: o.campaignId || '1', field: o.field || 'dailyBudget',
+  from: o.from === undefined ? 17.6 : o.from,
+  to: o.to === undefined ? 10.56 : o.to,
+  ptDate: o.ptDate || '2026-09-22'
+});
+
+{
+  const a = M.bwAdjustedAfter([chg()], AWIN.end);
+  ok(a['1'] && a['1'].from === 17.6 && a['1'].to === 10.56 && a['1'].ptDate === '2026-09-22',
+     'a budget change after the window is found, with what it moved from and to');
+}
+
+{
+  ok(!M.bwAdjustedAfter([chg({ ptDate: '2026-09-14' })], AWIN.end)['1'],
+     'a change on the last day judged is inside the window, not after it',
+     'those days already reflect it, so it is evidence rather than an action');
+  ok(!M.bwAdjustedAfter([chg({ ptDate: '2026-09-08' })], AWIN.end)['1'],
+     'and one from the middle of the window is not an adjustment either');
+}
+
+{
+  const a = M.bwAdjustedAfter([chg({ ptDate: '2026-09-16' }), chg({ ptDate: '2026-09-22', to: 8 }),
+                               chg({ ptDate: '2026-09-19', to: 9 })], AWIN.end);
+  ok(a['1'].ptDate === '2026-09-22' && a['1'].to === 8,
+     'the most recent change is the one that counts');
+}
+
+{
+  ok(!M.bwAdjustedAfter([chg({ field: 'state', to: 'PAUSED' })], AWIN.end)['1'],
+     'a change to something other than the budget is not a budget adjustment');
+  ok(!M.bwAdjustedAfter([chg({ from: 10, to: 10 })], AWIN.end)['1'],
+     'and a change that moved nothing is not one either');
+  ok(Object.keys(M.bwAdjustedAfter(undefined, AWIN.end)).length === 0 &&
+     Object.keys(M.bwAdjustedAfter([chg()], null)).length === 0,
+     'no change log, or no window, yields nothing');
+}
+
+console.log('\n  through bwDecideAll  \u2014 its own status, and the row is locked');
+
+// A campaign the tree cuts: $108 spent against $40 of sales is far below
+// break-even. The prior fortnight was healthy, so this is a single bad
+// fortnight and the cut is -40% rather than the confirmed -70%.
+const bleeding = {
+  campaignId: '1', spend: 108.59, sales: 39.96, orders: 4, clicks: 60, impressions: 4000,
+  priorSpend: 30, priorSales: 300, priorOrders: 20, daily: []
+};
+const aCensus = (budget) => ({ campaigns: [{
+  campaignId: '1', name: 'SOK World Peters (Broad)', adProduct: 'SP', state: 'ENABLED',
+  dailyBudget: budget, budgetType: 'DAILY', brand: 'South of Kings', portfolioId: 'pf1'
+}] });
+
+{
+  const plain = M.bwDecideAll({ inputs: [bleeding], census: aCensus(17.6), window: AWIN });
+  ok(plain.rows[0].action === 'cut' && plain.rows[0].newBudget === 10.56,
+     'without a change it is a cut, $17.60 to $10.56', String(plain.rows[0].newBudget));
+
+  const r = M.bwDecideAll({ inputs: [bleeding], census: aCensus(10.56), window: AWIN,
+                            adjusted: M.bwAdjustedAfter([chg()], AWIN.end) });
+  const row = r.rows[0];
+  ok(row.action === 'adjusted',
+     'once it has been changed the status is Adjusted, not Hold',
+     'a hold says the numbers argue for leaving it alone; this says the numbers predate you');
+  ok(row.newBudget === null,
+     'with no budget offered, so the same evidence cannot be applied twice');
+  ok(row.adjusted && row.adjusted.to === 10.56, 'the row carries the change it is reporting');
+  ok(/17\.6/.test(row.reason) && /10\.56/.test(row.reason) && /2026-09-22/.test(row.reason),
+     'and the reason names both budgets and the date', row.reason);
+  ok(r.counts.adjusted === 1 && r.counts.cut === 0,
+     'it is counted as adjusted rather than as work still to do');
+}
+
+{
+  // Run again a week later, which is the point of the lock: the window has
+  // moved by 7 days but still ends before the change.
+  const nextWeek = { start: '2026-09-08', end: '2026-09-21',
+                     priorStart: '2026-08-25', priorEnd: '2026-09-07' };
+  const r = M.bwDecideAll({ inputs: [bleeding], census: aCensus(10.56), window: nextWeek,
+                            adjusted: M.bwAdjustedAfter([chg()], nextWeek.end) });
+  ok(r.rows[0].action === 'adjusted' && r.rows[0].newBudget === null,
+     'a weekly run a week later still shows it as adjusted',
+     'this is what makes running every week safe on a fortnightly cadence');
+}
+
+{
+  // The fortnight after: the window now covers days at the new budget.
+  const later = { start: '2026-09-15', end: '2026-09-28',
+                  priorStart: '2026-09-01', priorEnd: '2026-09-14' };
+  const r = M.bwDecideAll({ inputs: [bleeding], census: aCensus(10.56), window: later,
+                            adjusted: M.bwAdjustedAfter([chg()], later.end) });
+  ok(r.rows[0].action === 'cut', 'when the window catches up the campaign is actionable again');
+  ok(r.rows[0].newBudget === 6.34,
+     'and the next cut is measured from the budget it has now',
+     '$10.56, not the $17.60 it started at');
+}
+
 console.log('\nWINDOW  — lagged past attribution, both halves in one pull');
 const w = M.resolveBiweeklyWindow(new Date('2026-09-10T12:00:00Z'));
 ok(w.end === '2026-09-02', 'the window ends 8 days back, so every day is settled', w.end);

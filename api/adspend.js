@@ -2392,6 +2392,11 @@ function bwDecide(c, posture = 'hold') {
 }
 
 // "Round to the nearest dollar (never round below the $1 floor)."
+// $17.60, $10, never $10.00 — this reads inside a sentence.
+function bwDollars(n) {
+  return '$' + Number(n).toFixed(2).replace(/\.00$/, '');
+}
+
 function bwNewBudget(current, decision) {
   if (!(current > 0)) return null;
   if (decision.action === 'hold' || !decision.pct) return current;
@@ -2471,7 +2476,8 @@ function bwBuildInputs({ census, rows, window }) {
 // Every enabled campaign gets a row - the doc's output is the whole account,
 // not a flag list. Pure, so the tree can be exercised against the doc offline
 // and re-run against stored inputs without touching Amazon.
-function bwDecideAll({ inputs, census, window, postures = {}, recentRaises = {} }) {
+function bwDecideAll({ inputs, census, window, postures = {}, recentRaises = {},
+                      adjusted = {} }) {
   const retentionOf = (margin, spend, sales) => {
     if (!margin || !(sales > 0)) return null;
     return r4((margin - spend / sales) / margin);
@@ -2524,8 +2530,19 @@ function bwDecideAll({ inputs, census, window, postures = {}, recentRaises = {} 
     }
 
     const posture = BW_POSTURES.includes(postures[c.brand]) ? postures[c.brand] : 'hold';
-    const decision = bwDecide(c, posture);
-    const newBudget = bwNewBudget(c.dailyBudget, decision);
+    // Already adjusted since these 14 days ended. That is its own status, not a
+    // hold: a hold says the numbers argue for leaving it alone, and this says
+    // the numbers are from before you changed it. No budget is offered, so the
+    // row cannot be applied twice on the same evidence — the run can be made
+    // weekly without any campaign being cut two weeks running.
+    const change = adjusted[String(c.campaignId)] || null;
+    const decision = change
+      ? { action: 'adjusted', pct: 0, tier: 'adjusted',
+          reason: `Budget changed ${bwDollars(change.from)} to ${bwDollars(change.to)} on ` +
+                  `${change.ptDate}, after this window. Every day judged here is from ` +
+                  'before that change.' }
+      : bwDecide(c, posture);
+    const newBudget = change ? null : bwNewBudget(c.dailyBudget, decision);
     const delta = (newBudget !== null && c.dailyBudget !== null) ? r2(newBudget - c.dailyBudget) : 0;
 
     out.push({
@@ -2538,6 +2555,7 @@ function bwDecideAll({ inputs, census, window, postures = {}, recentRaises = {} 
       cappedDays: c.cappedDays, weekDays: BW_CONFIG.WINDOW_DAYS, capped: c.capped,
       action: decision.action, pct: decision.pct, tier: decision.tier,
       reason: decision.reason,
+      adjusted: change,
       newBudget, delta,
       // The weekly can raise a budget on the same campaign from a different
       // window. Applying both compounds them, so a recent raise is surfaced
@@ -2553,7 +2571,7 @@ function bwDecideAll({ inputs, census, window, postures = {}, recentRaises = {} 
   out.sort((a, b) => String(a.campaign || '').localeCompare(String(b.campaign || ''),
                                                             'en', { numeric: true }));
 
-  const counts = { increase: 0, decrease: 0, hold: 0, cut: 0 };
+  const counts = { increase: 0, decrease: 0, hold: 0, cut: 0, adjusted: 0 };
   for (const r of out) counts[r.action]++;
 
   // Brand summary. The doc asks for an SP/SB split, but with SB reviewed
@@ -2649,6 +2667,29 @@ async function bwLoadRun() {
 }
 
 
+
+// Budget changes made AFTER the last day being judged, in either direction and
+// from any source — this tool, either cadence, or Amazon's console, since the
+// census diff sees them all. Every day in the window predates such a change, so
+// the campaign has already been acted on and its row is locked for this run.
+//
+// Keyed by campaign, most recent change per campaign. A change on the window's
+// last day is inside the window, not after it.
+function bwAdjustedAfter(changes, windowEnd) {
+  const out = {};
+  if (!windowEnd) return out;
+  for (const r of (changes || [])) {
+    if (!r || r.field !== 'dailyBudget') continue;
+    if (!(String(r.ptDate || '') > windowEnd)) continue;
+    const from = Number(r.from), to = Number(r.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) continue;
+    const prev = out[String(r.campaignId)];
+    if (!prev || String(r.ptDate) > prev.ptDate) {
+      out[String(r.campaignId)] = { from, to, ptDate: String(r.ptDate) };
+    }
+  }
+  return out;
+}
 
 // Budget raises this tool made in the last fortnight, so the bi-weekly can say
 // so before recommending another. Read from the census change log, which
@@ -2793,7 +2834,8 @@ async function handleBiweeklyCollect(req, res) {
 
     const result = bwDecideAll({
       inputs, census, window, postures,
-      recentRaises: bwRecentRaises(census.changes, window)
+      recentRaises: bwRecentRaises(census.changes, window),
+      adjusted: bwAdjustedAfter(census.changes, window.end)
     });
     result.coverage.orphanRows = orphanRows;
 
@@ -2835,7 +2877,8 @@ async function handleBiweeklyGet(req, res) {
 
     const result = bwDecideAll({
       inputs: run.inputs, census, window: run.window, postures,
-      recentRaises: bwRecentRaises(census.changes, run.window)
+      recentRaises: bwRecentRaises(census.changes, run.window),
+      adjusted: bwAdjustedAfter(census.changes, run.window.end)
     });
 
     // Normally null: the cron adopts what it fetches, so the stored fetch and
@@ -4013,7 +4056,8 @@ function adsCronReport(s) {
       lines.push(`• Bi-weekly budgets — adopted, ${plural(changes, 'change')} ` +
                  `across ${b.evaluated} campaigns, ${b.window.start} to ${b.window.end}`);
       lines.push(`    increase ${c.increase} · decrease ${c.decrease} · ` +
-                 `cut ${c.cut} · hold ${c.hold}`);
+                 `cut ${c.cut} · hold ${c.hold}` +
+                 (c.adjusted ? ` · ${c.adjusted} already adjusted` : ''));
     } else {
       lines.push('• Bi-weekly budgets — nothing was stored for ' +
                  `${b.window.start} to ${b.window.end}`);
@@ -4091,7 +4135,8 @@ async function bwCronSummary({ window, inputs, census, adopted }) {
   const postures = await bwLoadPostures();
   const result = bwDecideAll({
     inputs, census, window, postures,
-    recentRaises: bwRecentRaises(census.changes, window)
+    recentRaises: bwRecentRaises(census.changes, window),
+    adjusted: bwAdjustedAfter(census.changes, window.end)
   });
   return { window, adopted: true, counts: result.counts, evaluated: result.rows.length };
 }
@@ -4935,7 +4980,8 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
          bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
-         bwSaveAvailable, bwLoadAvailable, bwAdoptLatest, adsCronIsRunDay, adsCronReport,
+         bwSaveAvailable, bwLoadAvailable, bwAdoptLatest, bwAdjustedAfter,
+         adsCronIsRunDay, adsCronReport,
          moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
          moLoadBrandSales, moIsWholeMonth, moShiftMonth, moMonthBounds,
          moCronReport, moMonthLabel, moAvailability, moUnavailableReason,

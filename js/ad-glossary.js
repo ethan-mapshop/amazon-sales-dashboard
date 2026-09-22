@@ -89,7 +89,11 @@
                    '+50% at 75%. At cap but under 25% holds.\n' +
                    'Decrease: retention under 10% (−40%), under 25% (−25%), or under 50% and ' +
                    'down more than 5 points on the prior 14 days (−15%).\n' +
-                   'Hold: anything else.',
+                   'Hold: anything else.\n' +
+                   'Adjusted: the budget was changed after these 14 days ended, by either ' +
+                   'cadence or in Amazon itself. Every day judged here is from before that ' +
+                   'change, so the row is locked until the window catches up. This is why the ' +
+                   'run can be made weekly without cutting the same campaign two weeks running.',
       'bw.budget': 'The campaign\'s daily budget in Amazon now.',
       'bw.new': 'The recommended daily budget. Never below $1.',
 
