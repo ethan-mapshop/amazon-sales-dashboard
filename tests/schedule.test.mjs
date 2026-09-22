@@ -39,10 +39,11 @@ ok(M.adsCronIsRunDay(new Date('2026-09-08T01:00:00Z')) === false,
    'and Monday evening Pacific is still Monday',
    'the case a UTC-naive check would fire a day early on');
 
-console.log('\nbwAdoptIfDue  — a fortnight of evidence, or ask first');
+console.log('\nbwAdoptLatest  \u2014 every Tuesday fetch becomes what the page decides from');
 
 const inputs = [{ campaignId: '1', spend: 100, orders: 10 }];
 const win = { start: '2026-08-25', end: '2026-09-07' };
+const older = { start: '2026-08-11', end: '2026-08-24' };
 const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
 
 const reset = (avail, run) => {
@@ -53,67 +54,39 @@ const reset = (avail, run) => {
 
 {
   reset(null, null);
-  ok(await M.bwAdoptIfDue() === false, 'nothing fetched, nothing to adopt');
+  ok(await M.bwAdoptLatest() === false, 'nothing fetched, nothing to adopt');
+  ok(await M.bwLoadRun() === null, 'and the page keeps whatever it had');
 }
 
 {
   reset({ window: win, inputs, fetchedAt: daysAgo(0) }, null);
-  const adopted = await M.bwAdoptIfDue();
-  ok(adopted === true, 'the first fetch is adopted outright',
-     'there is nothing on screen for it to overwrite');
+  ok(await M.bwAdoptLatest() === true, 'the first fetch is adopted');
   ok((await kv.get('biweekly:lastrun')).inputs.length === 1, 'and is what the page now decides from');
 }
 
 {
+  // The case the old 13-day clock refused. The cadence is when you sit down to
+  // act; it is not a reason to show numbers a fortnight old in the meantime.
   reset({ window: win, inputs, fetchedAt: daysAgo(0) },
-        { window: win, inputs, collectedAt: daysAgo(7), adoptedAt: daysAgo(7) });
-  ok(await M.bwAdoptIfDue() === false,
-     'a week into the fortnight it is offered, not taken',
-     'this is the week the import button covers');
+        { window: older, inputs: [{ campaignId: '9', spend: 5, orders: 0 }],
+          collectedAt: daysAgo(7), adoptedAt: daysAgo(7) });
+  ok(await M.bwAdoptLatest() === true, 'a fetch a week after the last one is adopted too');
+  const run = await kv.get('biweekly:lastrun');
+  ok(run.window.end === win.end && run.inputs[0].campaignId === '1',
+     'replacing the week-old run with the new window and its rows',
+     `${run.window.start} to ${run.window.end}`);
+  ok(run.collectedAt === (await kv.get('biweekly:available')).fetchedAt,
+     'stamped with when the reports were pulled, not when they were adopted',
+     'the page dates the run by the data, which is what went stale');
 }
 
 {
+  // An off-cycle run earlier today, then the cron. Same data either way.
   reset({ window: win, inputs, fetchedAt: daysAgo(0) },
-        { window: win, inputs, collectedAt: daysAgo(14), adoptedAt: daysAgo(14) });
-  ok(await M.bwAdoptIfDue() === true, 'a fortnight later it is adopted on schedule');
-}
-
-{
-  // 13 days, not 14: the cron runs weekly, so a fortnight lands on day 14 only
-  // if the clock never drifts. A 13-day bar makes the every-other-Tuesday
-  // rhythm hold instead of slipping a week each time.
-  reset({ window: win, inputs, fetchedAt: daysAgo(0) },
-        { window: win, inputs, collectedAt: daysAgo(13.2), adoptedAt: daysAgo(13.2) });
-  ok(await M.bwAdoptIfDue() === true,
-     'thirteen days is enough, so the rhythm does not slip a week',
-     'a 14-day bar would push every other run to the following fortnight');
-}
-
-{
-  // A missed cron: nothing was adopted last fortnight, and the gap is now long.
-  reset({ window: win, inputs, fetchedAt: daysAgo(0) },
-        { window: win, inputs, collectedAt: daysAgo(30), adoptedAt: daysAgo(30) });
-  ok(await M.bwAdoptIfDue() === true,
-     'a missed run is picked up the following week rather than skipped');
-}
-
-{
-  // Imported off-cycle two days ago. The clock runs from the ADOPTION, so the
-  // next automatic adoption is a fortnight from the import, not from the cron.
-  reset({ window: win, inputs, fetchedAt: daysAgo(0) },
-        { window: win, inputs, collectedAt: daysAgo(20), adoptedAt: daysAgo(2) });
-  ok(await M.bwAdoptIfDue() === false,
-     'an off-cycle import resets the clock',
-     'otherwise importing during a peak would be undone by the next cron');
-}
-
-{
-  // A run with no adoptedAt at all — written before the field existed.
-  reset({ window: win, inputs, fetchedAt: daysAgo(0) },
-        { window: win, inputs, collectedAt: daysAgo(20) });
-  ok(await M.bwAdoptIfDue() === true,
-     'a run predating the field falls back to when it was collected',
-     'no migration needed, and no fortnight silently skipped');
+        { window: win, inputs, collectedAt: daysAgo(0), adoptedAt: daysAgo(0) });
+  ok(await M.bwAdoptLatest() === true,
+     'adopting again over the same window is allowed',
+     'it writes the same numbers, so there is nothing to protect against');
 }
 
 console.log('\nbwSaveAvailable / bwLoadAvailable  — the fetch is kept apart from the run');
@@ -122,10 +95,10 @@ console.log('\nbwSaveAvailable / bwLoadAvailable  — the fetch is kept apart fr
   kv.store.clear();
   await M.bwSaveAvailable(win, inputs);
   ok(await M.bwLoadRun() === null,
-     'storing a fetch does not touch what the page is deciding from',
-     'the separation IS the mid-fortnight guarantee');
+     'storing a fetch does not by itself touch what the page is deciding from',
+     'the cron stores then adopts, so a fetch holding nothing cannot blank the page');
   const a = await M.bwLoadAvailable();
-  ok(!!a && !!a.fetchedAt, 'and the fetch is timestamped so the banner can date it');
+  ok(!!a && !!a.fetchedAt, 'and the fetch is timestamped, which is what dates the run');
 }
 
 {
@@ -133,7 +106,7 @@ console.log('\nbwSaveAvailable / bwLoadAvailable  — the fetch is kept apart fr
   await M.bwSaveAvailable(win, []);
   ok(await M.bwLoadAvailable() === null,
      'an empty fetch reads back as nothing rather than as an empty result',
-     'a collect that returned no rows must not be offered for import');
+     'a collect that returned no rows must not replace a run that has some');
 }
 
 console.log('\nadsCronReport  \u2014 what the Tuesday message actually says');
@@ -152,7 +125,7 @@ const weeklyPart = (over = {}) => ({
 });
 const bwAdopted = { window: BWIN, adopted: true, evaluated: 138,
                     counts: { increase: 9, decrease: 11, cut: 3, hold: 115 } };
-const bwOffered = { window: BWIN, adopted: false, daysUntilAdopt: 7 };
+const bwOffered = { window: BWIN, adopted: false };
 
 {
   const r = M.adsCronReport({ weekly: weeklyPart(), biweekly: bwAdopted });
@@ -172,11 +145,11 @@ const bwOffered = { window: BWIN, adopted: false, daysUntilAdopt: 7 };
 
 {
   const r = M.adsCronReport({ weekly: weeklyPart(), biweekly: bwOffered });
-  ok(r.outcome === 'ok', 'offered rather than adopted is still a complete run');
-  ok(r.text.includes('ready to import') && r.text.includes('in 7 days'),
-     'and says so, with when it would be taken automatically');
+  ok(r.outcome === 'ok', 'a bi-weekly that stored nothing is still a complete run');
+  ok(r.text.includes('nothing was stored') && r.text.includes('previous run'),
+     'and says the page is still on the run before it');
   ok(!/increase \d/.test(r.text),
-     'without action counts for data nothing is deciding from yet',
+     'without action counts for data that was never stored',
      'those numbers would describe a page nobody is looking at');
 }
 

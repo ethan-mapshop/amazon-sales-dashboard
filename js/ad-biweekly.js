@@ -365,10 +365,9 @@
         </div>`;
     }
 
-    // Fresh data is offered, not imposed: adopting it mid-fortnight would change
-    // every recommendation without asking. The scheduled run adopts on its own
-    // once a fortnight has passed, and this is the off-cycle path — a seasonal
-    // peak week, say — without a special case in the schedule.
+    // The Tuesday cron adopts every fetch it makes, so this normally has
+    // nothing to show. It appears when a fetch was stored but adopting it
+    // failed, and is the one-button way to finish that job by hand.
     function bwNewerBanner(data) {
       if (!data.newer) return '';
       const w = data.newer.window || {};

@@ -2242,13 +2242,7 @@ const BW_CONFIG = {
   // Capped, carried over from the weekly: the doc asks for time-in-budget,
   // which Amazon exposes only in the console Budget Report.
   CAP_DAY_RATIO:       0.95,
-  CAP_DAYS_MIN:        8,     // of 14, the same proportion the weekly uses
-  // The cron fetches every Tuesday; this cadence acts every other one. Fresh
-  // data is adopted automatically once a fortnight has passed and is otherwise
-  // offered for import, so an off-cycle run during a seasonal peak is a choice
-  // rather than a special case. Measured from the last ADOPTION, so a missed
-  // cron is picked up the following week instead of skipping a fortnight.
-  ADOPT_AFTER_DAYS:    13
+  CAP_DAYS_MIN:        8     // of 14, the same proportion the weekly uses
 };
 
 // The ladders the monthly posture shifts along. "Scale brands get one tier of
@@ -2615,18 +2609,13 @@ async function bwLoadAvailable() {
   }
 }
 
-// Adopts the latest fetch when a fortnight has passed since the last adoption,
-// or when there is nothing adopted at all. Returns whether it did.
-async function bwAdoptIfDue() {
-  const [available, run] = await Promise.all([bwLoadAvailable(), bwLoadRun()]);
+// Adopts the latest fetch, every time there is one. The page always decides
+// from the most recent 14 days rather than from whatever was current a
+// fortnight ago. Returns whether it did, which is false only when the fetch
+// itself produced nothing.
+async function bwAdoptLatest() {
+  const available = await bwLoadAvailable();
   if (!available) return false;
-  if (!run) {
-    await bwSaveRun(available.window, available.inputs, available.fetchedAt);
-    return true;
-  }
-  const since = Date.parse(run.adoptedAt || run.collectedAt || 0);
-  const days = (Date.now() - since) / 86400000;
-  if (!Number.isFinite(days) || days < BW_CONFIG.ADOPT_AFTER_DAYS) return false;
   await bwSaveRun(available.window, available.inputs, available.fetchedAt);
   return true;
 }
@@ -2831,8 +2820,9 @@ async function handleBiweeklyGet(req, res) {
       recentRaises: bwRecentRaises(census.changes, run.window)
     });
 
-    // Newer data is offered, never imposed: adopting it mid-fortnight would
-    // change every recommendation under you without asking.
+    // Normally null: the cron adopts what it fetches, so the stored fetch and
+    // the run are the same. Non-null means a fetch was stored but not adopted,
+    // and the page offers the button that finishes it.
     const newer = available && Date.parse(available.fetchedAt) > Date.parse(run.collectedAt || 0)
       ? { fetchedAt: available.fetchedAt, window: available.window }
       : null;
@@ -4007,11 +3997,9 @@ function adsCronReport(s) {
       lines.push(`    increase ${c.increase} · decrease ${c.decrease} · ` +
                  `cut ${c.cut} · hold ${c.hold}`);
     } else {
-      lines.push('• Bi-weekly budgets — fresh data ready to import, ' +
+      lines.push('• Bi-weekly budgets — nothing was stored for ' +
                  `${b.window.start} to ${b.window.end}`);
-      lines.push(b.daysUntilAdopt > 0
-        ? `    Adopted on its own in ${plural(b.daysUntilAdopt, 'day')}, or import it now to act early.`
-        : '    Import it from the dashboard to decide from it.');
+      lines.push('    The page is still deciding from the previous run.');
     }
   }
 
@@ -4077,18 +4065,11 @@ async function adsCronNotify(summary, pending) {
   return outcome;
 }
 
-// Counts for the bi-weekly line. Only meaningful once the data is ADOPTED: an
-// unadopted fetch drives no recommendation yet, so reporting its action counts
-// would describe something nobody is looking at.
+// Counts for the bi-weekly line. Adoption is the normal path, so `adopted`
+// false means the fetch stored nothing — there is no recommendation to count
+// and the line says so instead of printing zeroes.
 async function bwCronSummary({ window, inputs, census, adopted }) {
-  if (!adopted) {
-    const run = await bwLoadRun();
-    const since = Date.parse((run && (run.adoptedAt || run.collectedAt)) || 0);
-    const left = Number.isFinite(since)
-      ? Math.ceil(BW_CONFIG.ADOPT_AFTER_DAYS - (Date.now() - since) / 86400000)
-      : 0;
-    return { window, adopted: false, daysUntilAdopt: Math.max(0, left) };
-  }
+  if (!adopted) return { window, adopted: false };
   const postures = await bwLoadPostures();
   const result = bwDecideAll({
     inputs, census, window, postures,
@@ -4252,11 +4233,10 @@ async function handleCronAdsCollect(req, res) {
     if (rowsByKey.spBw) {
       const { inputs } = bwBuildInputs({ census, rows: rowsByKey.spBw, window: pending.biweekly });
       await bwSaveAvailable(pending.biweekly, inputs);
-      // The bi-weekly is an action cadence on a fortnightly rhythm, so fresh
-      // data is offered rather than imposed — except when a fortnight has
-      // passed, which is the scheduled run.
-      const adopted = await bwAdoptIfDue();
-      stored.push(adopted ? 'biweekly (auto-adopted)' : 'biweekly (available to import)');
+      // Every Tuesday's fetch becomes what the page decides from. The cadence
+      // is when you sit down and act, not how old the numbers are allowed to be.
+      const adopted = await bwAdoptLatest();
+      stored.push('biweekly');
       summary.biweekly = await bwCronSummary({ window: pending.biweekly, inputs, census, adopted });
     }
 
@@ -4937,7 +4917,7 @@ export { evaluateWeek, rfBuildInputs, rfDecideAll, rfSaveRun, rfLoadRun,
          RF_COLUMNS, RF_CONFIG, RF_SPEC_DEVIATIONS, REPORT_KEYS, MAX_REPORT_DAYS, MARGINS,
          bwDecide, bwNewBudget, evaluateBiweekly, resolveBiweeklyWindow, bwReportSpec,
          bwRecentRaises, bwBuildInputs, bwDecideAll, bwSaveRun, bwLoadRun,
-         bwSaveAvailable, bwLoadAvailable, bwAdoptIfDue, adsCronIsRunDay, adsCronReport,
+         bwSaveAvailable, bwLoadAvailable, bwAdoptLatest, adsCronIsRunDay, adsCronReport,
          moBuildInputs, moDecideAll, moRecommend, resolveMonthlyWindow, moReportSpec,
          moLoadBrandSales, moIsWholeMonth, moShiftMonth, moMonthBounds,
          moCronReport, moMonthLabel, moAvailability, moUnavailableReason,
