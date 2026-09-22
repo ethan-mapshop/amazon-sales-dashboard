@@ -933,6 +933,13 @@ const RF_SPEC_DEVIATIONS = [
   'which reach every campaign at once; a single campaign moving is its own bids ' +
   'or targets, which Ad Badger manages, and is not listed.',
 
+  'This cadence writes to Amazon. The doc has it observe only, with every ' +
+  'adjustment left to the bi-weekly — but a budget cap and a CPC spike are both ' +
+  'urgent and both cost money for the days they are left alone. Checks 1 and 5 ' +
+  'each offer a one-click change: the budget raise steps 25% at four days at cap ' +
+  'to 50% at seven, the bid cut 10% at 1.5x the usual CPC to 25% at 3x, both to ' +
+  'the cent, and neither is written without a confirmation.',
+
   'Check 1 counts days at cap rather than time-in-budget, which Amazon exposes ' +
   'only in the console Budget Report. Its profit retention gate reads the 28-day ' +
   'baseline rather than the week: campaign economics are a standing property, ' +
@@ -968,7 +975,11 @@ const BW_SPEC_DEVIATIONS = [
   'the doc states. The Tier 3 scope line ("not capped or retention too low to ' +
   'scale") could ' +
   'be read as sending them to a decrease instead; holding never cuts a budget on ' +
-  'an interpretation.'
+  'an interpretation.',
+
+  'Budgets are kept to the cent. The doc rounds each new budget to the nearest ' +
+  'dollar, which is immaterial at $50 and a different decision at $2 — a -15% ' +
+  'step on a $9 budget became -22%. The $1 floor is unchanged.'
 ];
 
 // Gross margin per MARGIN SEGMENT. Brand comes from the census — which already
@@ -1808,10 +1819,13 @@ function rfRecommendBudget({ dailyBudget, cappedDays, weekDays, maxDaySpend,
   const step = RF_CONFIG.RAISE_MIN +
                (RF_CONFIG.RAISE_MAX - RF_CONFIG.RAISE_MIN) * (over / span);
   const raised = Math.max(dailyBudget * (1 + step), maxDaySpend || 0);
-  const rounded = Math.ceil(raised);
+  // Cents, because the step is meant to be the step. Rounding up to whole
+  // dollars used to add up to $0.99 on top, which is nothing on a $50 budget
+  // and a second raise on a $2 one — a 50% step became 100% at $1.
+  const cents = Math.round(raised * 100) / 100;
   // Never return the budget it already has — an "apply" that changes nothing
   // is worse than no button.
-  return rounded > dailyBudget ? rounded : null;
+  return cents > dailyBudget ? cents : null;
 }
 
 // The mirror of rfRecommendBudget, and a step for the same reason: what a lower
@@ -2381,7 +2395,11 @@ function bwDecide(c, posture = 'hold') {
 function bwNewBudget(current, decision) {
   if (!(current > 0)) return null;
   if (decision.action === 'hold' || !decision.pct) return current;
-  return Math.max(BW_CONFIG.FLOOR, Math.round(current * (1 + decision.pct)));
+  // Cents, so the step is the step. Rounding to the nearest dollar turned a
+  // -15% decrease on a $9 budget into -22%, and the smaller the budget the
+  // further the result sat from what the tree decided. The $1 floor stands:
+  // that is a real minimum, not a rounding artefact.
+  return Math.max(BW_CONFIG.FLOOR, Math.round(current * (1 + decision.pct) * 100) / 100);
 }
 
 // ─── EVALUATE ────────────────────────────────────────────────────────────────

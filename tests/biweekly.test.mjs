@@ -133,17 +133,27 @@ ok(d({ retention: null, orders: 5, spend: 100 }).action === 'hold',
 ok(d({ retention: null, orders: 0, spend: 100 }).action === 'cut',
    'but zero orders still cuts — that rule needs no retention');
 
-console.log('\nNEW BUDGET  — "round to the nearest dollar, never below the $1 floor"');
+console.log('\nNEW BUDGET  — the step to the cent, never below the $1 floor');
 const nb = (cur, dec) => M.bwNewBudget(cur, dec);
-ok(nb(10, { action: 'increase', pct: 0.30 }) === 13, "$10 at +30% is $13  [doc's example]");
+ok(nb(10, { action: 'increase', pct: 0.30 }) === 13, '$10 at +30% is $13');
 ok(nb(10, { action: 'decrease', pct: -0.40 }) === 6, '$10 at -40% is $6');
 ok(nb(10, { action: 'cut', pct: -0.70 }) === 3, 'a 70% cut on $10 is $3');
+// The budgets in this account are not whole dollars, and rounding to one
+// moved the step: -15% on $9 landed at -22%, and the smaller the budget the
+// worse it got.
+ok(nb(9, { action: 'decrease', pct: -0.15 }) === 7.65,
+   '$9 at -15% is $7.65, which is -15%', 'rounding to the nearest dollar made it $8, or -11%');
+ok(nb(17.6, { action: 'decrease', pct: -0.40 }) === 10.56,
+   'a budget already in cents keeps them', '$17.60 is a real budget in this account');
+ok(nb(9.99, { action: 'decrease', pct: -0.15 }) === 8.49,
+   'and a third decimal rounds to the cent, not up', '9.99 x 0.85 = 8.4915');
 // Repeated, it converges on the floor without ever jumping there.
-ok(nb(17, { action: 'cut', pct: -0.70 }) === 5 &&
-   nb(5, { action: 'cut', pct: -0.70 }) === 2 &&
-   nb(2, { action: 'cut', pct: -0.70 }) === 1,
-   '$17 reaches the floor in three fortnights', '17 to 5 to 2 to 1');
-ok(nb(1.2, { action: 'decrease', pct: -0.40 }) === 1, 'rounding never lands below $1');
+ok(nb(17, { action: 'cut', pct: -0.70 }) === 5.1 &&
+   nb(5.1, { action: 'cut', pct: -0.70 }) === 1.53 &&
+   nb(1.53, { action: 'cut', pct: -0.70 }) === 1,
+   '$17 reaches the floor in three fortnights', '17 to 5.10 to 1.53 to 1');
+ok(nb(1.2, { action: 'decrease', pct: -0.40 }) === 1,
+   'the floor still catches what the step would put under it', '0.72 would be below $1');
 ok(nb(10, { action: 'hold', pct: 0 }) === 10, 'a hold does not move the budget');
 ok(nb(null, { action: 'increase', pct: 0.5 }) === null, 'no current budget, no new one');
 

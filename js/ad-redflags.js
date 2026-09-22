@@ -729,7 +729,7 @@
       // Before the no-recommendation guard: applying CLEARS the recommendation,
       // so checking that first would report a successful raise as a dash.
       if (st.stage === 'done') {
-        return `<span class="arf-applied">&#10003; now $${escapeHtml(String(st.applied))}${unit}</span>`;
+        return `<span class="arf-applied">&#10003; now ${arfMoney(st.applied)}${unit}</span>`;
       }
       if (!target) return '<span class="arf-muted">—</span>';
       if (st.stage === 'busy') {
@@ -737,16 +737,18 @@
       }
       if (st.stage === 'confirm') {
         return `<span class="arf-confirm">
-          <span>$${target}${unit}?</span>
+          <span>${arfMoney(target)}${unit}?</span>
           <button class="arf-btn arf-btn-go" data-arf-confirm="${id}">Confirm</button>
           <button class="arf-btn" data-arf-cancel="${id}">Cancel</button>
         </span>`;
       }
       const verb = kind === 'bid' ? 'Lower the default bid on Amazon to'
                                   : 'Raise the daily budget on Amazon to';
+      // Money through the formatter, never raw: a cents recommendation
+      // interpolates as "$13.5", and a bid as "$1.2".
       return `<button class="arf-btn" data-arf-apply="${id}"
-                title="${verb} $${target}"
-              >$${target}${unit}</button>${
+                title="${verb} ${arfMoney(target)}"
+              >${arfMoney(target)}${unit}</button>${
         st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message)}</div>` : ''}`;
     }
 

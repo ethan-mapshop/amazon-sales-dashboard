@@ -176,6 +176,45 @@ const HEALTHY = base({ cost: 84, sales: 400, clicks: 200, impressions: 9000 });
   ok(r.flags.budgetCap.length === 0, 'three days at cap is under the four-day bar');
 }
 
+console.log('\nrfRecommendBudget  — the step is the step, in cents');
+
+// The raise used to round up to whole dollars, which added as much as $0.99 on
+// top of it. On a $50 budget that is nothing; on a $2 budget it is a second
+// raise, and on a $1 budget the 25% step became 100%. Cents cost nothing:
+// Amazon takes them, and the Monthly Review's Sponsored Brands cuts already
+// send them.
+const raise = (o) => M.rfRecommendBudget({ weekDays: 7, ...o });
+
+{
+  ok(raise({ dailyBudget: 9, cappedDays: 7, maxDaySpend: 9 }) === 13.5,
+     'at cap all week, a $9 budget is raised by exactly 50%', 'not to $14');
+  ok(raise({ dailyBudget: 5, cappedDays: 7, maxDaySpend: 5 }) === 7.5,
+     'and a $5 budget to $7.50', 'not to $8');
+  ok(raise({ dailyBudget: 9, cappedDays: 4, maxDaySpend: 9 }) === 11.25,
+     'at the four-day bar the step is 25%, to the cent');
+  ok(raise({ dailyBudget: 1, cappedDays: 4, maxDaySpend: 1 }) === 1.25,
+     'a $1 budget is raised 25% like any other',
+     'rounding up doubled it, which is the smallest budget getting the largest raise');
+}
+
+{
+  ok(raise({ dailyBudget: 20, cappedDays: 7, maxDaySpend: 20 }) === 30,
+     'a whole-dollar result stays whole');
+  ok(raise({ dailyBudget: 5, cappedDays: 5, maxDaySpend: 5 }) === 6.67,
+     'a third of the way up the range rounds to the nearest cent', '5 × 1.3333');
+  ok(raise({ dailyBudget: 6.2, cappedDays: 4, maxDaySpend: 6 }) === 7.75,
+     'and a budget that is already in cents does not pick up a rounding artefact',
+     '6.2 × 1.25 in floating point is not quite 7.75');
+}
+
+{
+  ok(raise({ dailyBudget: 2, cappedDays: 7, maxDaySpend: 4.3 }) === 4.3,
+     'the best single day still wins when it is above the step',
+     'raising to less than it already spent in a day would leave it capped');
+  ok(raise({ dailyBudget: 20, cappedDays: 7, maxDaySpend: null }) === 30,
+     'and no recorded day is not treated as $0');
+}
+
 console.log('\nPORTFOLIO CHECKS  — silent, spend collapse and CTR collapse ask whether the PRODUCT moved');
 
 // A portfolio is one product. Its causes, stock, Buy Box, suppression, price,

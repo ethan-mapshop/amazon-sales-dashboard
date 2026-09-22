@@ -530,21 +530,23 @@
     function bwApplyCell(r) {
       const st = bwApply[r.campaignId] || {};
       const id = escapeHtml(r.campaignId);
-      if (st.stage === 'done') return `<span class="arf-applied">&#10003; $${escapeHtml(String(st.applied))}</span>`;
+      if (st.stage === 'done') return `<span class="arf-applied">&#10003; ${bwMoney(st.applied)}</span>`;
       if (r.action === 'hold' || r.newBudget === null || r.newBudget === r.dailyBudget) {
         return '<span class="arf-muted">—</span>';
       }
       if (st.stage === 'busy') return '<span class="loading"></span>';
       if (st.stage === 'confirm') {
         return `<span class="arf-confirm">
-          <span>$${r.newBudget}?</span>
+          <span>${bwMoney(r.newBudget)}?</span>
           <button class="arf-btn arf-btn-go" data-bw-confirm="${id}">Confirm</button>
           <button class="arf-btn" data-bw-cancel="${id}">Cancel</button>
         </span>`;
       }
+      // Money through the formatter, never raw: a budget in cents
+      // interpolates as "$10.6".
       return `<button class="arf-btn" data-bw-apply="${id}"
-                title="Set this campaign's daily budget on Amazon to $${r.newBudget}"
-              >$${r.newBudget}</button>${
+                title="Set this campaign's daily budget on Amazon to ${bwMoney(r.newBudget)}"
+              >${bwMoney(r.newBudget)}</button>${
         st.stage === 'error' ? `<div class="arf-warn">${escapeHtml(st.message)}</div>` : ''}`;
     }
 
